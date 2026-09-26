@@ -161,8 +161,8 @@ readonly RELEASE_DOWNLOAD_URL='https://github.com/SoftieSolutions/agentplex/rele
 # through the same raw.githubusercontent.com mechanism that already serves this
 # script, written by the same job that already advances that branch. One
 # unauthenticated fetch of a few hundred bytes answers what is current for every
-# component and whether the set agrees on a protocol -- before anything is
-# downloaded, which is the whole point of asking.
+# component and whether the set agrees on each protocol leg -- before anything
+# is downloaded, which is the whole point of asking.
 #
 # It is read off the network, so `versions_entry` parses it and can say no.
 readonly VERSIONS_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/versions.json'
@@ -296,20 +296,31 @@ PACKAGE_SPECS=''
 # Set by load_versions.
 VERSIONS_TEXT=''
 VERSIONS_SOURCE=''
-# One component's line out of that manifest: the version it calls current, and
-# its release history as `"<version>":<protocol>` pairs. Set by
-# read_component_entry, read by the two functions that resolve a version.
+# One component's line out of that manifest: the version it calls current, the
+# versions its release history lists, and each of those as
+# `<version>=<client>:<server>`, a leg left empty where that release records
+# none. Set by read_component_entry, which checks the whole history against the
+# grammar before either list is filled, and read by the two functions that
+# resolve a version.
 MANIFEST_CURRENT=''
-MANIFEST_RELEASES=''
-# The release one component resolved to, as a version and the protocol it
-# speaks. Set by read_versions_entry and read_pinned_release.
+MANIFEST_RELEASE_VERSIONS=''
+MANIFEST_RELEASE_LEGS=''
+# The release one component resolved to: its version, and the version of each
+# protocol leg it records -- empty for a leg that package does not speak. The
+# CLI records neither, the server only the server leg. Set by
+# read_versions_entry and read_pinned_release.
 RESOLVED_VERSION=''
-RESOLVED_PROTOCOL=''
-# `<component>=<version>` and `<component>=<protocol>` for what this run would
-# install. A component with no entry is one whose version this run has no way to
-# know, which is a dry run that declined to download and nothing else.
+RESOLVED_CLIENT_PROTOCOL=''
+RESOLVED_SERVER_PROTOCOL=''
+# `<component>=<version>` for what this run would install, and
+# `<component>=<protocol>` once per leg for the components that record that
+# leg. A component with no version is one whose version this run has no way to
+# know, which is a dry run that declined to download and nothing else; a
+# component missing from a leg's list is one that does not speak that leg, or
+# the same dry run.
 COMPONENT_VERSIONS=''
-COMPONENT_PROTOCOLS=''
+COMPONENT_CLIENT_PROTOCOLS=''
+COMPONENT_SERVER_PROTOCOLS=''
 PLATFORM=''
 ARCH=''
 # The directory the runtime tarball unpacks into whole, and the directory inside
@@ -615,7 +626,6 @@ lookup() {
 
 component_pin() { lookup "$COMPONENT_PINS" "$1"; }
 component_version() { lookup "$COMPONENT_VERSIONS" "$1"; }
-component_protocol() { lookup "$COMPONENT_PROTOCOLS" "$1"; }
 
 # The shape a prefix has to have before anything is done with it.
 #
@@ -783,11 +793,13 @@ load_versions() {
   VERSIONS_SOURCE="$VERSIONS_URL"
 }
 
-# A version and a protocol for every component this machine installs.
+# A version for every component this machine installs, and the protocol legs
+# each one records.
 resolve_component_versions() {
   local component pin
   COMPONENT_VERSIONS=''
-  COMPONENT_PROTOCOLS=''
+  COMPONENT_CLIENT_PROTOCOLS=''
+  COMPONENT_SERVER_PROTOCOLS=''
 
   for component in $INSTALL_COMPONENTS; do
     pin="$(component_pin "$component")"
@@ -798,7 +810,7 @@ resolve_component_versions() {
     # is not, because resolving one is exactly what needed the file.
     if [ -z "$VERSIONS_SOURCE" ]; then
       if [ -n "$pin" ] && [[ "$pin" =~ $RELEASE_VERSION ]]; then
-        record_component "$component" "$pin" ''
+        record_component "$component" "$pin" '' ''
       fi
       continue
     fi
@@ -808,17 +820,20 @@ resolve_component_versions() {
     else
       read_versions_entry "$component"
     fi
-    record_component "$component" "$RESOLVED_VERSION" "$RESOLVED_PROTOCOL"
+    record_component "$component" "$RESOLVED_VERSION" "$RESOLVED_CLIENT_PROTOCOL" "$RESOLVED_SERVER_PROTOCOL"
   done
 }
 
+# `record_component <component> <version> <client> <server>`, an empty leg
+# being one the component does not record.
 record_component() {
   COMPONENT_VERSIONS="${COMPONENT_VERSIONS:+$COMPONENT_VERSIONS }$1=$2"
-  [ -z "$3" ] || COMPONENT_PROTOCOLS="${COMPONENT_PROTOCOLS:+$COMPONENT_PROTOCOLS }$1=$3"
+  [ -z "$3" ] || COMPONENT_CLIENT_PROTOCOLS="${COMPONENT_CLIENT_PROTOCOLS:+$COMPONENT_CLIENT_PROTOCOLS }$1=$3"
+  [ -z "$4" ] || COMPONENT_SERVER_PROTOCOLS="${COMPONENT_SERVER_PROTOCOLS:+$COMPONENT_SERVER_PROTOCOLS }$1=$4"
 }
 
 # The release a pin names, decided before anything is installed. Sets
-# RESOLVED_VERSION and RESOLVED_PROTOCOL.
+# RESOLVED_VERSION and the RESOLVED_*_PROTOCOL legs.
 #
 # This is the judgement call in the delivery grammar, so it is written down. A
 # pinned component's protocol has to be known *before* the install, because the
@@ -848,39 +863,55 @@ read_pinned_release() {
   if [[ "$pin" =~ $RELEASE_VERSION ]]; then
     RESOLVED_VERSION="$pin"
   else
-    RESOLVED_VERSION="$(newest_in_series "$MANIFEST_RELEASES" "$pin")"
+    RESOLVED_VERSION="$(newest_in_series "$MANIFEST_RELEASE_VERSIONS" "$pin")"
     [ -n "$RESOLVED_VERSION" ] || die "$VERSIONS_SOURCE offers no $component release under $pin, so ${component}@${pin} names a series it advertises nothing in. A series takes the newest release under it and never a prerelease; a prerelease named exactly is installed"
   fi
 
-  RESOLVED_PROTOCOL="$(json_number "$MANIFEST_RELEASES" "$RESOLVED_VERSION")" || die "$VERSIONS_SOURCE offers no $component release at $RESOLVED_VERSION, so there is nothing here to install ${component}-v${RESOLVED_VERSION} from. This file is the set of releases it advertises and not the set of tags that exist: a 2.x release is advertised from its own branch, and a mirror holds whatever was copied into it"
+  resolve_release_legs "$RESOLVED_VERSION" || die "$VERSIONS_SOURCE offers no $component release at $RESOLVED_VERSION, so there is nothing here to install ${component}-v${RESOLVED_VERSION} from. This file is the set of releases it advertises and not the set of tags that exist: a 2.x release is advertised from its own branch, and a mirror holds whatever was copied into it"
 }
 
-# Every component this machine would install, speaking one protocol.
+# Every component this machine would install, agreeing on each protocol leg.
+#
+# The protocol has two legs, each with its own version: the client leg a
+# browser speaks to the hub, and the server leg the hub speaks to a server. A
+# package records the legs it speaks -- the hub and the web client both, the
+# server only its own, the CLI neither -- and each leg is asked separately, of
+# the components that recorded it. Numbers on different legs are never
+# compared: a hub at client 4 and server 3 beside a server at 3 is the set a
+# client-only change produces, and it is the reason there are two.
 #
 # A tripwire and not a resolver, and the difference is the whole design. A
-# protocol change releases every affected component together, so the current
-# entries in `versions.json` always agree; if they ever do not, that is a release
-# process that broke rather than a choice this script should be making. Working
-# out "the newest set of versions that happens to agree" is something the release
-# history would now let this attempt, and it is still not done: it would quietly
-# paper over exactly the mistake the tripwire is there to report, and a machine
-# installed at a set nobody released is worse than a machine that refused.
+# change to a leg releases every component that records it together, so the
+# current entries in `versions.json` always agree on it; if they ever do not,
+# that is a release process that broke rather than a choice this script should
+# be making. Working out "the newest set of versions that happens to agree" is
+# something the release history would now let this attempt, and it is still not
+# done: it would quietly paper over exactly the mistake the tripwire is there to
+# report, and a machine installed at a set nobody released is worse than a
+# machine that refused.
 #
 # Asked of the components this machine installs and not of the whole manifest. A
 # hub install refused because the `server` entry disagrees would be refusing over
-# a package this machine will never download.
+# a package this machine will never download -- and a server elsewhere that does
+# disagree is refused at its own handshake, naming the leg.
 check_protocol_agreement() {
-  local component protocol first='' first_component=''
+  check_leg_agreement 'client' "$COMPONENT_CLIENT_PROTOCOLS"
+  check_leg_agreement 'server' "$COMPONENT_SERVER_PROTOCOLS"
+}
+
+# `check_leg_agreement <leg> <component>=<protocol>...`
+check_leg_agreement() {
+  local leg="$1" recorded="$2" component protocol first='' first_component=''
 
   for component in $INSTALL_COMPONENTS; do
-    protocol="$(component_protocol "$component")"
+    protocol="$(lookup "$recorded" "$component")"
     [ -n "$protocol" ] || continue
     if [ -z "$first" ]; then
       first="$protocol"
       first_component="$component"
       continue
     fi
-    [ "$protocol" = "$first" ] || die "this machine would install a $first_component speaking protocol $first and a $component speaking protocol $protocol, and two components that disagree about the protocol do not talk to each other. A protocol change releases every affected component together, so this is a broken release rather than a choice to make: nothing has been installed"
+    [ "$protocol" = "$first" ] || die "this machine would install a $first_component speaking $leg protocol $first and a $component speaking $leg protocol $protocol, and two components that disagree about the $leg protocol do not talk to each other. A change to a leg releases every component that records it together, so this is a broken release rather than a choice to make: nothing has been installed"
   done
 }
 
@@ -904,18 +935,20 @@ build_package_specs() {
   PACKAGE_SPECS="${PACKAGE_SPECS# }"
 }
 
-# The versions, the protocol they agree on, and where each of those came from.
+# The versions, the protocol legs they agree on, and where each of those came
+# from.
 #
-# One line, and it says what it does not know. A component with no version is a
-# dry run that declined to download, or one whose pin named a series there was
-# no manifest to resolve it against; a set with no protocol is the same run.
+# One line for the versions and one per leg, and each says what it does not
+# know. A component with no version is a dry run that declined to download, or
+# one whose pin named a series there was no manifest to resolve it against; a
+# leg with no number is the same run, or a leg nothing this machine installs
+# speaks -- a server-only machine has no client leg to agree on.
 report_release() {
-  local component line='' protocol='' version
+  local component line='' version
 
   for component in $INSTALL_COMPONENTS; do
     version="$(component_version "$component")"
     line="${line:+$line, }$component ${version:-(not resolved)}"
-    [ -n "$protocol" ] || protocol="$(component_protocol "$component")"
   done
 
   if [ -n "$VERSIONS_SOURCE" ]; then
@@ -925,10 +958,35 @@ report_release() {
   fi
 
   report 'release' "$line"
-  if [ -n "$protocol" ]; then
-    report 'protocol' "$protocol, which every component above agrees on"
+  report_leg 'client' "$COMPONENT_CLIENT_PROTOCOLS"
+  report_leg 'server' "$COMPONENT_SERVER_PROTOCOLS"
+}
+
+# `report_leg <leg> <component>=<protocol>...`: the number, and which of the
+# components this machine installs agree on it -- which is every component that
+# recorded one, since `check_protocol_agreement` has already refused the rest.
+report_leg() {
+  local leg="$1" recorded="$2" component protocol='' speakers='' last='' count=0
+
+  if [ -z "$VERSIONS_SOURCE" ]; then
+    report "$leg protocol" "not checked: a dry run downloads nothing, and the file that says what a release speaks is a download"
+    return 0
+  fi
+
+  for component in $INSTALL_COMPONENTS; do
+    [ -n "$(lookup "$recorded" "$component")" ] || continue
+    [ -n "$protocol" ] || protocol="$(lookup "$recorded" "$component")"
+    [ -z "$last" ] || speakers="${speakers:+$speakers, }$last"
+    last="$component"
+    count=$((count + 1))
+  done
+
+  if [ "$count" -eq 0 ]; then
+    report "$leg protocol" 'not spoken by anything this machine installs'
+  elif [ "$count" -eq 1 ]; then
+    report "$leg protocol" "$protocol, which $last agrees on"
   else
-    report 'protocol' "not checked: a dry run downloads nothing, and the file that says what a release speaks is a download"
+    report "$leg protocol" "$protocol, which $speakers and $last agree on"
   fi
 }
 
@@ -939,7 +997,8 @@ report_release() {
 # One file, small, written by the release workflow out of the assembled
 # manifests, and read off the network:
 #
-#   versions.json   {"cli":{"current":"1.4.0","releases":{"1.4.0":3,"1.3.0":2}}, ...}
+#   versions.json   {"cli":{"current":"1.4.0","releases":{"1.4.0":{},"1.3.0":{}}},
+#                    "hub":{"current":"1.2.0","releases":{"1.2.0":{"client":3,"server":3}}}, ...}
 #
 # Parsed and not read. It is a claim out of another program, off a branch
 # anybody with write access can push to, and the whole reason this script
@@ -948,22 +1007,27 @@ report_release() {
 # debian:bookworm-slim and no node either -- this runs before `ensure_node` has
 # put one there -- so the parser is bash, and it is written as a grammar that
 # refuses rather than as an extractor that guesses: a field that is not there, a
-# version that is not a version and a protocol that is not a number each stop
-# the run naming the file.
+# version that is not a version and a protocol leg that is not a positive
+# integer each stop the run naming the file.
 #
 # There used to be a second file, `<component>-v<version>.json` beside each
 # tarball, and the release history is what deleted it -- see `read_pinned_release`.
 #
-# One level of nesting is the whole of what this has to handle: `releases` is an
-# object of `<version>: <protocol>` and nothing inside it nests further. That is
-# why `object_body` counts braces rather than the entry readers slicing at the
-# first `}` they meet, which is what a flat object allowed and this one does not.
+# Two levels of nesting are the whole of what this has to handle: `releases` is
+# an object of `<version>: <legs>`, each release's legs are an object of
+# `client` and `server` integers, and nothing nests further. That is why
+# `object_body` counts braces rather than the entry readers slicing at the
+# first `}` they meet, and why a component's history is walked release by
+# release against a grammar (`read_release_history`) rather than searched for
+# the one key a run wants: a search cannot tell a release with no client leg
+# from one whose client leg it failed to read, and the second must stop the
+# run.
 #
 # Whitespace is deleted outright rather than skipped over, which is what makes
 # the field patterns below one-liners. Nothing this file holds can contain a
-# space: a component is one of four words, a version is a semver and a protocol
-# is an integer, and anything that did contain one would fail the checks that
-# follow rather than slip through reshaped.
+# space: a component is one of four words, a version is a semver, a leg name is
+# one of two words and its value is an integer, and anything that did contain
+# one would fail the checks that follow rather than slip through reshaped.
 
 flatten_json() {
   printf '%s' "$1" | tr -d ' \t\n\r'
@@ -978,23 +1042,6 @@ json_string() {
   esac
   value="${text#*\""$key"\":\"}"
   printf '%s' "${value%%\"*}"
-}
-
-# The value of one integer field of a flat JSON object, or a non-zero. A field
-# whose value is quoted, negative or absent all fail here rather than later.
-json_number() {
-  local text="$1" key="$2" value
-  case "$text" in
-    *"\"$key\":"*) ;;
-    *) return 1 ;;
-  esac
-  value="${text#*\""$key"\":}"
-  value="${value%%,*}"
-  value="${value%%\}*}"
-  case "$value" in
-    '' | *[!0-9]*) return 1 ;;
-  esac
-  printf '%s' "$value"
 }
 
 # The text of one JSON object, given everything after its opening brace, with
@@ -1041,8 +1088,8 @@ object_body() {
   return 1
 }
 
-# One component's line out of the versions manifest. Sets MANIFEST_CURRENT and
-# MANIFEST_RELEASES.
+# One component's line out of the versions manifest. Sets MANIFEST_CURRENT,
+# MANIFEST_RELEASE_VERSIONS and MANIFEST_RELEASE_LEGS.
 #
 # It assigns rather than prints, and that is not a style choice. A refusal in
 # here is a `die`, and `die` inside `$(...)` exits the subshell -- which the
@@ -1058,7 +1105,7 @@ object_body() {
 # a fallback to anything: the manifest is what says which releases there are,
 # and a machine that carried on would install three quarters of a set.
 read_component_entry() {
-  local component="$1" flat entry
+  local component="$1" flat entry releases
 
   flat="$(flatten_json "$VERSIONS_TEXT")"
   case "$flat" in
@@ -1077,22 +1124,104 @@ read_component_entry() {
     *'"releases":{'*) ;;
     *) die "$VERSIONS_SOURCE gives $component no releases, and that list is what says which versions of it exist and what each one speaks" ;;
   esac
-  MANIFEST_RELEASES="$(object_body "${entry#*\"releases\":\{}")" || die "$VERSIONS_SOURCE ends in the middle of the $component releases"
+  releases="$(object_body "${entry#*\"releases\":\{}")" || die "$VERSIONS_SOURCE ends in the middle of the $component releases"
+  read_release_history "$component" "$releases"
 }
 
-# The release a component's entry calls current. Sets RESOLVED_VERSION and
-# RESOLVED_PROTOCOL.
+# Every release in one component's history, checked against the grammar and
+# recorded. Sets MANIFEST_RELEASE_VERSIONS and MANIFEST_RELEASE_LEGS.
+#
+# The whole history and not only the release this run wants, so that a file
+# that is wrong anywhere is refused rather than being right about the one
+# release somebody happened to ask for. And it assigns rather than prints, for
+# the reason `read_component_entry` gives: every refusal here is a `die`.
+#
+# One release is `"<version>":{<legs>}`, where the legs are `"client":<n>`,
+# `"server":<n>`, both in either order, or neither -- the CLI records none. `<n>`
+# is a positive integer without a sign or a leading zero. Anything else is a
+# release this cannot read and stops the run naming the release: a quoted
+# number read as "no client leg" would check nothing and say it had, and a bare
+# number is the shape the file had while there was one protocol, which nothing
+# was ever published in.
+read_release_history() {
+  local component="$1" rest="$2" version legs leg value client server
+  local key_pattern='^"([^"]*)":' body_pattern='^[{]([^{}]*)[}]'
+  local leg_pattern='^"(client|server)":([1-9][0-9]*)'
+  MANIFEST_RELEASE_VERSIONS=''
+  MANIFEST_RELEASE_LEGS=''
+
+  while [ -n "$rest" ]; do
+    [[ "$rest" =~ $key_pattern ]] || die "$VERSIONS_SOURCE lists the $component releases in a shape this cannot read: each is \"<version>\":{<protocol legs>}"
+    version="${BASH_REMATCH[1]}"
+    rest="${rest#"${BASH_REMATCH[0]}"}"
+    [[ "$version" =~ $RELEASE_VERSION ]] || die "$VERSIONS_SOURCE lists a $component release keyed $(quote "$version"), which is not a version"
+
+    [[ "$rest" =~ $body_pattern ]] || die "$VERSIONS_SOURCE gives the $component release $version something other than its protocol legs, an object of positive integer client and server versions"
+    legs="${BASH_REMATCH[1]}"
+    rest="${rest#"${BASH_REMATCH[0]}"}"
+
+    client=''
+    server=''
+    while [ -n "$legs" ]; do
+      [[ "$legs" =~ $leg_pattern ]] || die "$VERSIONS_SOURCE gives the $component release $version a protocol leg this cannot read in $(quote "$legs"): the legs are client and server, each a positive integer"
+      leg="${BASH_REMATCH[1]}"
+      value="${BASH_REMATCH[2]}"
+      legs="${legs#"${BASH_REMATCH[0]}"}"
+      case "$leg" in
+        client)
+          [ -z "$client" ] || die "$VERSIONS_SOURCE gives the $component release $version the client leg twice"
+          client="$value"
+          ;;
+        server)
+          [ -z "$server" ] || die "$VERSIONS_SOURCE gives the $component release $version the server leg twice"
+          server="$value"
+          ;;
+      esac
+      case "$legs" in
+        '') ;;
+        ,?*) legs="${legs#,}" ;;
+        *) die "$VERSIONS_SOURCE gives the $component release $version a protocol leg this cannot read in $(quote "$legs"): the legs are client and server, each a positive integer" ;;
+      esac
+    done
+
+    MANIFEST_RELEASE_VERSIONS="${MANIFEST_RELEASE_VERSIONS:+$MANIFEST_RELEASE_VERSIONS }$version"
+    MANIFEST_RELEASE_LEGS="${MANIFEST_RELEASE_LEGS:+$MANIFEST_RELEASE_LEGS }$version=$client:$server"
+
+    case "$rest" in
+      '') ;;
+      ,?*) rest="${rest#,}" ;;
+      *) die "$VERSIONS_SOURCE lists the $component releases in a shape this cannot read after $version" ;;
+    esac
+  done
+}
+
+# The legs one listed release records, into RESOLVED_CLIENT_PROTOCOL and
+# RESOLVED_SERVER_PROTOCOL, or a non-zero when the history lists no such
+# release. It returns a status rather than dying, so every caller writes its own
+# `|| die` naming what it was looking for; and it assigns rather than prints, so
+# it is called directly rather than through `$(...)`.
+resolve_release_legs() {
+  local legs
+  legs="$(lookup "$MANIFEST_RELEASE_LEGS" "$1")"
+  [ -n "$legs" ] || return 1
+  RESOLVED_CLIENT_PROTOCOL="${legs%%:*}"
+  RESOLVED_SERVER_PROTOCOL="${legs#*:}"
+}
+
+# The release a component's entry calls current. Sets RESOLVED_VERSION and the
+# RESOLVED_*_PROTOCOL legs.
 read_versions_entry() {
   local component="$1"
 
   read_component_entry "$component"
   [[ "$MANIFEST_CURRENT" =~ $RELEASE_VERSION ]] || die "$VERSIONS_SOURCE gives $component the current version $(quote "$MANIFEST_CURRENT"), which is not a version this can install"
   RESOLVED_VERSION="$MANIFEST_CURRENT"
-  RESOLVED_PROTOCOL="$(json_number "$MANIFEST_RELEASES" "$RESOLVED_VERSION")" || die "$VERSIONS_SOURCE calls $RESOLVED_VERSION the current $component and lists no protocol beside it, and the protocol is what says whether the components on this machine can talk to each other"
+  resolve_release_legs "$RESOLVED_VERSION" || die "$VERSIONS_SOURCE calls $RESOLVED_VERSION the current $component and lists no protocol beside it, and the protocol is what says whether the components on this machine can talk to each other"
 }
 
-# The newest release in one series, out of a component's release history, or
-# nothing at all when the series holds none.
+# The newest release in one series, out of the versions a component's release
+# history lists (MANIFEST_RELEASE_VERSIONS, already checked against the grammar
+# and space separated), or nothing at all when the series holds none.
 #
 # **What counts as in the series.** A prefix at a dot boundary, with the
 # remaining fields plain numbers: `1.3` takes `1.3.<patch>` and `1` takes
@@ -1112,23 +1241,20 @@ read_versions_entry() {
 # it cost less than a claim about every sort on every machine this script is
 # piped into. Nothing is spawned per candidate either way.
 newest_in_series() {
-  local releases="$1" series="$2" best='' pair key
+  local versions="$1" series="$2" best='' key
   local number='(0|[1-9][0-9]*)' pattern
   case "$series" in
     *.*) pattern="^${series//./\\.}\.${number}$" ;;
     *) pattern="^${series}\.${number}\.${number}$" ;;
   esac
 
-  while IFS= read -r pair; do
-    case "$pair" in
-      \"*\":*) ;;
-      *) continue ;;
-    esac
-    key="${pair#\"}"
-    key="${key%%\"*}"
+  # Split on the spaces `read_release_history` put there, and never globbed:
+  # every word has already matched RELEASE_VERSION, which admits no `*`, `?`
+  # or `[`.
+  for key in $versions; do
     [[ "$key" =~ $pattern ]] || continue
     if [ -z "$best" ] || newer_version "$key" "$best"; then best="$key"; fi
-  done <<<"${releases//,/$'\n'}"
+  done
 
   printf '%s' "$best"
 }

@@ -36,21 +36,17 @@ import { startHub, type Hub } from '../../../apps/hub/src/hub.js';
 import { serveServerEnd } from './server-end.js';
 
 /**
- * Pairing, the whole way through: a browser types a token and a machine the hub
- * had never heard of is connected a moment later.
+ * The two protocol legs, in one process: a client refused on its leg leaves
+ * the server on the other leg exactly as it was.
  *
- * Everything here is the real thing except the wire between the hub and the
- * server and the clock. The client is a real websocket that exchanged a real
- * ticket, the frames go through the protocol's own parsers, the pairing is a
- * row in a migrated SQLite file, and what answers the dial is
- * `serveHubConnection` -- the server's own code, doing the server's own
- * handshake against the token the client just typed.
- *
- * The two questions it exists to answer are the ones no unit test can: that a
- * pairing made over a socket is dialled without a restart, and that the dial
- * stops when the same client unpairs it. Both used to be true only of a hub
- * that had been restarted, because nothing client-reachable reached
- * `registerServer` at all.
+ * The reason the legs were split. With one version for both, a browser built
+ * at another number and a server built at another number were the same
+ * refusal; now a client at the wrong client leg is refused at hello and the
+ * paired server, which speaks only the server leg, stays connected. The fleet
+ * is built the way `client-pairing.integration.test.ts` builds it -- the real
+ * hub, a real client websocket, and the server's own handshake answering the
+ * dial -- because the claim is about the hub keeping two connections apart,
+ * which only the whole hub can show.
  */
 
 const CLIENT_TOKEN = 'the-client-token-typed-on-the-device';
@@ -71,7 +67,7 @@ interface Fleet {
 }
 
 async function startFleet(): Promise<Fleet> {
-  const directory = await mkdtemp(join(tmpdir(), 'agentplex-pairing-'));
+  const directory = await mkdtemp(join(tmpdir(), 'agentplex-protocol-legs-'));
   const database = createSqliteDatabase(join(directory, 'hub.db'));
   const dialled: string[] = [];
   const live: MessageSocket[] = [];
@@ -147,6 +143,8 @@ interface Client {
   readonly text: readonly string[];
   /** The newest state the hub published, or `null` before the first one. */
   readonly state: MachineState | null;
+  /** Whether the hub has closed this socket. */
+  readonly closed: boolean;
 }
 
 async function openClient(hub: Hub): Promise<Client> {
@@ -160,7 +158,11 @@ async function openClient(hub: Hub): Promise<Client> {
   );
 
   const text: string[] = [];
+  let closed = false;
   socket.on('message', (data: Buffer) => text.push(data.toString('utf8')));
+  socket.on('close', () => {
+    closed = true;
+  });
   await new Promise<void>((resolve) => socket.on('open', () => resolve()));
 
   const client: Client = {
@@ -178,6 +180,9 @@ async function openClient(hub: Hub): Promise<Client> {
     get state(): MachineState | null {
       const states = client.received.filter((frame) => frame.type === 'machine-state');
       return states.at(-1)?.state ?? null;
+    },
+    get closed(): boolean {
+      return closed;
     },
   };
   return client;
@@ -207,14 +212,14 @@ afterEach(async () => {
   fleet = null;
 });
 
-async function pairedFleet(): Promise<{ running: Fleet; client: Client }> {
+/** A fleet with the server paired over a client and connected. */
+async function connectedFleet(): Promise<Fleet> {
   const running = await startFleet();
   fleet = running;
-  const client = await openClient(running.hub);
-  client.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
-  await until(() => reply(client, 'welcome') !== undefined, 'the welcome');
-
-  client.send({
+  const pairer = await openClient(running.hub);
+  pairer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  await until(() => reply(pairer, 'welcome') !== undefined, 'the welcome');
+  pairer.send({
     type: 'server-pair',
     id: 2,
     label: 'gpu-box-01',
@@ -222,140 +227,58 @@ async function pairedFleet(): Promise<{ running: Fleet; client: Client }> {
     token: SERVER_TOKEN,
   });
   await until(
-    () => reply(client, 'server-paired') !== undefined,
-    () => `the pairing to be answered: ${client.text.join(' | ')}`,
+    () => running.hub.connections.snapshot().some((report) => report.phase === 'connected'),
+    () => `the pairing to connect: ${JSON.stringify(running.hub.connections.snapshot())}`,
   );
-  return { running, client };
+  return running;
 }
 
-describe('a client pairing a server', () => {
-  it('is answered, and the hub dials the machine without being restarted', async () => {
-    const { running, client } = await pairedFleet();
+describe('a client refused on the client leg', () => {
+  it('is refused naming the client leg, and its socket closes', async () => {
+    const running = await connectedFleet();
 
-    const paired = reply(client, 'server-paired');
-    expect(paired?.registrationId).toBe('registration-1');
+    const stranger = await openClient(running.hub);
+    stranger.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION + 1 });
+    await until(() => stranger.closed, 'the refused client to be closed');
 
-    await until(
-      () => running.hub.connections.snapshot().some((report) => report.phase === 'connected'),
-      () => `the new pairing to connect: ${JSON.stringify(running.hub.connections.snapshot())}`,
-    );
-    expect(running.dialled).toEqual([GPU_BOX]);
+    const refusal = reply(stranger, 'refusal');
+    expect(refusal?.code).toBe('protocol-version');
+    expect(refusal?.message).toContain(`client protocol ${String(CLIENT_PROTOCOL_VERSION)}`);
+    expect(reply(stranger, 'welcome')).toBeUndefined();
   });
 
-  it('publishes the machine to every client, connected and with what it reported', async () => {
-    const { running, client } = await pairedFleet();
-
-    await until(
-      () => client.state?.servers.some((server) => server.phase === 'connected') === true,
-      () => `a state with the server connected: ${JSON.stringify(client.state)}`,
-    );
-
-    const [server] = client.state?.servers ?? [];
-    expect(server).toMatchObject({
-      registrationId: 'registration-1',
-      label: 'gpu-box-01',
-      // The address the row is drawn with, which is the pairing screen's way of
-      // telling two machines with the same label apart.
-      address: GPU_BOX,
-      serverId: 'server-gpu',
-      phase: 'connected',
-    });
-    expect(server?.stores).toEqual(['store-universe']);
-    expect(running.hub.state.snapshot().stores.map((view) => view.storeId)).toEqual([
-      'store-universe',
-    ]);
-  });
-
-  it('never says the token again, on any frame it sends afterwards', async () => {
-    // The rule the whole surface rests on, asserted over the characters rather
-    // than over a field: the reply, every machine state, every log line the
-    // client can see. A field assertion would cover only the shapes somebody
-    // thought to check.
-    const { client } = await pairedFleet();
-    await until(
-      () => client.state?.servers.some((server) => server.phase === 'connected') === true,
-      'the server to connect',
-    );
-
-    expect(client.text.length).toBeGreaterThan(2);
-    for (const line of client.text) expect(line).not.toContain(SERVER_TOKEN);
-  });
-
-  it('stops dialling the moment the same client unpairs it', async () => {
-    const { running, client } = await pairedFleet();
-    await until(
-      () => running.hub.connections.snapshot().some((report) => report.phase === 'connected'),
-      'the server to connect',
-    );
-    const connection = running.live.at(-1);
-    let ended = false;
-    connection?.onClose(() => {
-      ended = true;
+  it('leaves the paired server connected and its socket open', async () => {
+    const running = await connectedFleet();
+    const serverSocket = running.live[0];
+    if (serverSocket === undefined) throw new Error('the hub dialled no server');
+    let serverClosed = false;
+    serverSocket.onClose(() => {
+      serverClosed = true;
     });
 
-    client.send({ type: 'server-unpair', id: 3, registrationId: 'registration-1' });
-    await until(
-      () => reply(client, 'server-unpaired') !== undefined,
-      () => `the unpairing to be answered: ${client.text.join(' | ')}`,
-    );
+    const stranger = await openClient(running.hub);
+    stranger.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION + 1 });
+    await until(() => stranger.closed, 'the refused client to be closed');
 
-    // The connection is dropped, the supervisor holds nothing, and the rows go
-    // with it: a revoked pairing's sessions are claims nothing stands behind.
-    await until(() => ended, 'the connection to the server to end');
-    expect(running.hub.connections.snapshot()).toEqual([]);
-    await until(
-      () => client.state?.servers.length === 0,
-      () => `a state with no servers: ${JSON.stringify(client.state)}`,
-    );
-
-    // And nothing dials it again, however long the retries would have run.
-    const dialsBefore = running.dialled.length;
-    for (let turn = 0; turn < 50; turn += 1) {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-    expect(running.dialled.length).toBe(dialsBefore);
+    expect(running.hub.connections.snapshot().map((report) => report.phase)).toEqual(['connected']);
+    expect(serverClosed).toBe(false);
   });
 
-  it('refuses a second unpair of the same registration, without closing the socket', async () => {
-    const { client } = await pairedFleet();
-    client.send({ type: 'server-unpair', id: 3, registrationId: 'registration-1' });
-    await until(() => reply(client, 'server-unpaired') !== undefined, 'the unpairing');
+  it('still welcomes a client at the client leg, which sees the server', async () => {
+    const running = await connectedFleet();
 
-    client.send({ type: 'server-unpair', id: 4, registrationId: 'registration-1' });
+    const stranger = await openClient(running.hub);
+    stranger.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION + 1 });
+    await until(() => stranger.closed, 'the refused client to be closed');
+
+    const welcomed = await openClient(running.hub);
+    welcomed.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await until(
-      () => client.received.some((frame) => frame.type === 'refusal'),
-      () => `a refusal: ${client.text.join(' | ')}`,
+      () => welcomed.state?.servers.some((server) => server.phase === 'connected') === true,
+      () => `the connected server in machine state: ${welcomed.text.join(' | ')}`,
     );
 
-    expect(reply(client, 'refusal')).toMatchObject({ replyTo: 4, code: 'refused' });
-  });
-
-  it('refuses an address it will not dial, and dials nothing', async () => {
-    const running = await startFleet();
-    fleet = running;
-    const client = await openClient(running.hub);
-    client.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
-    await until(() => reply(client, 'welcome') !== undefined, 'the welcome');
-
-    client.send({
-      type: 'server-pair',
-      id: 2,
-      label: 'gpu-box-01',
-      // Plaintext to somewhere that is not this machine: the one thing a typed
-      // address may never be, because the token would cross a network in the
-      // clear.
-      address: 'ws://gpu-box.example:8443',
-      token: SERVER_TOKEN,
-    });
-    await until(
-      () => client.received.some((frame) => frame.type === 'refusal'),
-      () => `a refusal: ${client.text.join(' | ')}`,
-    );
-
-    const refusal = reply(client, 'refusal');
-    expect(refusal).toMatchObject({ replyTo: 2, code: 'bad-request' });
-    expect(refusal?.type === 'refusal' ? refusal.message : '').toContain('wss://');
-    expect(running.dialled).toEqual([]);
-    expect(running.hub.connections.snapshot()).toEqual([]);
+    expect(reply(welcomed, 'welcome')?.protocolVersion).toBe(CLIENT_PROTOCOL_VERSION);
+    expect(welcomed.state?.servers.map((server) => server.label)).toEqual(['gpu-box-01']);
   });
 });

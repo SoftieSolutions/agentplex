@@ -4,7 +4,8 @@ import { createFakeStoreFiles } from '@agentplex/providers/testing';
 import {
   parseHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   type HubFrame,
 } from '@agentplex/protocol';
 import { createFakeDatabase } from '../db/fake-database.js';
@@ -165,7 +166,7 @@ function open(url: string): {
   };
 }
 
-const HELLO = { type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION };
+const HELLO = { type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION };
 
 describe('the client websocket', () => {
   it('takes a client from its credential to the machine state', async () => {
@@ -184,7 +185,7 @@ describe('the client websocket', () => {
     expect(welcome).toEqual({
       type: 'welcome',
       replyTo: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
       hubId: 'hub-1',
       // This hub was given no way to push, and says so rather than leaving the
       // field out: a client has to be able to tell that from a hub that can.
@@ -292,6 +293,11 @@ describe('the client websocket', () => {
     const started = await startTestHub();
     const response = await fetch(`http://${HOST}:${started.port}/health`);
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ status: 'ok', role: 'hub' });
+    await expect(response.json()).resolves.toEqual({
+      status: 'ok',
+      role: 'hub',
+      clientProtocolVersion: CLIENT_PROTOCOL_VERSION,
+      serverProtocolVersion: SERVER_PROTOCOL_VERSION,
+    });
   });
 });

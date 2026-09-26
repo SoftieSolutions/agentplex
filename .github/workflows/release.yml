@@ -39,9 +39,10 @@
 # cli": GitHub's "latest" is the most recently published release overall. So the
 # `v1` job writes a manifest of what is current for every component, on the same
 # branch and through the same raw.githubusercontent.com mechanism that already
-# serves `install.sh`. It carries each component's protocol beside its version,
-# so one unauthenticated fetch answers both what to install and whether the set
-# agrees -- before anything is downloaded.
+# serves `install.sh`. It carries each release's protocol legs beside its
+# version -- the client leg, the server leg, or both, whichever that package
+# speaks -- so one unauthenticated fetch answers both what to install and
+# whether the set agrees on each leg, before anything is downloaded.
 
 name: release
 
@@ -199,8 +200,10 @@ jobs:
       #
       # The protocol is read out of the assembled manifest rather than written
       # here, and that is the point of putting it in the manifest at all: it is
-      # the compiled constant the tarball itself declares, so it cannot drift
-      # from what the code in the tarball does.
+      # the compiled constants the tarball itself declares, so it cannot drift
+      # from what the code in the tarball does. It is an object of legs, so it
+      # is carried as its JSON text -- `{"client":39,"server":39}` -- and
+      # `field` would print it as a JavaScript literal instead.
       - name: Assemble the component the tag names
         id: assemble
         run: |
@@ -210,7 +213,7 @@ jobs:
           {
             echo "component=$(field component)"
             echo "version=$(field version)"
-            echo "protocol=$(field protocol)"
+            echo "protocol=$(node -p "JSON.stringify(require('./release-assets/release.json').protocol)")"
             echo "package=$(field package)"
             echo "directory=$(field directory)"
             echo "asset=$(field asset)"
@@ -260,7 +263,7 @@ jobs:
           # shellcheck disable=SC2086
           gh release create "$GITHUB_REF_NAME" $prerelease \
             --title "$COMPONENT $VERSION" \
-            --notes "$PACKAGE at $VERSION, speaking protocol $PROTOCOL.
+            --notes "$PACKAGE at $VERSION, declaring protocol $PROTOCOL.
 
           Install with \`install.sh\`, which resolves this component through
           \`versions.json\` on the \`v1\` branch:
@@ -272,15 +275,20 @@ jobs:
           series instead, and never a prerelease." \
             release-assets/${{ steps.assemble.outputs.asset }}
 
+      # The protocol goes through the environment rather than into the script
+      # text: it is JSON, and an expression expanded inside double quotes would
+      # have the shell strip its quotes before `echo` saw it.
       - name: Report
         if: always()
+        env:
+          PROTOCOL: ${{ steps.assemble.outputs.protocol }}
         run: |
           set -euo pipefail
           {
             echo "## ${{ steps.assemble.outputs.component }} ${{ steps.assemble.outputs.version }}"
             echo
             echo "- ${{ steps.assemble.outputs.package }}"
-            echo "- protocol ${{ steps.assemble.outputs.protocol }}"
+            echo "- protocol $PROTOCOL"
             echo "- ${{ steps.assemble.outputs.asset }}"
           } >> "$GITHUB_STEP_SUMMARY"
 

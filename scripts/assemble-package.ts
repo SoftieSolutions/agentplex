@@ -2,7 +2,8 @@ import { cp, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promise
 import { basename, dirname, join, relative } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { PROTOCOL_VERSION } from '@agentplex/protocol';
+import { PROTOCOL_VERSIONS, type ProtocolLeg } from '@agentplex/protocol';
+import type { ReleaseProtocol } from '@agentplex/release';
 import { z } from 'zod';
 
 /**
@@ -54,10 +55,11 @@ import { z } from 'zod';
  * what a contributor and the container check want: a set of tarballs from one
  * build, installable from a directory, publishable nowhere.
  *
- * What holds the trains together is `PROTOCOL_VERSION`, written into every
- * published manifest below. Independent versions are safe exactly while the
- * components agree on it, and a fact about the artifact is the only form of
- * that claim an installed machine can check.
+ * What holds the trains together is the protocol, one version per leg, written
+ * into every published manifest below for the legs that package speaks.
+ * Independent versions are safe exactly while the components that speak a leg
+ * agree on it, and a fact about the artifact is the only form of that claim an
+ * installed machine can check.
  *
  * ## The layout inside every package is the workspace's, on purpose
  *
@@ -240,6 +242,23 @@ export interface PackageTarget {
    * emptiness is the decision rather than the absence of one.
    */
   readonly optional: readonly string[];
+  /**
+   * The protocol legs the code in this package speaks, which is what its
+   * manifest records and what every agreement check compares.
+   *
+   * The hub speaks both. The server speaks only its own leg, so a client-only
+   * change does not release it. The CLI speaks neither: it opens no socket to
+   * either daemon, and a number it recorded would be a claim nothing checks.
+   *
+   * The client speaks the client leg in its `hello` and records the server leg
+   * as well, because it judges a discovered server's beacon against its own
+   * `SERVER_PROTOCOL_VERSION` (`apps/web/src/settings/pairing-form.ts`). That
+   * verdict is only the hub's verdict while the two builds hold the same
+   * number, and recording the leg is what lets `install.sh`, the image and
+   * `agentplex update` refuse a client and a hub that disagree on it. The cost
+   * is that a server-leg change releases the client too.
+   */
+  readonly legs: readonly ProtocolLeg[];
   /** The command this package installs, and the file it links. Only one has one. */
   readonly bin?: { readonly command: string; readonly entrypoint: string };
   readonly entries: readonly PackageEntry[];
@@ -412,6 +431,7 @@ export const CLI: PackageTarget = {
   declares: [BIN_APP],
   bundled: [...SHARED, PTY, RELEASE],
   optional: OPTIONAL_IN_THE_CLI,
+  legs: [],
   bin: { command: 'agentplex', entrypoint: ENTRYPOINT },
   entries: [
     {
@@ -450,6 +470,7 @@ export const HUB: PackageTarget = {
   declares: ['apps/hub'],
   bundled: SHARED,
   optional: [],
+  legs: ['client', 'server'],
   entries: [
     compiledApp('hub', 'the compiled hub'),
     {
@@ -482,6 +503,7 @@ export const SERVER: PackageTarget = {
   declares: ['apps/server'],
   bundled: [...SHARED, PTY],
   optional: [],
+  legs: ['server'],
   entries: [
     compiledApp('server', 'the compiled server'),
     POSTINSTALL_ENTRY,
@@ -530,6 +552,7 @@ export const WEB: PackageTarget = {
   declares: [],
   bundled: [],
   optional: [],
+  legs: ['client', 'server'],
   entries: [
     {
       from: 'apps/web/dist',
@@ -764,21 +787,26 @@ export function releaseFromTag(tag: string): ReleaseTag {
  * refuse the machine it was built for.
  *
  * **`agentplex.protocol` is the one field npm has no opinion about, and it is
- * the point of the whole per-component release.** `PROTOCOL_VERSION` is the
- * single compatibility constant in this repository, and this epic reads it as
- * the version of everything `packages/protocol` declares -- the wire frames and
- * the on-disk formats whose schemas live beside them alike. Four components on
- * four release trains are safe exactly while they agree on it.
+ * the point of the whole per-component release.** The protocol has two legs,
+ * each counted by its own constant in `packages/protocol`: the client leg
+ * (`CLIENT_PROTOCOL_VERSION`, the browser and MCP side of the hub) and the
+ * server leg (`SERVER_PROTOCOL_VERSION`, the handshake, the frames a hub and a
+ * server exchange, and the discovery beacon). The field is an object holding
+ * the legs this package speaks -- `{ client, server }` for the hub and the
+ * client, `{ server }` for the server, `{}` for the CLI; see
+ * `PackageTarget.legs`. Four components on four release trains are safe
+ * exactly while the ones that record a leg agree on it, and numbers on
+ * different legs are never compared: that independence is why there are two.
  *
  * Written here rather than asserted anywhere, because a machine cannot check a
  * claim that exists only in a workflow. The assembly runs after `pnpm build`,
- * so the constant it reads is the compiled one the programs in this very
- * tarball import -- not a number copied into a YAML file that drifts the first
- * time somebody bumps one and forgets the other. Once it is in the manifest it
- * is a fact about the artifact: `install.sh` pre-checks it before a pinned
- * install, the release publishes it into `versions.json`, and `status` and
- * `doctor` can read it back off an installed machine and say that the hub and
- * the server on it no longer speak.
+ * so the constants it reads are the compiled ones the programs in this very
+ * tarball import -- not numbers copied into a YAML file that drift the first
+ * time somebody bumps one and forgets the other. Once they are in the manifest
+ * they are a fact about the artifact: `install.sh` pre-checks each leg before a
+ * pinned install, the release publishes the object into `versions.json`, and
+ * `status` and `update` read it back off an installed machine and say, leg by
+ * leg, that the hub and the server on it no longer speak.
  *
  * Under `agentplex` rather than at the top level, and not called
  * `protocolVersion`. npm ignores unknown fields but the root of a manifest is
@@ -870,7 +898,7 @@ export function publishedManifest(input: {
     ...(input.root.repository === undefined ? {} : { repository: input.root.repository }),
     type: 'module',
     engines: { node },
-    agentplex: { protocol: PROTOCOL_VERSION },
+    agentplex: { protocol: declaredProtocol(target) },
     ...(target.bin === undefined
       ? {}
       : { bin: { [target.bin.command]: `./${target.bin.entrypoint}` } }),
@@ -888,6 +916,16 @@ export function publishedManifest(input: {
     optionalDependencies: Object.fromEntries(Object.entries(optional).sort()),
     bundleDependencies: [...bundleDependencies].sort(),
   };
+}
+
+/**
+ * The legs a target speaks, each at the version this build compiled, in the
+ * order the target names them.
+ */
+function declaredProtocol(target: PackageTarget): ReleaseProtocol {
+  const protocol: { -readonly [leg in ProtocolLeg]?: number } = {};
+  for (const leg of target.legs) protocol[leg] = PROTOCOL_VERSIONS[leg];
+  return protocol;
 }
 
 /**
@@ -1122,7 +1160,8 @@ export const RELEASE_ASSETS = 'release-assets';
 
 /**
  * What one tag releases: the component, the version its tag names and the
- * protocol the build it packs declares.
+ * protocol legs the build it packs declares -- the same object its manifest's
+ * `agentplex.protocol` holds.
  *
  * This used to be published as well as described -- a small
  * `<component>-v<version>.json` beside every tarball -- because
@@ -1137,7 +1176,7 @@ export const RELEASE_ASSETS = 'release-assets';
 export interface ReleaseMetadata {
   readonly component: Component;
   readonly version: string;
-  readonly protocol: number;
+  readonly protocol: ReleaseProtocol;
 }
 
 /**
@@ -1164,7 +1203,7 @@ export function releaseDescription(target: PackageTarget, version: string): Rele
   return {
     component: target.component,
     version,
-    protocol: PROTOCOL_VERSION,
+    protocol: declaredProtocol(target),
     package: target.name,
     directory: target.output,
     asset: target.asset,
@@ -1199,6 +1238,14 @@ export async function assembleRelease(options: {
   return { assembled, release };
 }
 
+/** "client protocol 39, server protocol 39", or "no protocol" for the CLI. */
+function describeProtocol(protocol: ReleaseProtocol): string {
+  const legs = Object.entries(protocol).map(
+    ([leg, version]) => `${leg} protocol ${String(version)}`,
+  );
+  return legs.length === 0 ? 'no protocol' : legs.join(', ');
+}
+
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
@@ -1226,7 +1273,7 @@ async function main(): Promise<void> {
     const { assembled, release } = await assembleRelease({ workspaceRoot, tag, log });
     log(
       `assembled the ${release.component} component, ${release.package}@${release.version}, ` +
-        `speaking protocol ${release.protocol}, into ${relative(workspaceRoot, assembled.directory)}`,
+        `speaking ${describeProtocol(release.protocol)}, into ${relative(workspaceRoot, assembled.directory)}`,
     );
     log(`wrote ${RELEASE_ASSETS}/release.json`);
     return;

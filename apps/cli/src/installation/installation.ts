@@ -1,3 +1,5 @@
+import type { ProtocolLeg } from '@agentplex/protocol';
+import { releaseProtocolSchema, type ReleaseProtocol } from '@agentplex/release';
 import { z } from 'zod';
 import { DAEMONS } from '../programs.js';
 import { COMPONENTS, COMPONENT_PACKAGES, type Component } from './components.js';
@@ -71,16 +73,18 @@ export interface InstalledPackage {
   readonly state: 'installed' | 'absent' | 'unreadable';
   readonly version: string | null;
   /**
-   * `agentplex.protocol` out of the published manifest, or `null`.
+   * `agentplex.protocol` out of the published manifest -- the protocol legs this
+   * package speaks, each at its version -- or `null`.
    *
    * The reason this field exists at all is that four components are on four
-   * release trains and are safe exactly while they agree on it. Packaging writes
-   * it into every published manifest precisely so that the claim can be checked
-   * on an installed machine rather than only in a workflow, and this is the
-   * command that checks it. `null` is a package built before that was true, or
-   * a local build -- not a disagreement, and not counted as one.
+   * release trains and are safe exactly while the ones that speak a leg agree
+   * on it. Packaging writes it into every published manifest precisely so that
+   * the claim can be checked on an installed machine rather than only in a
+   * workflow, and this is the command that checks it. The CLI's is `{}`, the
+   * server's names only the server leg. `null` is a manifest with no
+   * `agentplex` field at all -- not a disagreement, and not counted as one.
    */
-  readonly protocol: number | null;
+  readonly protocol: ReleaseProtocol | null;
   readonly problem: string | null;
 }
 
@@ -108,14 +112,17 @@ export type Runtime =
  * The manifest as this reads it: two fields, and everything else parsed away.
  *
  * A manifest under `lib/node_modules` is a file off a disk, so it is a claim.
- * A `version` that is not a string, or an `agentplex.protocol` that is not a
- * whole positive number, is refused rather than printed -- the alternative is
- * `status` reporting `undefined` as a version, or two components "agreeing" on
- * a protocol of `NaN`.
+ * A `version` that is not a string, or an `agentplex.protocol` that is not an
+ * object of whole positive client and server legs, is refused rather than
+ * printed -- the alternative is `status` reporting `undefined` as a version, or
+ * two components "agreeing" on a protocol of `NaN`. The same schema
+ * `versions.json` releases are held to, from the package that owns it, so a
+ * manifest this accepts is one a release could have described. A bare number is
+ * refused with the rest: nothing was ever published with one.
  */
 const manifestSchema = z.object({
   version: z.string().min(1),
-  agentplex: z.object({ protocol: z.int().positive() }).optional(),
+  agentplex: z.object({ protocol: releaseProtocolSchema }).optional(),
 });
 
 export async function readInstallation(
@@ -217,28 +224,75 @@ async function readRuntime(layout: Layout, files: InstallationFiles): Promise<Ru
   return version.length === 0 ? { kind: 'adopted' } : { kind: 'installed', version };
 }
 
+/** The legs a disagreement is asked about, in the order it is reported. */
+const PROTOCOL_LEGS: readonly ProtocolLeg[] = ['client', 'server'];
+
 /**
- * The protocols the installed components declare, and whether they are one
+ * The legs a package speaks, as `status` and `update` print them:
+ * `client 40 server 39`, `server 39`, or nothing at all for the CLI, which
+ * speaks neither.
+ */
+export function protocolWords(protocol: ReleaseProtocol | null): string {
+  if (protocol === null) return '';
+  return PROTOCOL_LEGS.flatMap((leg) => {
+    const version = protocol[leg];
+    return version === undefined ? [] : [`${leg} ${String(version)}`];
+  }).join(' ');
+}
+
+/** One protocol leg the components do not agree on, and every one that declared it. */
+export interface ProtocolDisagreement<T> {
+  readonly leg: ProtocolLeg;
+  readonly declared: readonly T[];
+}
+
+/**
+ * The legs a set of components disagree on, each with the components that
+ * declared it, or `null` when every leg agrees.
+ *
+ * Asked leg by leg, of the components that declare that leg, and never across
+ * legs: a hub at client 4 and server 3 beside a server at 3 is the machine a
+ * client-only change leaves, and it is the reason there are two legs. A
+ * component that does not speak a leg -- the CLI speaks neither, the server no
+ * client -- is not asked about it, and one with no declared protocol at all is
+ * left out of every leg.
+ *
+ * Generic over what is being compared, because `status` asks it of what is
+ * installed and `update` of what would be installed afterwards, and two copies
+ * of this rule are two ways to disagree about what a disagreement is.
+ */
+export function legDisagreements<T>(
+  components: readonly T[],
+  protocolOf: (component: T) => ReleaseProtocol | null,
+): readonly ProtocolDisagreement<T>[] | null {
+  const disagreements = PROTOCOL_LEGS.flatMap((leg) => {
+    const declared = components.filter((one) => protocolOf(one)?.[leg] !== undefined);
+    const versions = new Set(declared.map((one) => protocolOf(one)?.[leg]));
+    return versions.size > 1 ? [{ leg, declared }] : [];
+  });
+  return disagreements.length > 0 ? disagreements : null;
+}
+
+/**
+ * The protocol legs the installed components declare, and whether each is one
  * number.
  *
- * A set that disagrees is a machine whose daemons cannot talk to each other:
- * the hub and the server would connect and refuse each other's frames, and the
- * symptom is a paired machine that never comes online with nothing in either
- * log that names the cause. `install.sh` refuses to create that machine, and
- * this is what notices when one exists anyway -- a hub upgraded on its own, or
- * two installs at different times either side of a protocol change.
+ * A leg that disagrees is a pair of processes that cannot talk: on the server
+ * leg the hub and the server connect and refuse each other at the handshake, so
+ * a paired machine never comes online; on the client leg every browser is
+ * refused at hello. `install.sh` refuses to create either machine, and this is
+ * what notices when one exists anyway -- a hub upgraded on its own, or two
+ * installs at different times either side of a change to a leg.
  *
  * A component with no declared protocol is left out rather than counted as a
- * disagreement. It is a package from before the field existed or a local build,
- * and "this one does not say" is a different and smaller fact than "these two
- * say different things".
+ * disagreement. "This one does not say" is a different and smaller fact than
+ * "these two say different things".
  */
 export function protocolDisagreement(
   installation: Installation,
-): readonly InstalledPackage[] | null {
-  const declared = installation.packages.filter(
-    (one) => one.state === 'installed' && one.protocol !== null,
+): readonly ProtocolDisagreement<InstalledPackage>[] | null {
+  return legDisagreements(
+    installation.packages.filter((one) => one.state === 'installed'),
+    (one) => one.protocol,
   );
-  const protocols = new Set(declared.map((one) => one.protocol));
-  return protocols.size > 1 ? declared : null;
 }

@@ -41,6 +41,9 @@ const INSTALLED = {
   '@softiesolutions/agentplex-web': '1.1.0',
 } as const;
 
+/** The legs the hub and its client both record, at the fixture's one number. */
+const BOTH = { client: 3, server: 3 };
+
 let home: string;
 let prefix: string;
 let mirror: string;
@@ -91,7 +94,8 @@ beforeAll(async () => {
 
   // A hub machine: no server package, which is the case a report must not call
   // broken. The manifests carry `agentplex.protocol` because the published ones
-  // do -- packaging writes it into every one of them.
+  // do -- packaging writes into every one of them the legs that package speaks,
+  // none for the CLI and both for the hub and its client.
   await writeFile(
     join(prefix, 'agentplex.env'),
     ['AGENTPLEX_ROLE=hub', `AGENTPLEX_PREFIX=${prefix}`, ''].join('\n'),
@@ -101,7 +105,11 @@ beforeAll(async () => {
     await mkdir(directory, { recursive: true });
     await writeFile(
       join(directory, 'package.json'),
-      JSON.stringify({ name, version, agentplex: { protocol: 3 } }),
+      JSON.stringify({
+        name,
+        version,
+        agentplex: { protocol: name === '@softiesolutions/agentplex' ? {} : BOTH },
+      }),
     );
   }
   await mkdir(join(prefix, 'node', 'bin'), { recursive: true });
@@ -117,10 +125,10 @@ beforeAll(async () => {
     join(mirror, 'versions.json'),
     JSON.stringify(
       {
-        cli: { current: '1.5.0', releases: { '1.5.0': 3 } },
-        hub: { current: '1.2.0', releases: { '1.2.0': 3 } },
-        server: { current: '1.5.0', releases: { '1.5.0': 3 } },
-        web: { current: '1.1.0', releases: { '1.1.0': 3 } },
+        cli: { current: '1.5.0', releases: { '1.5.0': {} } },
+        hub: { current: '1.2.0', releases: { '1.2.0': BOTH } },
+        server: { current: '1.5.0', releases: { '1.5.0': { server: 3 } } },
+        web: { current: '1.1.0', releases: { '1.1.0': BOTH } },
       },
       null,
       2,
@@ -154,7 +162,7 @@ describe('agentplex update --check against a real prefix', () => {
       );
       expect(cached).toMatchObject({
         source: join(mirror, 'versions.json'),
-        manifest: { cli: { current: '1.5.0', releases: { '1.5.0': 3 } } },
+        manifest: { cli: { current: '1.5.0', releases: { '1.5.0': {} } } },
       });
 
       // Nothing on stderr: the notice is silent when stderr is not a terminal,

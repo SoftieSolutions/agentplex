@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { ProgramResolver } from '@agentplex/providers';
+import type { ReleaseProtocol } from '@agentplex/release';
 import {
   createFakeProcessRunner,
   printed,
@@ -47,9 +48,11 @@ function state(active: string, enabled = 'enabled', since = ''): ReturnType<type
   );
 }
 
-function manifest(version: string, protocol: number | null): string {
+function manifest(version: string, protocol: ReleaseProtocol | null): string {
   return JSON.stringify(protocol === null ? { version } : { version, agentplex: { protocol } });
 }
+
+const BOTH: ReleaseProtocol = { client: 3, server: 3 };
 
 function packageAt(name: string): string {
   return `${PREFIX}/lib/node_modules/${name}/package.json`;
@@ -58,10 +61,10 @@ function packageAt(name: string): string {
 function wholeMachine(): Record<string, string> {
   return {
     [`${PREFIX}/agentplex.env`]: `AGENTPLEX_ROLE=both\nAGENTPLEX_PREFIX=${PREFIX}\n`,
-    [packageAt('@softiesolutions/agentplex')]: manifest('1.4.0', 3),
-    [packageAt('@softiesolutions/agentplex-hub')]: manifest('1.2.0', 3),
-    [packageAt('@softiesolutions/agentplex-server')]: manifest('1.5.0', 3),
-    [packageAt('@softiesolutions/agentplex-web')]: manifest('1.1.0', 3),
+    [packageAt('@softiesolutions/agentplex')]: manifest('1.4.0', {}),
+    [packageAt('@softiesolutions/agentplex-hub')]: manifest('1.2.0', BOTH),
+    [packageAt('@softiesolutions/agentplex-server')]: manifest('1.5.0', { server: 3 }),
+    [packageAt('@softiesolutions/agentplex-web')]: manifest('1.1.0', BOTH),
     [`${PREFIX}/node/.agentplex-node-version`]: 'v24.9.0\n',
   };
 }
@@ -122,10 +125,11 @@ describe('what agentplex status reports', () => {
     expect(status.code).toBe(0);
     expect(status.errors).toBe('');
     expect(status.out).toContain(`prefix=${PREFIX}   scope=user   role=both`);
-    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0 {8}protocol 3$/m);
-    expect(status.out).toMatch(/^ {2}hub {6}1\.2\.0 {8}protocol 3$/m);
-    expect(status.out).toMatch(/^ {2}server {3}1\.5\.0 {8}protocol 3$/m);
-    expect(status.out).toMatch(/^ {2}web {6}1\.1\.0 {8}protocol 3$/m);
+    // Each package with the legs it speaks: the CLI none, the server its own.
+    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0$/m);
+    expect(status.out).toMatch(/^ {2}hub {6}1\.2\.0 {8}client 3 server 3$/m);
+    expect(status.out).toMatch(/^ {2}server {3}1\.5\.0 {8}server 3$/m);
+    expect(status.out).toMatch(/^ {2}web {6}1\.1\.0 {8}client 3 server 3$/m);
     expect(status.out).toContain('node v24.9.0   installed by install.sh');
   });
 
@@ -244,17 +248,22 @@ describe('a machine with nothing to ask', () => {
 });
 
 describe('whether the components on this machine can talk to each other', () => {
-  it('says so when they disagree, and names what each one speaks', async () => {
+  it('says so when they disagree, naming the leg and what each one speaks on it', async () => {
     const status = await run([], {
       files: {
         ...wholeMachine(),
-        [packageAt('@softiesolutions/agentplex-hub')]: manifest('2.0.0', 4),
+        [packageAt('@softiesolutions/agentplex-hub')]: manifest('2.0.0', { client: 3, server: 4 }),
+        [packageAt('@softiesolutions/agentplex-web')]: manifest('2.0.0', { client: 3, server: 4 }),
       },
     });
 
-    expect(status.out).toContain('these components do not agree');
-    expect(status.out).toMatch(/^ {4}hub {6}protocol 4$/m);
-    expect(status.out).toMatch(/^ {4}server {3}protocol 3$/m);
+    expect(status.out).toContain('these components do not agree on the server protocol');
+    expect(status.out).toMatch(/^ {4}hub {6}server 4$/m);
+    expect(status.out).toMatch(/^ {4}server {3}server 3$/m);
+    expect(status.out).toMatch(/^ {4}web {6}server 4$/m);
+    // The client leg agrees, so it gets no paragraph and nobody is sent to
+    // upgrade a browser that is fine.
+    expect(status.out).not.toContain('client protocol');
     // Reported, and not the exit code. That code answers "did anything on this
     // machine fail to run", and widening it to "is anything about this machine
     // wrong" would make it the doctor's verdict under another name.
@@ -263,6 +272,21 @@ describe('whether the components on this machine can talk to each other', () => 
 
   it('says nothing at all when they agree', async () => {
     expect((await run()).out).not.toContain('do not agree');
+  });
+
+  /** The legs are never compared with each other: this is what a client-only change leaves. */
+  it('says nothing when the legs differ from each other and each agrees', async () => {
+    const clientMoved = { client: 4, server: 3 };
+    const status = await run([], {
+      files: {
+        ...wholeMachine(),
+        [packageAt('@softiesolutions/agentplex-hub')]: manifest('2.0.0', clientMoved),
+        [packageAt('@softiesolutions/agentplex-web')]: manifest('2.0.0', clientMoved),
+      },
+    });
+
+    expect(status.out).not.toContain('do not agree');
+    expect(status.out).toMatch(/^ {2}hub {6}2\.0\.0 {8}client 4 server 3$/m);
   });
 });
 
@@ -275,8 +299,8 @@ describe('what is available beside what is installed', () => {
       checkedAt: CHECKED_AT,
       source: 'https://example.invalid/versions.json',
       manifest: {
-        cli: { current: cliVersion, releases: { [cliVersion]: 3 } },
-        hub: { current: '1.2.0', releases: { '1.2.0': 3 } },
+        cli: { current: cliVersion, releases: { [cliVersion]: {} } },
+        hub: { current: '1.2.0', releases: { '1.2.0': BOTH } },
       },
     });
   }
@@ -294,8 +318,8 @@ describe('what is available beside what is installed', () => {
       now: CHECKED_AT + 3 * 24 * 60 * 60 * 1000,
     });
 
-    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0 {8}1\.5\.0 available {2}protocol 3$/m);
-    expect(status.out).toMatch(/^ {2}hub {6}1\.2\.0 {8}current {10}protocol 3$/m);
+    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0 {8}1\.5\.0 available$/m);
+    expect(status.out).toMatch(/^ {2}hub {6}1\.2\.0 {8}current {10}client 3 server 3$/m);
     expect(status.out).toContain('checked 3 days ago');
     // Still nothing spawned but systemctl, and still no fetch.
     expect(status.runner.requests.every((request) => request.file === 'systemctl')).toBe(true);
@@ -313,7 +337,7 @@ describe('what is available beside what is installed', () => {
       now: CHECKED_AT,
     });
 
-    expect(status.out).toMatch(/^ {2}server {3}1\.5\.0 {25}protocol 3$/m);
+    expect(status.out).toMatch(/^ {2}server {3}1\.5\.0 {25}server 3$/m);
   });
 
   /**
@@ -324,7 +348,7 @@ describe('what is available beside what is installed', () => {
   it('leaves the column out entirely when there is no cache, and says which command makes one', async () => {
     const status = await run([], { files: wholeMachine() });
 
-    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0 {8}protocol 3$/m);
+    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0$/m);
     expect(status.out).toContain('agentplex update --check');
   });
 
@@ -335,7 +359,7 @@ describe('what is available beside what is installed', () => {
       cacheFile: CACHE,
     });
 
-    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0 {8}protocol 3$/m);
+    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0$/m);
   });
 });
 

@@ -3,7 +3,7 @@ import {
   graphDocumentSchema,
   parseHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   type ClientFrame,
   type GraphDocument,
   type HubFrame,
@@ -139,7 +139,7 @@ async function attach(): Promise<Client> {
     },
     all,
   };
-  await client.say({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
   return client;
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   machineStateSchema,
   parseHubFrame,
   parseTextFrame,
@@ -36,7 +36,7 @@ function stateAnnouncing(address: string): MachineState {
     servers: [],
     graphRunApprovals: [],
     candidates: [
-      { serverId: 'server-odd', address, port: 8443, protocolVersion: PROTOCOL_VERSION },
+      { serverId: 'server-odd', address, port: 8443, protocolVersion: SERVER_PROTOCOL_VERSION },
     ],
   });
 }
@@ -93,7 +93,7 @@ describe('discovered candidates', () => {
     serverId: 'found-on-the-lan',
     host: '192.168.1.24',
     port: 8443,
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: SERVER_PROTOCOL_VERSION,
     address: 'wss://192.168.1.24:8443',
     unusable: null,
   };
@@ -130,7 +130,7 @@ describe('discovered candidates', () => {
         serverId: 'server-mbp',
         host: '192.168.1.24',
         port: 8443,
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: SERVER_PROTOCOL_VERSION,
         address: 'wss://192.168.1.24:8443',
         unusable: null,
       },
@@ -138,9 +138,9 @@ describe('discovered candidates', () => {
         serverId: 'server-old-build',
         host: '192.168.1.31',
         port: 8443,
-        protocolVersion: PROTOCOL_VERSION - 1,
+        protocolVersion: SERVER_PROTOCOL_VERSION - 1,
         address: 'wss://192.168.1.31:8443',
-        unusable: `this hub speaks protocol ${String(PROTOCOL_VERSION)} and that machine speaks ${String(PROTOCOL_VERSION - 1)}`,
+        unusable: `this hub speaks server protocol ${String(SERVER_PROTOCOL_VERSION)} and that machine speaks ${String(SERVER_PROTOCOL_VERSION - 1)}`,
       },
     ]);
   });

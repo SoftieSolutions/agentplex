@@ -4,7 +4,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createLogger, startHttpServer, type LogRecord } from '@agentplex/node-shared';
 import { createUnreachableDialer, createFakeTimers } from '@agentplex/node-shared/testing';
 import { createFakeStoreFiles } from '@agentplex/providers/testing';
-import { hubIdSchema, PROTOCOL_VERSION } from '@agentplex/protocol';
+import { CLIENT_PROTOCOL_VERSION, hubIdSchema, SERVER_PROTOCOL_VERSION } from '@agentplex/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createFakeDatabase } from '../db/fake-database.js';
@@ -193,7 +193,10 @@ describe('the hub MCP endpoint', () => {
 
     const connected = await connect(started);
 
-    expect(connected.getServerVersion()).toMatchObject({ name: 'agentplex-hub' });
+    expect(connected.getServerVersion()).toEqual({
+      name: 'agentplex-hub',
+      version: `client ${String(CLIENT_PROTOCOL_VERSION)} server ${String(SERVER_PROTOCOL_VERSION)}`,
+    });
     // The same port, which is the whole claim. The PWA is on it too.
     expect((await fetch(`http://${HOST}:${String(started.port)}/`)).status).toBe(200);
   });
@@ -269,10 +272,12 @@ describe('the hub MCP endpoint', () => {
     );
   });
 
-  it('answers hub_info with the two facts a client already gets in welcome', async () => {
-    // The bar for every tool: nothing here is a capability the UI lacks. Both
-    // of these are in the `welcome` frame an attached client is sent before it
-    // has asked for anything.
+  it('answers hub_info with its id and the version of each leg it speaks', async () => {
+    // The bar for every tool: nothing here is a capability the UI lacks. The id
+    // and the client leg are in the `welcome` frame an attached client is sent
+    // before it has asked for anything; the server leg is the number the web
+    // build judges a discovered machine against, which the install checks hold
+    // equal to the hub's.
     const started = await startTestHub();
     const connected = await connect(started);
 
@@ -283,7 +288,8 @@ describe('the hub MCP endpoint', () => {
     expect(content[0]?.type).toBe('text');
     expect(JSON.parse(content[0]?.text ?? '')).toEqual({
       hubId: HUB_ID,
-      protocolVersion: PROTOCOL_VERSION,
+      clientProtocolVersion: CLIENT_PROTOCOL_VERSION,
+      serverProtocolVersion: SERVER_PROTOCOL_VERSION,
     });
   });
 

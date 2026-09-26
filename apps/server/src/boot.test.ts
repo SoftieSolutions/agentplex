@@ -10,6 +10,7 @@ import {
 } from '@agentplex/providers/testing';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
+import { SERVER_PROTOCOL_VERSION } from '@agentplex/protocol';
 import { createTerminalManager } from './terminal/terminal-manager.js';
 import { createFakeDataRoot, type FakeDataRoot } from './data-root/fake-data-root.js';
 import { createFakeStoreWatcher } from './store-watch/fake-store-watcher.js';
@@ -145,13 +146,17 @@ describe('startRuntime', () => {
     await runtime.stop();
   });
 
-  it('answers a health check on the port it bound', async () => {
+  it('answers a health check on the port it bound, naming the one leg a server speaks', async () => {
     runtime = await startRuntime(serverOnly, dependencies());
     const port = runtime.server?.port ?? 0;
 
     const response = await fetch(`http://127.0.0.1:${port}/health`);
 
-    await expect(response.json()).resolves.toMatchObject({ status: 'ok', role: 'server' });
+    await expect(response.json()).resolves.toEqual({
+      status: 'ok',
+      role: 'server',
+      protocolVersion: SERVER_PROTOCOL_VERSION,
+    });
   });
 
   it('mints the identity of each configured store and reports it', async () => {

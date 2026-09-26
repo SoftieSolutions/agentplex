@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   approvalIdSchema,
   nodeIdSchema,
   serverAddressSchema,
@@ -659,7 +659,7 @@ function candidate(serverId: string, overrides: Partial<DiscoveredServer> = {}):
     serverId: serverIdSchema.parse(serverId),
     address: '192.168.1.24',
     port: 8443,
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: SERVER_PROTOCOL_VERSION,
     heardAt: START,
     heardFrom: '192.168.1.24',
     ...overrides,

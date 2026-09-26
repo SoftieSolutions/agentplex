@@ -80,8 +80,8 @@ export type ProviderReadiness = z.infer<typeof providerReadinessSchema>;
  * Why a machine reporting this readiness must not be asked to start that
  * provider, or `null` when it may be.
  *
- * Here, beside the enum, for the reason `checkProtocolVersion` is beside the
- * version: the words only mean something if both ends agree what they mean, and
+ * Here, beside the enum, for the reason the version checks are beside the
+ * versions: the words only mean something if both ends agree what they mean, and
  * a hub that decided in its own file while a client greyed out a button in
  * another would be two rules that can drift apart. This is the one place
  * `missing` becomes "no".

@@ -1,9 +1,9 @@
 import {
   assertNever,
-  checkProtocolVersion,
+  checkClientProtocolVersion,
   parseClientFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   type ApprovalAnsweredBy,
   type ApprovalOutcome,
   type ApprovalPolicyRule,
@@ -479,15 +479,15 @@ export function serveClientConnection(
 
         // Exact match, never a range: see `version.ts` for why "close enough"
         // is a question nobody can answer afterwards.
-        const mismatch = checkProtocolVersion(frame.protocolVersion);
+        const mismatch = checkClientProtocolVersion(frame.protocolVersion);
         if (mismatch !== null) {
           refuse(
             frame.id,
             'protocol-version',
-            `this hub speaks protocol ${mismatch.expected}, not ${mismatch.received}`,
+            `this hub speaks client protocol ${mismatch.expected}, not ${mismatch.received}`,
           );
           logger.warn('client refused', { reason: 'protocol-version', ...mismatch });
-          end(closure(CLOSE_POLICY, `protocol version ${mismatch.expected}`));
+          end(closure(CLOSE_POLICY, `client protocol version ${mismatch.expected}`));
           return;
         }
 
@@ -495,7 +495,7 @@ export function serveClientConnection(
         send({
           type: 'welcome',
           replyTo: frame.id,
-          protocolVersion: PROTOCOL_VERSION,
+          protocolVersion: CLIENT_PROTOCOL_VERSION,
           hubId,
           // Read here rather than captured at wiring time, and `null` for a
           // hub with no push. A client cannot mint a subscription without it,

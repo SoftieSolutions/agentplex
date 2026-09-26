@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   parseHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
@@ -310,7 +310,7 @@ async function startTheSession(): Promise<FakeMessageSocket> {
     await settle();
   };
 
-  await say({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+  await say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
   await say({
     type: 'session-start',
     id: 2,

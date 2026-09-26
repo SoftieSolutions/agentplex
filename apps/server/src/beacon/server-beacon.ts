@@ -1,6 +1,6 @@
 import {
   BEACON_ANNOUNCE_INTERVAL_MS,
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   formatServerBeacon,
   type ServerId,
 } from '@agentplex/protocol';
@@ -86,7 +86,7 @@ export function startServerBeacon(dependencies: ServerBeaconDependencies): Serve
 
   const payload = formatServerBeacon({
     type: 'agentplex-server-beacon',
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: SERVER_PROTOCOL_VERSION,
     serverId,
     address,
     port,

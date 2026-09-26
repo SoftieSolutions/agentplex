@@ -1,6 +1,16 @@
-import { compareVersions, currentRelease, type VersionsManifest } from '@agentplex/release';
+import {
+  compareVersions,
+  currentRelease,
+  type ReleaseProtocol,
+  type VersionsManifest,
+} from '@agentplex/release';
 import { COMPONENTS, releaseUrl, type Component } from '../../installation/components.js';
-import type { Installation, InstalledPackage } from '../../installation/installation.js';
+import {
+  legDisagreements,
+  type Installation,
+  type InstalledPackage,
+  type ProtocolDisagreement,
+} from '../../installation/installation.js';
 import type { AskedComponent } from './update-flags.js';
 
 /**
@@ -38,8 +48,11 @@ export interface ComponentPlan {
   readonly target: string | null;
   /** The tarball, for the components that are actually being installed. */
   readonly url: string | null;
-  /** The protocol this component would speak afterwards, as far as anything knows. */
-  readonly protocol: number | null;
+  /**
+   * The protocol legs this component would speak afterwards, as far as anything
+   * knows.
+   */
+  readonly protocol: ReleaseProtocol | null;
   readonly action: ComponentAction;
   /** Why there is no target, when there is none. */
   readonly problem: string | null;
@@ -72,15 +85,19 @@ export interface UpdatePlan {
   /** In order. Empty when there is nothing to install. */
   readonly installs: readonly PackageInstall[];
   /**
-   * Components that would not agree about the protocol afterwards, or `null`.
+   * The protocol legs the components would not agree on afterwards, each with
+   * the components that speak it, or `null`.
    *
    * `install.sh`'s tripwire, asked of the machine this run would leave behind
    * rather than of the one it found. It is the check that makes `agentplex
-   * update hub` on a `both` machine safe: a hub moved across a protocol change
-   * on its own is a hub and a server that will connect and refuse each other's
-   * frames, with nothing in either log naming the cause.
+   * update hub` on a `both` machine safe: a hub moved across a server-leg
+   * change on its own is a hub and a server that will connect and refuse each
+   * other at the handshake, and one moved across a client-leg change without
+   * its client is a hub refusing its own browser. The legs are asked
+   * separately, so a hub and client moved across a client-only change beside
+   * an untouched server is not refused.
    */
-  readonly disagreement: readonly ComponentPlan[] | null;
+  readonly disagreement: readonly ProtocolDisagreement<ComponentPlan>[] | null;
 }
 
 /** The CLI's own component: the one that has to be installed last. */
@@ -229,18 +246,22 @@ function installedVersion(installed: InstalledPackage | undefined): string | nul
 }
 
 /**
- * The protocols this machine would be left speaking, and whether they are one
- * number.
+ * The protocol legs this machine would be left speaking, and whether each is
+ * one number.
  *
  * A component with no declared protocol is left out rather than counted as a
- * disagreement -- a pinned release, or a package from before the field existed.
- * "This one does not say" is a different and smaller fact than "these two say
- * different things", which is the same rule `protocolDisagreement` follows
- * about an installed machine.
+ * disagreement -- a pin to a release the manifest does not list, or a package
+ * with no `agentplex` field. "This one does not say" is a different and smaller
+ * fact than "these two say different things". The rule itself is
+ * `legDisagreements`, the one `status` asks of an installed machine.
  */
-function disagreementAfter(components: readonly ComponentPlan[]): readonly ComponentPlan[] | null {
-  const declared = components.filter((one) => one.action !== 'absent' && one.protocol !== null);
-  return new Set(declared.map((one) => one.protocol)).size > 1 ? declared : null;
+function disagreementAfter(
+  components: readonly ComponentPlan[],
+): readonly ProtocolDisagreement<ComponentPlan>[] | null {
+  return legDisagreements(
+    components.filter((one) => one.action !== 'absent'),
+    (one) => one.protocol,
+  );
 }
 
 /**
@@ -307,13 +328,21 @@ function describeAction(plan: ComponentPlan): string {
   }
 }
 
-/** The paragraph a disagreement gets, which is more than an exit code could say. */
-export function formatDisagreement(declared: readonly ComponentPlan[]): readonly string[] {
-  return [
-    '  this run would leave components that do not agree, and two components that',
-    '  disagree about the protocol do not talk to each other:',
-    ...declared.map((one) => `    ${one.component.padEnd(8)} protocol ${one.protocol ?? '?'}`),
-    '  A protocol change releases every affected component together, so update them',
-    '  together: agentplex update with no component named takes the whole machine.',
-  ];
+/**
+ * The paragraph a disagreement gets, one per leg, which is more than an exit
+ * code could say.
+ */
+export function formatDisagreement(
+  disagreements: readonly ProtocolDisagreement<ComponentPlan>[],
+): readonly string[] {
+  return disagreements.flatMap(({ leg, declared }) => [
+    `  this run would leave components that do not agree on the ${leg} protocol, and`,
+    `  two components that disagree about the ${leg} protocol do not talk to each other:`,
+    ...declared.map(
+      (one) => `    ${one.component.padEnd(8)} ${leg} ${String(one.protocol?.[leg] ?? '?')}`,
+    ),
+    '  A change to a protocol leg releases every component that speaks it together, so',
+    '  update them together: agentplex update with no component named takes the whole',
+    '  machine.',
+  ]);
 }

@@ -78,12 +78,12 @@ describe('what is made of it', () => {
 
   it('reads the manifest and stamps it with the clock it was given', async () => {
     const checked = await check({
-      [VERSIONS_URL]: '{"cli":{"current":"1.5.0","releases":{"1.5.0":3}}}',
+      [VERSIONS_URL]: '{"cli":{"current":"1.5.0","releases":{"1.5.0":{}}}}',
     });
 
     expect(checked).toEqual({
       ok: true,
-      manifest: { cli: { current: '1.5.0', releases: { '1.5.0': 3 } } },
+      manifest: { cli: { current: '1.5.0', releases: { '1.5.0': {} } } },
       source: VERSIONS_URL,
       checkedAt: NOW,
     });
@@ -103,7 +103,7 @@ describe('what is made of it', () => {
 
   it('refuses a manifest that is not one rather than carrying it forward', async () => {
     const checked = await check({
-      [VERSIONS_URL]: '{"cli":{"current":"latest","releases":{"latest":3}}}',
+      [VERSIONS_URL]: '{"cli":{"current":"latest","releases":{"latest":{}}}}',
     });
 
     expect(checked.ok).toBe(false);

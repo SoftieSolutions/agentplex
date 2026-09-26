@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ProgramResolver } from '@agentplex/providers';
+import type { ReleaseProtocol } from '@agentplex/release';
 import {
   createFakeProcessRunner,
   printed,
@@ -61,8 +62,22 @@ function state(active: string): ReturnType<typeof printed> {
   );
 }
 
-function manifest(version: string, protocol: number | null): string {
+function manifest(version: string, protocol: ReleaseProtocol | null): string {
   return JSON.stringify(protocol === null ? { version } : { version, agentplex: { protocol } });
+}
+
+/** The legs each component records, as packaging writes them. */
+const LEGS: Readonly<Record<string, readonly ('client' | 'server')[]>> = {
+  cli: [],
+  hub: ['client', 'server'],
+  server: ['server'],
+  web: ['client', 'server'],
+};
+
+/** A component's legs, all at one number, or given outright. */
+function legsOf(component: string, protocol: number | ReleaseProtocol): ReleaseProtocol {
+  if (typeof protocol !== 'number') return protocol;
+  return Object.fromEntries((LEGS[component] ?? []).map((leg) => [leg, protocol]));
 }
 
 function packageAt(name: string): string {
@@ -73,10 +88,10 @@ function packageAt(name: string): string {
 function wholeMachine(): Record<string, string> {
   return {
     [`${PREFIX}/agentplex.env`]: `AGENTPLEX_ROLE=both\nAGENTPLEX_PREFIX=${PREFIX}\n`,
-    [packageAt('@softiesolutions/agentplex')]: manifest('1.4.0', 3),
-    [packageAt('@softiesolutions/agentplex-hub')]: manifest('1.2.0', 3),
-    [packageAt('@softiesolutions/agentplex-server')]: manifest('1.4.0', 3),
-    [packageAt('@softiesolutions/agentplex-web')]: manifest('1.1.0', 3),
+    [packageAt('@softiesolutions/agentplex')]: manifest('1.4.0', legsOf('cli', 3)),
+    [packageAt('@softiesolutions/agentplex-hub')]: manifest('1.2.0', legsOf('hub', 3)),
+    [packageAt('@softiesolutions/agentplex-server')]: manifest('1.4.0', legsOf('server', 3)),
+    [packageAt('@softiesolutions/agentplex-web')]: manifest('1.1.0', legsOf('web', 3)),
     [`${PREFIX}/node/.agentplex-node-version`]: 'v24.9.0\n',
   };
 }
@@ -100,20 +115,24 @@ const OWNED_NPM = `${PREFIX}/node/bin/npm`;
  * would be the fixture asserting things no test is about.
  */
 function published(
-  entries: Readonly<Record<string, { version: string; protocol: number }>> = {},
+  entries: Readonly<Record<string, { version: string; protocol: number | ReleaseProtocol }>> = {},
 ): string {
-  const current: Readonly<Record<string, { version: string; protocol: number }>> = {
-    cli: { version: '1.5.0', protocol: 3 },
-    hub: { version: '1.2.0', protocol: 3 },
-    server: { version: '1.5.0', protocol: 3 },
-    web: { version: '1.1.0', protocol: 3 },
-    ...entries,
-  };
+  const current: Readonly<Record<string, { version: string; protocol: number | ReleaseProtocol }>> =
+    {
+      cli: { version: '1.5.0', protocol: 3 },
+      hub: { version: '1.2.0', protocol: 3 },
+      server: { version: '1.5.0', protocol: 3 },
+      web: { version: '1.1.0', protocol: 3 },
+      ...entries,
+    };
   return JSON.stringify(
     Object.fromEntries(
       Object.entries(current).map(([component, release]) => [
         component,
-        { current: release.version, releases: { [release.version]: release.protocol } },
+        {
+          current: release.version,
+          releases: { [release.version]: legsOf(component, release.protocol) },
+        },
       ]),
     ),
   );
@@ -314,8 +333,8 @@ describe('what the manifest says', () => {
     const updated = await run(['--no-node'], {
       files: {
         ...wholeMachine(),
-        [packageAt('@softiesolutions/agentplex')]: manifest('1.5.0', 3),
-        [packageAt('@softiesolutions/agentplex-server')]: manifest('1.5.0', 3),
+        [packageAt('@softiesolutions/agentplex')]: manifest('1.5.0', legsOf('cli', 3)),
+        [packageAt('@softiesolutions/agentplex-server')]: manifest('1.5.0', legsOf('server', 3)),
       },
       sums: `${'c'.repeat(64)}  node-v24.9.0-linux-x64.tar.gz`,
     });
@@ -352,7 +371,7 @@ describe('what the manifest says', () => {
     const updated = await run(['--no-node'], {
       files: {
         ...wholeMachine(),
-        [packageAt('@softiesolutions/agentplex')]: manifest('2.0.0', 3),
+        [packageAt('@softiesolutions/agentplex')]: manifest('2.0.0', {}),
       },
     });
 
@@ -362,17 +381,62 @@ describe('what the manifest says', () => {
 
   /**
    * The tripwire `install.sh` carries, asked of the machine this run would
-   * leave behind: a hub moved across a protocol change on its own is a hub and
-   * a server that will connect and refuse each other's frames.
+   * leave behind: a hub moved across a server-leg change on its own is a hub
+   * and a server that will connect and refuse each other at the handshake.
    */
-  it('refuses to leave components that would not agree about the protocol', async () => {
+  it('refuses to leave components that would not agree about a protocol leg', async () => {
     const updated = await run(['hub'], {
-      served: { [VERSIONS_URL]: published({ hub: { version: '1.3.0', protocol: 4 } }) },
+      served: {
+        [VERSIONS_URL]: published({
+          hub: { version: '1.3.0', protocol: { client: 3, server: 4 } },
+        }),
+      },
     });
 
     expect(updated.code).toBe(1);
-    expect(updated.out).toContain('do not agree');
+    expect(updated.out).toContain('do not agree on the server protocol');
+    expect(updated.out).toMatch(/^ {4}hub {6}server 4$/m);
+    expect(updated.out).toMatch(/^ {4}server {3}server 3$/m);
     expect(spawned(updated.runner).join('\n')).not.toContain('npm');
+  });
+
+  /**
+   * A client-only change releases the hub and the client together and leaves
+   * the server where it is. Updating those two moves the client leg on both
+   * and leaves the server leg agreeing, and the legs are never compared with
+   * each other, so there is nothing to refuse.
+   */
+  it('updates the hub and its client across a client-leg change without the server', async () => {
+    const clientMoved = { client: 4, server: 3 };
+    const updated = await run(['hub', 'web', '--no-node'], {
+      served: {
+        [VERSIONS_URL]: published({
+          hub: { version: '1.3.0', protocol: clientMoved },
+          web: { version: '1.2.0', protocol: clientMoved },
+        }),
+      },
+    });
+
+    expect(updated.out).not.toContain('do not agree');
+    const npm = spawned(updated.runner).join('\n');
+    expect(npm).toContain('hub-v1.3.0');
+    expect(npm).toContain('web-v1.2.0');
+    expect(npm).not.toContain('server-v');
+  });
+
+  /** And the hub alone across that change is refused: its client would still be the old one. */
+  it('refuses the hub alone across a client-leg change, naming its client', async () => {
+    const updated = await run(['hub'], {
+      served: {
+        [VERSIONS_URL]: published({
+          hub: { version: '1.3.0', protocol: { client: 4, server: 3 } },
+        }),
+      },
+    });
+
+    expect(updated.code).toBe(1);
+    expect(updated.out).toContain('do not agree on the client protocol');
+    expect(updated.out).toMatch(/^ {4}web {6}client 3$/m);
   });
 });
 

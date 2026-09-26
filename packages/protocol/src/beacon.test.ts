@@ -9,11 +9,11 @@ import {
   type ServerBeacon,
 } from './beacon.js';
 import { parseTextFrame } from './parse.js';
-import { PROTOCOL_VERSION, checkProtocolVersion } from './version.js';
+import { SERVER_PROTOCOL_VERSION, checkServerProtocolVersion } from './version.js';
 
 const beacon = {
   type: 'agentplex-server-beacon',
-  protocolVersion: PROTOCOL_VERSION,
+  protocolVersion: SERVER_PROTOCOL_VERSION,
   serverId: 'server-under-test',
   address: '192.168.1.24',
   port: 8081,
@@ -57,13 +57,13 @@ describe('parseServerBeacon', () => {
     // Parsing is not version checking. A hub that refused to read a beacon
     // from a mismatched build could only report silence, where what it can
     // report is a machine it can see and cannot speak to.
-    const older = { ...beacon, protocolVersion: PROTOCOL_VERSION - 1 };
+    const older = { ...beacon, protocolVersion: SERVER_PROTOCOL_VERSION - 1 };
     const parsed = parse(older);
 
     expect(parsed.ok).toBe(true);
-    expect(parsed.ok && checkProtocolVersion(parsed.value.protocolVersion)).toEqual({
-      expected: PROTOCOL_VERSION,
-      received: PROTOCOL_VERSION - 1,
+    expect(parsed.ok && checkServerProtocolVersion(parsed.value.protocolVersion)).toEqual({
+      expected: SERVER_PROTOCOL_VERSION,
+      received: SERVER_PROTOCOL_VERSION - 1,
     });
   });
 

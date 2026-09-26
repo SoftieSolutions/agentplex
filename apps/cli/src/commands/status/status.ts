@@ -1,7 +1,9 @@
 import {
   protocolDisagreement,
+  protocolWords,
   type Installation,
   type InstalledPackage,
+  type ProtocolDisagreement,
 } from '../../installation/installation.js';
 import { formatUnits } from '../../installation/units.js';
 import type { UnitState } from '../../installation/systemd.js';
@@ -30,11 +32,14 @@ import { describeAge, type CachedVersions } from '../../versions/versions-cache.
  * in here a fetch could be smuggled in.
  *
  * What it does report is the protocol, because that is a fact about the
- * artifacts on this disk and needs nothing fetched to check. Four components on
- * four release trains are safe exactly while they agree on it; a set that does
- * not is a machine whose hub and server will connect and refuse each other's
- * frames, with nothing in either log naming the cause. `install.sh` refuses to
- * create that machine and this is what notices one that exists anyway.
+ * artifacts on this disk and needs nothing fetched to check. It has two legs --
+ * the client leg a browser speaks to the hub, the server leg the hub speaks to
+ * a server -- and each package's line names the legs it speaks. Four components
+ * on four release trains are safe exactly while the ones that speak a leg agree
+ * on it; a set that does not is a machine whose peers on that leg will connect
+ * and refuse each other, with nothing in either log naming the cause.
+ * `install.sh` refuses to create that machine and this is what notices one that
+ * exists anyway, naming the leg.
  */
 
 /**
@@ -110,7 +115,7 @@ export function formatStatus(
 
   const disagreement = protocolDisagreement(installation);
   if (disagreement !== null) {
-    lines.push('', 'protocol', ...disagreementLines(disagreement));
+    lines.push('', 'protocol', ...disagreement.flatMap(disagreementLines));
   }
 
   return { lines, failed: (units ?? []).some((unit) => unit.active === 'failed') };
@@ -154,7 +159,7 @@ function packageLines(
     `  ${installed.component.padEnd(8)}`,
     (installed.state === 'installed' ? (installed.version ?? '?') : installed.state).padEnd(12),
     ...(available === null ? [] : [availableColumn(installed, available).padEnd(16)]),
-    installed.protocol === null ? '' : `protocol ${installed.protocol}`,
+    protocolWords(installed.protocol),
   ]
     .join(' ')
     .trimEnd();
@@ -221,12 +226,17 @@ function runtimeLines(installation: Installation): readonly string[] {
       ];
 }
 
-function disagreementLines(declared: readonly InstalledPackage[]): readonly string[] {
+function disagreementLines({
+  leg,
+  declared,
+}: ProtocolDisagreement<InstalledPackage>): readonly string[] {
   return [
-    '  these components do not agree, and two components that disagree about the',
-    '  protocol do not talk to each other:',
-    ...declared.map((one) => `    ${one.component.padEnd(8)} protocol ${one.protocol ?? '?'}`),
-    '  A protocol change releases every affected component together, so this is a',
-    '  machine that was upgraded in halves rather than a choice to make.',
+    `  these components do not agree on the ${leg} protocol, and two components that`,
+    `  disagree about the ${leg} protocol do not talk to each other:`,
+    ...declared.map(
+      (one) => `    ${one.component.padEnd(8)} ${leg} ${String(one.protocol?.[leg] ?? '?')}`,
+    ),
+    '  A change to a protocol leg releases every component that speaks it together,',
+    '  so this is a machine that was upgraded in halves rather than a choice to make.',
   ];
 }

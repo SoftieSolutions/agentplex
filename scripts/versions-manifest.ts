@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
+  parseReleaseProtocol,
   parseVersionsManifest,
   serializeVersionsManifest,
   updateVersionsManifest,
@@ -12,8 +13,11 @@ import {
  * printing the merged manifest on stdout.
  *
  * The three values come from the release job, which read them back out of the
- * manifest it assembled -- so the protocol here is the compiled constant the
- * published tarball itself declares, not a number typed into a workflow. The
+ * manifest it assembled -- so the protocol here is the object of compiled
+ * constants the published tarball itself declares, one per leg it speaks, and
+ * not numbers typed into a workflow. It arrives as that object's JSON text,
+ * `{"client":39,"server":39}` for a hub and `{}` for the CLI, and goes through
+ * the same parser the manifest's own releases do before anything is merged. The
  * previous manifest is a path rather than stdin so that a failure to produce it
  * is a missing file with a name in the error, rather than an empty pipe that
  * reads as "there was nothing there".
@@ -45,7 +49,7 @@ async function main(): Promise<void> {
 
   const manifest = updateVersionsManifest(previous, component, {
     version,
-    protocol: Number(protocol),
+    protocol: parseReleaseProtocol('the protocol argument', protocol),
   });
   process.stdout.write(serializeVersionsManifest(manifest));
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BEACON_ANNOUNCE_INTERVAL_MS,
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   parseServerBeacon,
   parseTextFrame,
   type ServerId,
@@ -85,7 +85,7 @@ describe('startServerBeacon', () => {
 
     expect(beacons(transport.sent)[0]).toEqual({
       type: 'agentplex-server-beacon',
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       serverId: SERVER_ID,
       address: '192.168.1.24',
       port: 8081,

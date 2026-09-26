@@ -1,9 +1,9 @@
 import {
-  checkProtocolVersion,
+  checkServerProtocolVersion,
   encodeTerminalChunk,
   parseHubToServerFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   type ApprovalDecision,
   type ApprovalId,
   type FrameId,
@@ -786,10 +786,10 @@ export function serveHubConnection(
       return;
     }
 
-    // Exact match, never a range. Two peers either speak the same protocol
+    // Exact match, never a range. Two peers either speak the same server leg
     // or they do not speak: see `version.ts` for why "close enough" is a
     // question nobody can answer afterwards.
-    const mismatch = checkProtocolVersion(frame.protocolVersion);
+    const mismatch = checkServerProtocolVersion(frame.protocolVersion);
     if (mismatch !== null) {
       send({ type: 'handshake-rejected', replyTo: frame.id, reason: 'protocol-version' });
       logger.warn('handshake refused', {
@@ -798,7 +798,7 @@ export function serveHubConnection(
         reason: 'protocol-version',
         ...mismatch,
       });
-      refuse(`protocol version ${mismatch.expected}, not ${mismatch.received}`);
+      refuse(`server protocol version ${mismatch.expected}, not ${mismatch.received}`);
       return;
     }
 
@@ -817,7 +817,7 @@ export function serveHubConnection(
     send({
       type: 'handshake-accepted',
       replyTo: frame.id,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       serverId: identity.serverId,
       stores: [...stores],
       providers: [...providers],

@@ -1,7 +1,7 @@
 import {
   BEACON_EXPIRY_MS,
   BEACON_MISSED_LIMIT,
-  checkProtocolVersion,
+  checkServerProtocolVersion,
   parseServerBeacon,
   parseTextFrame,
   type ServerId,
@@ -280,7 +280,7 @@ export function createDiscovery(dependencies: DiscoveryDependencies): Discovery 
       return;
     }
 
-    const mismatch = checkProtocolVersion(beacon.protocolVersion);
+    const mismatch = checkServerProtocolVersion(beacon.protocolVersion);
     if (mismatch === null) {
       logger.info('heard a server on the network', {
         serverId: beacon.serverId,

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   parseServerToHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   type ProviderReadiness,
   sessionRefSchema,
   startIdSchema,
@@ -278,7 +278,7 @@ async function dial({ runtime }: World): Promise<FakeHub> {
   hub.send({
     type: 'handshake',
     id: 1,
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: SERVER_PROTOCOL_VERSION,
     hubId: 'hub-1',
     token: TOKEN,
   });

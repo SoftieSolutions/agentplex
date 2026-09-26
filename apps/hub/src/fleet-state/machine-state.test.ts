@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   approvalIdSchema,
   machineStateSchema,
   nodeIdSchema,
@@ -451,7 +451,7 @@ describe('candidates on the wire', () => {
         serverId: serverIdSchema.parse('server-heard'),
         address: '192.168.1.24',
         port: 8443,
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: SERVER_PROTOCOL_VERSION,
         heardAt: START,
         heardFrom: '192.168.1.24',
       },
@@ -492,13 +492,13 @@ describe('candidates on the wire', () => {
         serverId: serverIdSchema.parse('server-old'),
         address: '192.168.1.9',
         port: 8443,
-        protocolVersion: PROTOCOL_VERSION - 1,
+        protocolVersion: SERVER_PROTOCOL_VERSION - 1,
         heardAt: START,
         heardFrom: '192.168.1.9',
       },
     ]);
     const published = toMachineState(state.snapshot());
-    expect(published.candidates[0]?.protocolVersion).toBe(PROTOCOL_VERSION - 1);
+    expect(published.candidates[0]?.protocolVersion).toBe(SERVER_PROTOCOL_VERSION - 1);
   });
 
   it('publishes an empty list for a hub that has heard nothing', () => {
