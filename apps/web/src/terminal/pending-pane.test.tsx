@@ -10,7 +10,7 @@ import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
-import { createFrameIdCounter } from '../store/frame-ids.js';
+import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import type { HubCommand } from '../store/commands.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
@@ -100,7 +100,7 @@ function buildStore(): StoreHarness {
     fetchTicket: () => Promise.resolve('ticket-1'),
     createSocket: (ticket) => sockets.create(ticket),
     timers: createFakeTimers(),
-    frameIds: createFrameIdCounter(),
+    frameIds: createFrameIds(),
   });
   return {
     store,

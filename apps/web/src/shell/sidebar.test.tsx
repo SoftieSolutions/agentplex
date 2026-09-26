@@ -8,7 +8,7 @@ import { fakeCatalogueStore } from '../catalogue/fake-catalogue-store.js';
 import { appSessionFiltersStore } from '../sessions/session-filters-store.js';
 import { SessionListScreen } from '../sessions/session-list-screen.js';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
-import { createFrameIdCounter } from '../store/frame-ids.js';
+import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
@@ -119,7 +119,7 @@ describe('the sidebar filter row, mounted', () => {
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
     });
   });
 

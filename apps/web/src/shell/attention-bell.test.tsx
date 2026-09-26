@@ -12,7 +12,7 @@ import {
 import { notificationList, type NotificationList } from '../sessions/notification-model.js';
 import { listSessions } from '../sessions/session-list-model.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
-import { createFrameIdCounter } from '../store/frame-ids.js';
+import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
@@ -126,7 +126,7 @@ describe('the attention bell', () => {
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
     });
   });
 
@@ -512,7 +512,7 @@ describe('the attention bell', () => {
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
       maxQueuedCommands: 1,
     });
     draw(twoWaiting, 'wide', refusing);

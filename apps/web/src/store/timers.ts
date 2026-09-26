@@ -4,7 +4,7 @@
  * The same shape as the daemons' `Timers` (packages/node-shared/src/timers.ts), and
  * deliberately not imported from there: nothing crosses a package line but the
  * protocol, and an interface this small is cheaper to restate than to share.
- * It exists for the reason the service's does — a test that waits out a real
+ * It exists for the reason the daemons' does — a test that waits out a real
  * reconnect backoff is a test nobody runs.
  *
  * Scheduling returns its own cancel rather than a handle, so no caller ever
@@ -22,31 +22,41 @@ export const browserTimers: Timers = {
   },
 };
 
-/** A `Timers` a test fires by hand. Nothing happens until `fireAll` is called. */
+/**
+ * A `Timers` a test fires by hand. Nothing happens until `fireAll` is called.
+ *
+ * Not the same fake as node-shared's, and the member names say so. That one
+ * reports what is scheduled now: its delay list drops a timer once it fires or
+ * is cancelled. This one keeps a history instead, because the web store's
+ * tests assert a backoff across timers that have already fired and a debounce
+ * across timers that were cancelled, and a pending-only list would have
+ * forgotten both by the time the assertion runs.
+ */
 export interface FakeTimers extends Timers {
   /** Fires everything currently scheduled, in the order it was scheduled. */
   fireAll(): void;
+  /** How many timers have been scheduled and have neither fired nor been cancelled. */
   readonly pending: number;
   /**
-   * The delay of everything ever scheduled, in order.
+   * Every delay ever scheduled, fired or cancelled, in order.
    *
    * How a backoff is asserted. Firing timers proves a reconnect happened; only
    * the delays prove each wait was longer than the one before it, and a
    * backoff whose progression nothing checks is a backoff that quietly becomes
    * a busy loop.
    */
-  readonly delays: readonly number[];
+  readonly delayHistory: readonly number[];
 }
 
 export function createFakeTimers(): FakeTimers {
   const scheduled = new Map<number, () => void>();
-  const delays: number[] = [];
+  const delayHistory: number[] = [];
   let next = 0;
 
   return {
     schedule(afterMs: number, fire: () => void): () => void {
       const id = (next += 1);
-      delays.push(afterMs);
+      delayHistory.push(afterMs);
       scheduled.set(id, fire);
       return () => void scheduled.delete(id);
     },
@@ -58,8 +68,8 @@ export function createFakeTimers(): FakeTimers {
     get pending(): number {
       return scheduled.size;
     },
-    get delays(): readonly number[] {
-      return [...delays];
+    get delayHistory(): readonly number[] {
+      return [...delayHistory];
     },
   };
 }

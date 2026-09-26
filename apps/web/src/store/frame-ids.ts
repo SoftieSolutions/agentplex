@@ -13,19 +13,25 @@ import { frameIdSchema, type FrameId } from '@agentplex/protocol';
  * A seam rather than a module-level counter so a test can assert on the exact
  * ids the store put on the wire, and so two stores in one page never share a
  * sequence.
+ *
+ * Not node-shared's frame id counter under another name: that one returns a
+ * bare `() => number`, and this returns an object whose `next` yields a
+ * `FrameId`. The factory names differ so a reader of one never assumes the
+ * other's shape.
  */
 export interface FrameIds {
   /** The next id. Starts at 1 and only ever grows. */
   next(): FrameId;
 }
 
-export function createFrameIdCounter(): FrameIds {
+export function createFrameIds(): FrameIds {
   let last = 0;
   return {
     next(): FrameId {
       last += 1;
-      // Through the schema rather than a cast: the brand is a parser's to
-      // grant, even to a producer that cannot emit anything else.
+      // Through the schema rather than a cast: a positive integer is the
+      // schema's claim to check, even for a producer that cannot emit
+      // anything else.
       return frameIdSchema.parse(last);
     },
   };
