@@ -81,9 +81,8 @@ jobs:
 
       # Nothing is loaded or pushed here; the layers this leaves in the job's
       # builder are the point. `build` already wrote them to the cache this
-      # reads, so a job that changes no dependency restores `pnpm install` and
-      # `pnpm build` instead of re-running them. The compose build below
-      # resolves the same target on the same builder and reuses every one.
+      # reads. The `docker compose run --build` below does not reuse them yet
+      # and rebuilds the image, `pnpm install` included.
       - name: Restore the build cache
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
