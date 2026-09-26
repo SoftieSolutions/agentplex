@@ -1,4 +1,9 @@
-import { newestInSeries, type ReleaseProtocol, type VersionsManifest } from '@agentplex/release';
+import {
+  isReleaseVersion,
+  newestInSeries,
+  type ReleaseProtocol,
+  type VersionsManifest,
+} from '@agentplex/release';
 import {
   COMPONENT_PACKAGES,
   RELEASE_DOWNLOAD_URL,
@@ -6,6 +11,7 @@ import {
   type Component,
 } from '../../installation/components.js';
 import { legDisagreements } from '../../installation/installation.js';
+import { tarballLocation, type PackageTarball } from '../../installation/package-install.js';
 import {
   NODE_DIRECTORY,
   PACKAGE_DIRECTORY,
@@ -76,8 +82,25 @@ export interface PlanLine {
   readonly text: string;
 }
 
+/** One package the install would put in the prefix, and the version it is, when that is known. */
+export interface PlannedPackage extends PackageTarball {
+  /**
+   * The release it is: resolved from the manifest, or read off the name npm
+   * packed a local tarball under. `null` when the name carries no version.
+   */
+  readonly version: string | null;
+}
+
 export type InstallPlan =
-  | { readonly ok: true; readonly lines: readonly PlanLine[] }
+  | {
+      readonly ok: true;
+      readonly lines: readonly PlanLine[];
+      /**
+       * What would be installed, in the role's order, or `null` when a dry run
+       * left a version unresolved and so could not say.
+       */
+      readonly packages: readonly PlannedPackage[] | null;
+    }
   | { readonly ok: false; readonly problem: string };
 
 /** `report()`: `printf '%-10s %s\n'`, without the newline. */
@@ -99,14 +122,11 @@ class Stop extends Error {}
 
 export function planInstall(input: InstallPlanInput): InstallPlan {
   try {
+    const release = releasePlan(input);
     return {
       ok: true,
-      lines: [
-        ...releaseLines(input),
-        ...ownershipLines(input),
-        settingsLine(input),
-        ...unitLines(input),
-      ],
+      lines: [...release.lines, ...ownershipLines(input), settingsLine(input), ...unitLines(input)],
+      packages: release.packages,
     };
   } catch (error) {
     if (error instanceof Stop) return { ok: false, problem: error.message };
@@ -122,22 +142,38 @@ interface Resolved {
 }
 
 /** `resolve_release`, `report_release` and the `package` line of `install_package`. */
-function releaseLines({ request, layout, release }: InstallPlanInput): readonly PlanLine[] {
+function releasePlan({ request, layout, release }: InstallPlanInput): {
+  readonly lines: readonly PlanLine[];
+  readonly packages: readonly PlannedPackage[] | null;
+} {
   const into = ` into ${layout.prefix}`;
 
   if (release.kind === 'tarballs') {
-    const tarballs = request.components.map((component) =>
-      packageTarball(release, COMPONENT_PACKAGES[component], request.role),
-    );
-    return [
-      {
-        label: 'release',
-        text:
-          `the tarballs in ${release.directory}; no version is resolved and no protocol is ` +
-          'checked, because a directory of tarballs is one build and not a release',
-      },
-      { label: 'package', text: `${tarballs.join(' ')}${into}` },
-    ];
+    const tarballs = request.components.map((component): PlannedPackage => {
+      const name = COMPONENT_PACKAGES[component];
+      const found = packageTarball(release, name, request.role);
+      return {
+        component,
+        package: name,
+        version: found.version,
+        source: { kind: 'file', path: found.path },
+      };
+    });
+    return {
+      lines: [
+        {
+          label: 'release',
+          text:
+            `the tarballs in ${release.directory}; no version is resolved and no protocol is ` +
+            'checked, because a directory of tarballs is one build and not a release',
+        },
+        {
+          label: 'package',
+          text: `${tarballs.map((one) => tarballLocation(one.source)).join(' ')}${into}`,
+        },
+      ],
+      packages: tarballs,
+    };
   }
 
   const resolved = request.components.map((component) =>
@@ -149,11 +185,18 @@ function releaseLines({ request, layout, release }: InstallPlanInput): readonly 
   const versions = resolved
     .map((one) => `${one.component} ${one.version ?? '(not resolved)'}`)
     .join(', ');
-  const specs = resolved.every((one) => one.version !== null)
-    ? resolved.map((one) => releaseUrl(one.component, one.version ?? '')).join(' ')
+  const packages = resolved.every((one) => one.version !== null)
+    ? resolved.map((one): PlannedPackage => ({
+        component: one.component,
+        package: COMPONENT_PACKAGES[one.component],
+        version: one.version,
+        source: { kind: 'download', url: releaseUrl(one.component, one.version ?? '') },
+      }))
     : null;
+  const specs =
+    packages === null ? null : packages.map((one) => tarballLocation(one.source)).join(' ');
 
-  return [
+  const lines: readonly PlanLine[] = [
     {
       label: 'release',
       text:
@@ -172,6 +215,7 @@ function releaseLines({ request, layout, release }: InstallPlanInput): readonly 
           : `${specs}${into}`,
     },
   ];
+  return { lines, packages };
 }
 
 /**
@@ -296,7 +340,7 @@ function packageTarball(
   release: Extract<ReleaseInput, { kind: 'tarballs' }>,
   name: string,
   role: string,
-): string {
+): { readonly path: string; readonly version: string | null } {
   const { directory, entries } = release;
   if (entries === null) {
     throw new Stop(
@@ -321,7 +365,11 @@ function packageTarball(
         'leave that one to a registry',
     );
   }
-  return `${directory}/${found}`;
+  // The version is the name's, read as a release version or not at all: a
+  // local build names itself `0.0.0`, and anything the grammar refuses is a
+  // name that says nothing about what is inside.
+  const version = found.slice(flat.length + 1, -'.tgz'.length);
+  return { path: `${directory}/${found}`, version: isReleaseVersion(version) ? version : null };
 }
 
 /** `grant_service_account_ownership`'s line, under `--system` only. */

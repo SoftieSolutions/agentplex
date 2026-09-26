@@ -5,7 +5,7 @@ import { firstLine } from '@agentplex/node-shared';
 import type { Installation } from '../../installation/installation.js';
 import { NODE_DIRECTORY, NODE_STAMP, type Layout } from '../../installation/layout.js';
 import type { ManifestReader } from '../../versions/version-check.js';
-import type { FileOutcome, UpdateMachine } from './update-machine.js';
+import type { Downloader, WriteMachine } from '../../installation/write-machine.js';
 import { NODE_MAJOR } from '../../installation/node-directory.js';
 
 /**
@@ -175,14 +175,9 @@ function findArchive(
 
 /** Everything the swap needs that is not a decision. */
 export interface RuntimeSwapDependencies {
-  readonly machine: UpdateMachine;
+  readonly machine: WriteMachine;
   readonly downloader: Downloader;
   readonly runner: ProcessRunner;
-}
-
-/** The half of the network seam that writes a file rather than returning text. */
-export interface Downloader {
-  download(url: string, path: string): Promise<FileOutcome>;
 }
 
 export type RuntimeSwap =

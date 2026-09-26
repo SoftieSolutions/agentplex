@@ -3,6 +3,7 @@ import process from 'node:process';
 import { childEnvironment, childSearchPath, wantsHelp } from '@agentplex/node-shared';
 import { createNodeProcessRunner, createNodeProgramResolver } from '@agentplex/providers';
 import { manifestSource } from '../../versions/version-check.js';
+import { nodeNetwork } from '../../versions/node-network.js';
 import { runInstallCommand } from './install-command.js';
 import { installUsage } from './install-flags.js';
 import { nodeInstallMachine } from './node-install-machine.js';
@@ -12,13 +13,14 @@ import { nodeInstallMachine } from './node-install-machine.js';
  *
  * The only place in this command that reads `process`: `$HOME` for the user
  * prefix, the uid for which scope may be taken, `AGENTPLEX_VERSIONS` for the
- * manifest a dry run may read and `AGENTPLEX_PACKAGE` for a directory of
- * tarballs, and the platform for whether a unit can be held at all.
+ * manifest and `AGENTPLEX_PACKAGE` for a directory of tarballs, and the
+ * platform for whether a unit can be held at all.
  *
- * No network is composed here, and that is the rule rather than an omission: a
- * dry run downloads nothing, and `--print-unit` reads nothing but the
- * interpreter it names. There is nowhere in this command's dependencies to put
- * something that could go out.
+ * `nodeNetwork` is composed here because a real run needs it: the manifest,
+ * when no local one is named, and the release tarballs. A dry run and
+ * `--print-unit` are handed the same one and never reach it -- the dry run
+ * reads only a local manifest, and `--print-unit` nothing but the interpreter
+ * it names -- which the command's suite asserts against a fake network.
  */
 export async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -43,6 +45,8 @@ export async function main(): Promise<void> {
     machine: nodeInstallMachine,
     programs: createNodeProgramResolver(childSearchPath(environment)),
     runner: createNodeProcessRunner({ environment }),
+    reader: nodeNetwork,
+    downloader: nodeNetwork,
     platform: process.platform,
     source: manifestSource(process.env, join),
     packageDirectory:

@@ -16,6 +16,7 @@ import {
   type InstalledPackage,
   type ProtocolDisagreement,
 } from '../../installation/installation.js';
+import type { PackageInstall, PackageTarball } from '../../installation/package-install.js';
 import type { ResolvedComponent } from './resolve-pins.js';
 import type { AskedComponent } from './update-flags.js';
 
@@ -75,25 +76,6 @@ export type ComponentAction =
   /** Not installed here. A hub machine has no server, and that is not a fault. */
   | 'absent';
 
-/**
- * One set of packages staged together and then moved into place, in the order
- * the flow runs them.
- */
-export interface PackageInstall {
-  /** In the order they are staged and moved. */
-  readonly packages: readonly PackageTarball[];
-  /** Why this is an install of its own. */
-  readonly reason: string;
-}
-
-/** One component's package, and the tarball a release publishes it as. */
-export interface PackageTarball {
-  readonly component: Component;
-  /** The package's name, which is also its directory under `lib/node_modules`. */
-  readonly package: string;
-  readonly url: string;
-}
-
 export interface UpdatePlan {
   readonly components: readonly ComponentPlan[];
   /** In order. Empty when there is nothing to install. */
@@ -138,7 +120,13 @@ export function planUpdate({ installation, manifest, problem, asked }: PlanInput
 
   const moving = components.flatMap((one): PackageTarball[] =>
     one.action === 'update' && one.url !== null
-      ? [{ component: one.component, package: COMPONENT_PACKAGES[one.component], url: one.url }]
+      ? [
+          {
+            component: one.component,
+            package: COMPONENT_PACKAGES[one.component],
+            source: { kind: 'download', url: one.url },
+          },
+        ]
       : [],
   );
   const others = moving.filter((one) => one.component !== SELF);

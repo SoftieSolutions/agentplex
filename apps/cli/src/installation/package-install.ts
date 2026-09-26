@@ -12,23 +12,25 @@ import {
   CLI_ENTRYPOINT,
   COMPONENTS,
   COMPONENT_PACKAGES,
-} from '../../installation/components.js';
+  type Component,
+} from './components.js';
 import {
   NODE_DIRECTORY,
   PACKAGE_DIRECTORY,
+  binDirectory,
   packageDirectory,
   type Layout,
-} from '../../installation/layout.js';
-import type { Downloader } from './runtime.js';
-import type { UpdateMachine } from './update-machine.js';
-import type { PackageInstall, PackageTarball } from './update-plan.js';
+} from './layout.js';
+import type { Downloader, WriteMachine } from './write-machine.js';
 
 /**
  * How a released package is put into the prefix, which is `install.sh`'s
  * `install_package` restated -- and the point of restating it rather than doing
- * something simpler is that a package installed by an update has to be
- * indistinguishable from one installed by the installer, or the next install is
- * the one that discovers the difference.
+ * something simpler is that a package installed by `agentplex update` or
+ * `agentplex install` has to be indistinguishable from one installed by the
+ * installer, or the next install is the one that discovers the difference.
+ * Both commands call this one step; it lives here, beside the layout it
+ * writes into, so neither owns it.
  *
  * ## Unpacked, then installed against its own shrinkwrap
  *
@@ -55,8 +57,11 @@ import type { PackageInstall, PackageTarball } from './update-plan.js';
  * a failure while staging removes every `.new` so far: the trees the machine was
  * running on are not touched. Only then is each moved in, as two renames on one
  * filesystem with the old tree set aside first, so a move that fails is undone
- * by a third. The command's own package is a set of its own, last, for the
- * reason `update-plan.ts` gives.
+ * by a third. Every tree set aside is kept until the whole set has moved: a
+ * later package that will not move in puts every earlier one of the set back
+ * too, so the set is all or nothing through the move as well as the staging,
+ * and only then are the set-aside trees removed. The command's own package is
+ * a set of its own, last, for the reason `update-plan.ts` gives.
  *
  * ## The flags that are not defaults, each added by a probe (AGX-322)
  *
@@ -76,6 +81,39 @@ import type { PackageInstall, PackageTarball } from './update-plan.js';
  * shrinkwrap it read, and `--install-strategy=hoisted` because that is the
  * layout the shrinkwrap was written in, whatever an npmrc prefers.
  */
+
+/**
+ * One set of packages staged together and then moved into place, in the order
+ * the flow runs them.
+ */
+export interface PackageInstall {
+  /** In the order they are staged and moved. */
+  readonly packages: readonly PackageTarball[];
+  /** Why this is an install of its own. */
+  readonly reason: string;
+}
+
+/** One component's package, and the tarball it is installed from. */
+export interface PackageTarball {
+  readonly component: Component;
+  /** The package's name, which is also its directory under `lib/node_modules`. */
+  readonly package: string;
+  readonly source: TarballSource;
+}
+
+/**
+ * Where a tarball is: a release asset to download, or a file already on this
+ * machine -- `AGENTPLEX_PACKAGE`'s packed build, which `install_package`
+ * unpacks where it lies rather than fetching.
+ */
+export type TarballSource =
+  | { readonly kind: 'download'; readonly url: string }
+  | { readonly kind: 'file'; readonly path: string };
+
+/** The URL or the path, for a line that has to say where a package came from. */
+export function tarballLocation(source: TarballSource): string {
+  return source.kind === 'download' ? source.url : source.path;
+}
 
 /**
  * Long, and it is the one operation here that deserves to be. A server's
@@ -234,7 +272,7 @@ export interface Installer {
 
 /** Everything the package installs need that is not a decision. */
 export interface PackageInstallDependencies {
-  readonly machine: UpdateMachine;
+  readonly machine: WriteMachine;
   readonly downloader: Downloader;
   readonly runner: ProcessRunner;
   readonly write: (line: string) => void;
@@ -300,7 +338,7 @@ export async function installPackages(
  */
 async function recoverInterruptedSwaps(
   layout: Layout,
-  machine: UpdateMachine,
+  machine: WriteMachine,
   write: (line: string) => void,
 ): Promise<Step> {
   for (const component of COMPONENTS) {
@@ -335,9 +373,10 @@ async function recoverInterruptedSwaps(
  * One set of packages: every one staged, and only then every one moved in.
  *
  * A failure while staging costs the staging and nothing else. A failure while
- * moving leaves the packages already moved where they are -- they staged and
- * installed cleanly, and no rename undoes a set -- and names them, so the lines
- * say exactly what this machine is now running.
+ * moving puts back every package of the set that had already moved, because a
+ * set is what this machine runs or does not run -- a hub moved to a release its
+ * old client does not speak is the 503 the set exists to prevent. Only once
+ * the whole set is in place are the trees it set aside removed.
  */
 async function installComponents(
   install: PackageInstall,
@@ -363,21 +402,43 @@ async function installComponents(
     }
   }
 
-  const moved: string[] = [];
-  for (const [index, tarball] of install.packages.entries()) {
-    const swapped = await swapComponent(tarball, layout, machine);
+  const moved: Moved[] = [];
+  for (const tarball of install.packages) {
+    const swapped = await moveIn(tarball, layout, machine);
     if (!swapped.ok) {
-      const lines = [...swapped.lines, ...(await discard(staged.slice(index), machine))];
-      if (moved.length > 0)
-        lines.push(`${moved.join(', ')} had already moved into place, and stay.`);
+      const lines = [...swapped.lines];
+      for (const one of [...moved].reverse()) lines.push(...(await moveBack(one, machine)));
+      // Every `.new` of the set: the ones that never moved, and the new trees
+      // the ones that did were just moved back out as.
+      lines.push(...(await discard(staged, machine)));
+      if (moved.length > 0) {
+        lines.push(`Nothing of ${componentsOf(install)} was installed; the set moves together.`);
+      }
       return { ok: false, lines };
     }
-    for (const line of swapped.lines) dependencies.write(line);
-    moved.push(tarball.component);
+    moved.push(swapped.moved);
+  }
+
+  // The whole set is in place, so an old tree that will not go costs a line
+  // rather than the run, and the next run clears it before it sets one aside.
+  for (const one of moved) {
+    if (!one.setAside) continue;
+    const discarded = await machine.removeDirectory(`${one.tree}.old`);
+    if (!discarded.ok) {
+      dependencies.write(
+        `${one.tree}.old is still there: ${discarded.problem}; the next run removes it.`,
+      );
+    }
   }
 
   const self = install.packages.find((tarball) => tarball.component === 'cli');
   return self === undefined ? { ok: true } : await linkCommand(self, layout, machine);
+}
+
+/** One package moved into place, and whether a tree was set aside to make room. */
+interface Moved {
+  readonly tree: string;
+  readonly setAside: boolean;
 }
 
 /**
@@ -394,14 +455,20 @@ async function stageComponent(
   { machine, downloader, runner }: PackageInstallDependencies,
 ): Promise<Step> {
   const staging = `${packageDirectory(layout, tarball.package)}.new`;
-  const archive = join(work, `${tarball.component}.tgz`);
+  const from = tarballLocation(tarball.source);
   const failed = (problem: string): Step => ({ ok: false, lines: [problem] });
 
-  const downloaded = await downloader.download(tarball.url, archive);
-  if (!downloaded.ok) {
-    return failed(
-      `could not download the ${tarball.component} package from ${tarball.url}: ${downloaded.problem}`,
-    );
+  let archive: string;
+  if (tarball.source.kind === 'file') {
+    archive = tarball.source.path;
+  } else {
+    archive = join(work, `${tarball.component}.tgz`);
+    const downloaded = await downloader.download(tarball.source.url, archive);
+    if (!downloaded.ok) {
+      return failed(
+        `could not download the ${tarball.component} package from ${from}: ${downloaded.problem}`,
+      );
+    }
   }
 
   staged.push(staging);
@@ -413,7 +480,7 @@ async function stageComponent(
 
   const unpacked = await runOperation(unpackOperation, { archive, directory: staging }, runner);
   if (!unpacked.ok) {
-    return failed(`the ${tarball.component} package from ${tarball.url}: ${unpacked.problem}`);
+    return failed(`the ${tarball.component} package from ${from}: ${unpacked.problem}`);
   }
 
   const installed = await runOperation(
@@ -430,16 +497,19 @@ async function stageComponent(
 }
 
 /**
- * The tree set aside, the staged one moved in, and the old one removed -- the
- * runtime swap's order, for the runtime swap's reason: a move that fails is
- * undone by moving the old one back. The lines a success carries are the ones
- * worth reading anyway: an old tree that would not go.
+ * The tree set aside and the staged one moved in -- the runtime swap's order,
+ * for the runtime swap's reason: a move that fails is undone by moving the old
+ * one back. The old tree is *not* removed here: it is the way back for this
+ * package if a later one of its set will not move in.
  */
-async function swapComponent(
+async function moveIn(
   tarball: PackageTarball,
   layout: Layout,
-  machine: UpdateMachine,
-): Promise<{ readonly ok: boolean; readonly lines: readonly string[] }> {
+  machine: WriteMachine,
+): Promise<
+  | { readonly ok: true; readonly moved: Moved }
+  | { readonly ok: false; readonly lines: readonly string[] }
+> {
   const tree = packageDirectory(layout, tarball.package);
   const staging = `${tree}.new`;
   const old = `${tree}.old`;
@@ -459,41 +529,68 @@ async function swapComponent(
   }
 
   const moved = await machine.rename(staging, tree);
-  if (!moved.ok) {
-    if (!present) {
-      return { ok: false, lines: [`${tree} would not move into place: ${moved.problem}`] };
-    }
-    const restored = await machine.rename(old, tree);
-    if (restored.ok) {
-      return {
-        ok: false,
-        lines: [
-          `${tree} put back as it was: the new one would not move into place: ${moved.problem}`,
-        ],
-      };
-    }
-    // The one way this leaves the machine worse than it was found, said with
-    // the command that fixes it.
+  if (moved.ok) return { ok: true, moved: { tree, setAside: present } };
+
+  if (!present) {
+    return { ok: false, lines: [`${tree} would not move into place: ${moved.problem}`] };
+  }
+  const restored = await machine.rename(old, tree);
+  if (restored.ok) {
     return {
       ok: false,
       lines: [
-        `this machine has no ${tarball.package} in ${tree}.`,
-        `  the new one would not move in from ${staging}: ${moved.problem}`,
-        `  the old one would not move back from ${old}: ${restored.problem}`,
-        `Put the old one back with: mv ${old} ${tree}`,
+        `${tree} put back as it was: the new one would not move into place: ${moved.problem}`,
       ],
     };
   }
-
-  // The new tree is in place, so an old one that will not go costs a line
-  // rather than the run, and the next run clears it before it sets one aside.
-  const discarded = await machine.removeDirectory(old);
+  // The one way this leaves the machine worse than it was found, said with
+  // the command that fixes it.
   return {
-    ok: true,
-    lines: discarded.ok
-      ? []
-      : [`${old} is still there: ${discarded.problem}; the next run removes it.`],
+    ok: false,
+    lines: [
+      `this machine has no ${tarball.package} in ${tree}.`,
+      `  the new one would not move in from ${staging}: ${moved.problem}`,
+      `  the old one would not move back from ${old}: ${restored.problem}`,
+      `Put the old one back with: mv ${old} ${tree}`,
+    ],
   };
+}
+
+/**
+ * A package of the set that had moved in, moved back out because a later one
+ * would not follow it. The new tree goes back to `.new`, where the discard
+ * after this removes it, and the old one comes back out of `.old`; a tree
+ * that was not there before is simply not there again.
+ */
+async function moveBack(moved: Moved, machine: WriteMachine): Promise<readonly string[]> {
+  const { tree, setAside } = moved;
+  const staging = `${tree}.new`;
+  const old = `${tree}.old`;
+
+  const out = await machine.rename(tree, staging);
+  if (!out.ok) {
+    return [
+      `${tree} is the new one, and stays: it would not move back out: ${out.problem}`,
+      ...(setAside
+        ? [`The old one is in ${old}; put it back with: rm -rf ${tree} && mv ${old} ${tree}`]
+        : []),
+    ];
+  }
+  if (!setAside) return [`${tree} taken back out: it was not there before this run`];
+
+  const restored = await machine.rename(old, tree);
+  if (restored.ok) return [`${tree} put back as it was: the set moves together or not at all`];
+  // Better the new tree than no tree: it staged and installed cleanly.
+  const again = await machine.rename(staging, tree);
+  return again.ok
+    ? [
+        `${tree} is the new one, and stays: the old one would not move back from ${old}: ${restored.problem}`,
+      ]
+    : [
+        `this machine has no package in ${tree}.`,
+        `  the old one would not move back from ${old}: ${restored.problem}`,
+        `Put the old one back with: mv ${old} ${tree}`,
+      ];
 }
 
 /**
@@ -506,9 +603,9 @@ async function swapComponent(
 async function linkCommand(
   self: PackageTarball,
   layout: Layout,
-  machine: UpdateMachine,
+  machine: WriteMachine,
 ): Promise<Step> {
-  const bin = join(layout.prefix, 'bin');
+  const bin = binDirectory(layout);
   const entrypoint = join(packageDirectory(layout, self.package), CLI_ENTRYPOINT);
   const target = join('..', PACKAGE_DIRECTORY, self.package, CLI_ENTRYPOINT);
   const command = join(bin, CLI_COMMAND);
@@ -534,7 +631,7 @@ async function linkCommand(
  * Every staged directory given, removed. One this cannot remove costs a line:
  * nothing starts a `.new`, and the next run clears it before it unpacks.
  */
-async function discard(staged: readonly string[], machine: UpdateMachine): Promise<string[]> {
+async function discard(staged: readonly string[], machine: WriteMachine): Promise<string[]> {
   const lines: string[] = [];
   for (const staging of staged) {
     const removed = await machine.removeDirectory(staging);
@@ -567,7 +664,7 @@ function componentsOf(install: PackageInstall): string {
  */
 export async function resolveNpm(
   layout: Layout,
-  machine: UpdateMachine,
+  machine: WriteMachine,
   programs: ProgramResolver,
 ): Promise<string | null> {
   const owned = join(layout.prefix, NODE_DIRECTORY, 'bin', 'npm');

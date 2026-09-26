@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -52,7 +52,14 @@ function quote(value: string): string {
 }
 
 async function run(...argv: readonly string[]): Promise<Run> {
-  const environment = { HOME: home, PATH: onlyNode, AGENTPLEX_VERSIONS: mirror };
+  return runWith({}, ...argv);
+}
+
+async function runWith(
+  extra: Readonly<Record<string, string>>,
+  ...argv: readonly string[]
+): Promise<Run> {
+  const environment = { HOME: home, PATH: onlyNode, AGENTPLEX_VERSIONS: mirror, ...extra };
   const child = suiteIsRoot
     ? spawn(
         'su',
@@ -170,11 +177,27 @@ describe('agentplex install against a scratch home', () => {
     },
   );
 
-  it('refuses a bare run with exit 2', { timeout: RUN_TIMEOUT_MS }, async () => {
-    const bare = await run('install');
+  /**
+   * A bare run is the install now, so the one this suite can make without a
+   * network or an npm is the run that stops at the plan: a tarball directory
+   * missing a package the role needs. It exits 1 with the script's sentence,
+   * and the prefix it would have filled is exactly as it was.
+   */
+  it(
+    'runs the install, and stops before changing anything on a release it cannot use',
+    { timeout: RUN_TIMEOUT_MS },
+    async () => {
+      const empty = join(root, 'no-tarballs');
+      await mkdir(empty, { recursive: true });
+      await chmod(empty, 0o777);
+      const before = await readdir(join(home, '.agentplex'));
 
-    expect(bare.code).toBe(2);
-    expect(bare.stdout).toBe('');
-    expect(bare.stderr).toContain('install.sh is how to install agentplex');
-  });
+      const bare = await runWith({ AGENTPLEX_PACKAGE: empty }, 'install', '--role=hub');
+
+      expect(bare.code).toBe(1);
+      expect(bare.stdout).toBe('');
+      expect(bare.stderr).toContain(`no softiesolutions-agentplex-<version>.tgz in ${empty}`);
+      expect(await readdir(join(home, '.agentplex'))).toEqual(before);
+    },
+  );
 });

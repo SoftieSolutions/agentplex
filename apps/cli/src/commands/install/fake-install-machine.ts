@@ -1,42 +1,54 @@
-import { createFakeInstallationFiles } from '../../installation/fake-installation-files.js';
-import type { FakeInstallationFilesOptions } from '../../installation/fake-installation-files.js';
+import {
+  createFakeWriteMachine,
+  type FakeWriteMachine,
+  type FakeWriteMachineOptions,
+} from '../../installation/fake-write-machine.js';
 import type { InstallMachine } from './install-machine.js';
 
 /**
- * A machine a test writes down, and every question it was asked.
+ * A machine a test writes down, every question it was asked, and everything
+ * the install did to it.
  *
- * The questions are recorded because one claim about this command is about
- * what it did not do: `--print-unit` asks about the interpreter and nothing
- * else, and a dry run with no local manifest reads none.
+ * The disk is the write-machine fake `update` shares, so an install is read
+ * back the way an update is: the acts in order and the contents left behind.
+ * The questions are recorded as well, because one claim about this command is
+ * about what it did not do: `--print-unit` asks about the interpreter and
+ * nothing else, and a dry run with no local manifest reads none.
  */
-export interface FakeInstallMachineOptions extends FakeInstallationFilesOptions {
+export interface FakeInstallMachineOptions extends FakeWriteMachineOptions {
   /** Directories that list, by their entries. Anything else is not a directory. */
   readonly directories?: Readonly<Record<string, readonly string[]>>;
 }
 
-export interface FakeInstallMachine extends InstallMachine {
-  /** `isFile <path>`, `readFile <path>` and `listDirectory <path>`, in order. */
+export interface FakeInstallMachine extends FakeWriteMachine, InstallMachine {
+  /** `isFile <path>`, `readFile <path>`, `exists <path>` and `listDirectory <path>`, in order. */
   readonly asked: readonly string[];
 }
 
 export function createFakeInstallMachine(
   options: FakeInstallMachineOptions = {},
 ): FakeInstallMachine {
-  const files = createFakeInstallationFiles(options);
+  const disk = createFakeWriteMachine(options);
   const directories = new Map(Object.entries(options.directories ?? {}));
   const asked: string[] = [];
 
   return {
+    ...disk,
     asked,
 
     async readFile(path: string) {
       asked.push(`readFile ${path}`);
-      return files.readFile(path);
+      return disk.readFile(path);
     },
 
     async isFile(path: string) {
       asked.push(`isFile ${path}`);
-      return files.isFile(path);
+      return disk.isFile(path);
+    },
+
+    async exists(path: string) {
+      asked.push(`exists ${path}`);
+      return disk.exists(path);
     },
 
     async listDirectory(path: string) {

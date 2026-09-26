@@ -1,5 +1,7 @@
+import { posix } from 'node:path';
 import { readPin, type Pin } from '@agentplex/release';
 import type { Component } from '../../installation/components.js';
+import type { Role } from '../../installation/settings-template.js';
 import type { Daemon } from '../../installation/unit-file.js';
 
 /**
@@ -25,9 +27,6 @@ import type { Daemon } from '../../installation/unit-file.js';
 
 export const DRY_RUN_FLAG = '--dry-run';
 export const PRINT_UNIT_FLAG = '--print-unit';
-
-/** What `AGENTPLEX_ROLE` records: the word for the machine, never its pins. */
-export type Role = 'hub' | 'server' | 'both';
 
 /** The daemons `--role` can name, one component each. */
 type RoleComponent = Daemon;
@@ -183,6 +182,14 @@ export function readInstallFlags(argv: readonly string[]): InstallFlags {
 /**
  * `validate_prefix`: absolute, no `..`, at least two directories deep, and a
  * trailing slash trimmed before anything is built out of it.
+ *
+ * Normalized as well, where the script keeps what it was given: a doubled
+ * slash collapsed and a `.` segment dropped. The unit names some paths by
+ * joining them and some by writing the prefix out, so `/srv//agentplex` would
+ * otherwise come out spelled two ways in one file. One spelling, taken once
+ * here, is what every path built from the prefix agrees on. A prefix the
+ * script accepts is still accepted, and every captured fixture was taken
+ * under a prefix that is already normal, so none of them moves.
  */
 function validatePrefix(given: string): string {
   if (!given.startsWith('/')) {
@@ -193,7 +200,7 @@ function validatePrefix(given: string): string {
       `--prefix must name a directory outright, and ${quote(given)} walks through ..`,
     );
   }
-  let prefix = given;
+  let prefix = posix.normalize(given);
   while (prefix !== '/' && prefix.endsWith('/')) prefix = prefix.slice(0, -1);
   if (prefix.slice(0, prefix.lastIndexOf('/')) === '') {
     throw new Refusal(
@@ -229,8 +236,17 @@ export function installUsage(): string {
   return [
     'Usage: agentplex install [options]',
     '',
-    '  Answers the two questions install.sh answers without changing the machine. It',
-    '  does not install anything yet: install.sh is how to install agentplex.',
+    "  Installs a role's packages into the prefix, each against the npm-shrinkwrap.json",
+    "  it carries, then writes the settings file and each daemon's systemd unit -- the",
+    '  steps install.sh takes after it has a runtime. The packages of a role move in',
+    "  together or not at all. This command's own package moves last, and only when",
+    '  the release names a version other than the one running or the prefix has',
+    '  none. Under --system the service account, which install.sh creates, is given',
+    '  the directories it writes into.',
+    '  A settings file or a unit that is already there is left exactly as it is, and',
+    '  a unit is written, never enabled or started. The manifest is read from',
+    '  AGENTPLEX_VERSIONS, a directory holding versions.json, or from the release;',
+    '  AGENTPLEX_PACKAGE, a directory of packed tarballs, installs those instead.',
     '',
     '  --role=<hub|server|both>[@<version>]',
     '                               which roles this machine runs (default: both).',
@@ -244,7 +260,7 @@ export function installUsage(): string {
     '',
     '  A version is exact -- 1.4.0, naming the release tag <component>-v<version> --',
     '  or a series: 1.4 takes the newest 1.4.x and 1 the newest 1.x, never a',
-    '  prerelease. A dry run reads the manifest only from AGENTPLEX_VERSIONS, a',
-    '  directory holding versions.json; it downloads nothing.',
+    '  prerelease. A dry run reads the manifest only from AGENTPLEX_VERSIONS; it',
+    '  downloads nothing.',
   ].join('\n');
 }

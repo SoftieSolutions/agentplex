@@ -84,7 +84,7 @@ export const PROGRAMS: Readonly<Record<string, Program>> = {
   install: {
     kind: 'command',
     load: () => import('./commands/install/main.js'),
-    summary: 'what an install would do (--dry-run), or its units (--print-unit)',
+    summary: "install a role's packages, settings and units (after install.sh's runtime)",
   },
   start: {
     kind: 'command',
