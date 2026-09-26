@@ -133,24 +133,121 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=package /package/ /package/
 
-# The command, the server and the hub's pair, as four tarballs a bare npm is
-# handed with no flags to help it along. npm 11.19 warns that node-pty's and the
-# pty package's install scripts are "not yet covered by allowScripts" and runs
-# them anyway; an npm that starts enforcing that gate turns this line red, which
-# is the whole reason for testing an install rather than reasoning about one.
+# The command, the server and the hub's pair, installed the way `install.sh`
+# installs them, spelled out here rather than by running the script: this
+# stage is the package's acceptance check on a machine that already has Node
+# and a compiler, and the script's own run is the bootstrap stages below.
 #
-# Each is named by the same pattern `install.sh` uses, and for the same reason:
-# `softiesolutions-agentplex-*.tgz` matches all four, because every other name
-# starts with the command's. npm's tarballs are `<flattened name>-<version>.tgz`
-# and a version starts with a digit, which is what tells the four apart without
-# writing a version into this file.
+# Each tarball is unpacked into `<package>.new` under npm's global root and
+# npm is pointed at that directory, because npm reads a package's
+# npm-shrinkwrap.json only when the package is the project it installs into --
+# `npm install --global <tarball>`, which this used to run, ignores it
+# (AGX-322, Q8). `install` and not `ci`: `ci` deletes the bundled @agentplex/*
+# packages and then asks the registry for them (Q1). The flags are the ones
+# `install_package` passes and for its reasons: the global npmrc resolved
+# without --prefix, which would otherwise hide it (Q14); --package-lock=true,
+# which an npmrc could otherwise turn off and discard the shrinkwrap with;
+# --no-save, without which npm rewrites the shrinkwrap it read. Every package
+# stages before any is moved into place, and the link npm used to make is made
+# by hand, with the executable bit the tarball does not carry (Q6).
+#
+# npm 12 runs no install script a package's `allowScripts` does not name, and
+# the server and command manifests name node-pty (AGX-323). An npm that gated
+# them anyway would leave node-pty unbuilt and turn the server assertion below
+# red, which is the reason for testing an install rather than reasoning about
+# one.
+#
+# Each tarball is named by the same pattern `install.sh` uses, and for the same
+# reason: `softiesolutions-agentplex-*.tgz` matches all four, because every
+# other name starts with the command's. npm's tarballs are `<flattened
+# name>-<version>.tgz` and a version starts with a digit, which is what tells
+# the four apart without writing a version into this file.
 RUN set -eu; \
-    specs=''; \
-    for name in agentplex agentplex-hub agentplex-server agentplex-web; do \
-      specs="$specs $(ls /package/softiesolutions-$name-[0-9]*.tgz)"; \
+    echo "node $(node --version), npm $(npm --version)"; \
+    scope=/usr/local/lib/node_modules/@softiesolutions; \
+    names='agentplex agentplex-hub agentplex-server agentplex-web'; \
+    globalconfig="$(cd / && npm config get globalconfig)"; \
+    echo "globalconfig resolved without --prefix: $globalconfig"; \
+    for name in $names; do \
+      rm -rf "$scope/$name.new"; \
+      mkdir -p "$scope/$name.new"; \
+      tar -xzf "$(ls /package/softiesolutions-$name-[0-9]*.tgz)" -C "$scope/$name.new" \
+        --strip-components=1 --no-same-owner; \
     done; \
-    echo "installing:$specs"; \
-    npm install --global $specs
+    for name in $names; do \
+      (cd / && npm install --prefix "$scope/$name.new" --globalconfig="$globalconfig" \
+        --omit=dev --ignore-scripts=false --package-lock=true --no-save \
+        --install-strategy=hoisted --no-audit --no-fund) \
+        || { echo "npm could not install $name" >&2; rm -rf "$scope"/*.new; exit 1; }; \
+    done; \
+    for name in $names; do \
+      rm -rf "$scope/$name.old"; \
+      if [ -e "$scope/$name" ]; then mv "$scope/$name" "$scope/$name.old"; fi; \
+      mv "$scope/$name.new" "$scope/$name"; \
+      rm -rf "$scope/$name.old"; \
+    done; \
+    chmod 0755 "$scope/agentplex/apps/cli/dist/main.js"; \
+    ln -sfn ../lib/node_modules/@softiesolutions/agentplex/apps/cli/dist/main.js /usr/local/bin/agentplex; \
+    test -x /usr/local/bin/agentplex; \
+    ls -1a "$scope"; \
+    ! ls -1 "$scope" | grep -E '[.](new|old)$'
+
+# The versions that landed, entry by entry, against the shrinkwrap each package
+# carried. This is the claim the change rests on, and neither npm's exit code
+# nor `npm ls` can make it: an entry outside its parent's range is silently
+# re-resolved to the registry's newest with exit 0 (AGX-322, Q5b), and `npm ls
+# --all` exited 0 on a hub tree missing 104 packages (Q10).
+#
+# Every non-root entry of every installed package's npm-shrinkwrap.json is
+# compared with the version on disk and with npm's own record of what it
+# installed, `node_modules/.package-lock.json`; any disagreement fails, and so
+# does an entry npm recorded that the shrinkwrap does not name, and a
+# dependency the manifest declares that the shrinkwrap leaves out -- a
+# shrinkwrap naming nothing would otherwise compare clean. An optional entry
+# absent from both is the one allowed gap: it is what a machine that cannot
+# build node-pty gets. The counts are printed either way, so a green build
+# still says how much it compared.
+RUN node <<'COMPARE'
+const fs = require('node:fs');
+const path = require('node:path');
+const scope = '/usr/local/lib/node_modules/@softiesolutions';
+const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+const onDisk = (tree, key) => {
+  const file = path.join(tree, key, 'package.json');
+  return fs.existsSync(file) ? read(file).version : null;
+};
+let failed = false;
+for (const name of ['agentplex', 'agentplex-hub', 'agentplex-server', 'agentplex-web']) {
+  const tree = path.join(scope, name);
+  const manifest = read(path.join(tree, 'package.json'));
+  const entries = Object.entries(read(path.join(tree, 'npm-shrinkwrap.json')).packages ?? {})
+    .filter(([key]) => key !== '');
+  const hiddenFile = path.join(tree, 'node_modules', '.package-lock.json');
+  const hidden = fs.existsSync(hiddenFile) ? (read(hiddenFile).packages ?? {}) : {};
+  let match = 0;
+  let mismatch = 0;
+  let absent = 0;
+  for (const [key, entry] of entries) {
+    const disk = onDisk(tree, key);
+    const recorded = hidden[key]?.version ?? null;
+    if (disk === entry.version && recorded === entry.version) match += 1;
+    else if (disk === null && recorded === null && entry.optional === true) absent += 1;
+    else {
+      mismatch += 1;
+      console.log(`MISMATCH ${name} ${key}: shrinkwrap=${entry.version} disk=${disk} hidden=${recorded}`);
+    }
+  }
+  const named = new Set(entries.map(([key]) => key));
+  const extra = Object.keys(hidden).filter((key) => key !== '' && !named.has(key));
+  for (const key of extra) console.log(`EXTRA ${name} ${key}: npm recorded it, the shrinkwrap does not name it`);
+  const declared = Object.keys({ ...manifest.dependencies, ...manifest.optionalDependencies });
+  const unnamed = declared.filter((dependency) => !named.has(`node_modules/${dependency}`));
+  for (const dependency of unnamed) console.log(`UNNAMED ${name} ${dependency}: the manifest declares it, the shrinkwrap does not`);
+  console.log(`${name}: ${entries.length} entries, ${match} match, ${mismatch} mismatch, ${absent} optional absent, ${extra.length} extra in hidden lockfile`);
+  if (mismatch > 0 || extra.length > 0 || unnamed.length > 0) failed = true;
+}
+if (failed) process.exit(1);
+COMPARE
 
 # Six assertions. `doctor` reaches its report only by the bin consuming the
 # command word, loading the command's module out of its own `dist`, and that
@@ -312,11 +409,15 @@ RUN AGENTPLEX_PACKAGE=/package \
 # that split: `include/` and `share/` are the tarball's, and a prefix that has
 # them is a prefix the runtime was unpacked over. agentplex second, which is
 # proof npm ran under that node and node-gyp found the toolchain sudo installed
-# -- the failure the whole toolchain decision exists to prevent.
+# -- the failure the whole toolchain decision exists to prevent -- and that the
+# link the script makes by hand points at a target it made executable. Last,
+# nothing staged or set aside is left beside the trees it swapped in.
 RUN test -x "$HOME/.agentplex/node/bin/node" \
     && test -x "$HOME/.agentplex/bin/agentplex" \
     && ! test -e "$HOME/.agentplex/include" \
-    && ! test -e "$HOME/.agentplex/share"
+    && ! test -e "$HOME/.agentplex/share" \
+    && ls -1a "$HOME/.agentplex/lib/node_modules/@softiesolutions" \
+    && ! ls -1 "$HOME/.agentplex/lib/node_modules/@softiesolutions" | grep -E '[.](new|old)$'
 # The prefix is not put on a PATH for anybody, so the script has to say so.
 RUN grep -q "export PATH=\"$HOME/.agentplex/bin:" /tmp/install.log
 
@@ -500,6 +601,15 @@ RUN AGENTPLEX_PACKAGE=/package node /drive-setup.ts \
       --pty "$HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex/node_modules/@agentplex/pty/dist/index.js" \
       -- bash /install.sh --role=server \
     | tee /tmp/wizard.log
+
+# That second run was an upgrade over the trees the first one left, which is
+# the one place the swap meets a tree already there: each package staged beside
+# its tree and moved in, and nothing staged or set aside is left behind.
+RUN root="$HOME/.agentplex/lib/node_modules/@softiesolutions"; \
+    ls -1a "$root" \
+    && test -d "$root/agentplex" \
+    && test -d "$root/agentplex-server" \
+    && ! ls -1 "$root" | grep -E '[.](new|old)$'
 
 # The handover, and then the whole run, read back off the transcript.
 #
@@ -808,7 +918,8 @@ RUN root="$HOME/.agentplex/lib/node_modules/@softiesolutions"; \
     && test -d "$root/agentplex" \
     && test -d "$root/agentplex-hub" \
     && test -d "$root/agentplex-web" \
-    && ! test -e "$root/agentplex-server"
+    && ! test -e "$root/agentplex-server" \
+    && ! ls -1 "$root" | grep -E '[.](new|old)$'
 
 # The hub finding the client, on a machine laid out the way an install lays one
 # out and no checkout does: two sibling packages under one prefix. Asked from

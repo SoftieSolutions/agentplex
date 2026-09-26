@@ -21,8 +21,10 @@ import {
  *
  * A bare machine must not need pnpm, vite or a checkout, so each package
  * carries the compiled programs it runs, the compiled workspace packages those
- * import, and whatever else they read off a disk. Installation is
- * `npm install --global <the packages this machine's role needs>`.
+ * import, and whatever else they read off a disk. Installation unpacks each
+ * package this machine's role needs under `<prefix>/lib/node_modules` and runs
+ * `npm install --omit=dev` inside it, which fetches the rest from the registry
+ * at the versions the package's shrinkwrap names (below).
  *
  * ## Four packages, and what a machine stops carrying
  *
@@ -101,9 +103,13 @@ import {
  *
  * Every package also carries an `npm-shrinkwrap.json`, derived from
  * `pnpm-lock.yaml` by `shrinkwrap.ts`: the third-party versions this build was
- * tested against, transitive ones included. An install into the unpacked
- * package reads it. `npm install --global <tarball>` does not (AGX-322, Q8), so
- * packing it changes nothing about an install that goes that way.
+ * tested against, transitive ones included. npm reads it only when the package
+ * is the project being installed, which is why `install.sh` and the
+ * install-check unpack each tarball and install inside it: `npm install
+ * --global <tarball>` ignores the file (AGX-322, Q8). npm also silently takes the
+ * registry's newest for an entry outside its parent's range (Q5b), so the
+ * install-check compares every entry against what landed rather than trusting
+ * the exit code.
  */
 
 /**

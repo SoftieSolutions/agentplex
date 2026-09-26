@@ -7,8 +7,10 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,7 +24,7 @@ import {
   type ReleaseProtocol,
   type VersionsManifest,
 } from '@agentplex/release';
-import { PACKAGES } from './assemble-package.js';
+import { CLI_PACKAGE, ENTRYPOINT, PACKAGES } from './assemble-package.js';
 
 /**
  * `install.sh`, exercised the two ways it can be exercised without a machine to
@@ -651,6 +653,181 @@ function environmentFileWritten(options: (home: string) => readonly string[]): {
   };
 }
 
+/** The directory every package of ours lands in, under one prefix. */
+function scopeDirectory(prefix: string): string {
+  return join(prefix, 'lib', 'node_modules', '@softiesolutions');
+}
+
+/**
+ * The directory each component's package lands in: its published name with
+ * the scope taken off, which is also what `npm pack` flattens it to.
+ */
+const PACKAGE_DIRECTORIES: Readonly<Record<string, string>> = {
+  cli: 'agentplex',
+  hub: 'agentplex-hub',
+  server: 'agentplex-server',
+  web: 'agentplex-web',
+};
+
+/** The flags every component's npm install is given after its `--prefix`. */
+function npmInstallFlags(globalconfig: string): string {
+  return (
+    `--globalconfig=${globalconfig} --omit=dev --ignore-scripts=false --package-lock=true ` +
+    '--no-save --install-strategy=hoisted --no-audit --no-fund'
+  );
+}
+
+/**
+ * Four tarballs shaped the way `npm pack` shapes ours: everything under
+ * `package/`, a manifest and a shrinkwrap at its root, and the command's entry
+ * packed `-rw-r--r--`, which is how the real one is packed.
+ *
+ * Real archives rather than empty files, because the unpack is under test, and
+ * an empty file would fail it for a reason that is not the one being asked.
+ */
+function packTarballs(directory: string): void {
+  mkdirSync(directory, { recursive: true });
+  for (const name of Object.values(PACKAGE_DIRECTORIES)) {
+    const staging = mkdtempSync(join(tmpdir(), 'agentplex-pack-'));
+    temporaries.push(staging);
+    const root = join(staging, 'package');
+    mkdirSync(root);
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ name: `@softiesolutions/${name}`, version: '0.0.0' }),
+    );
+    writeFileSync(join(root, 'npm-shrinkwrap.json'), JSON.stringify({ lockfileVersion: 3 }));
+    if (name === PACKAGE_DIRECTORIES['cli']) {
+      const entry = join(root, ENTRYPOINT);
+      mkdirSync(dirname(entry), { recursive: true });
+      writeFileSync(entry, '#!/usr/bin/env node\n');
+      chmodSync(entry, 0o644);
+    }
+    const packed = spawnSync(
+      'tar',
+      ['-czf', join(directory, `softiesolutions-${name}-0.0.0.tgz`), '-C', staging, 'package'],
+      // No AppleDouble entries: a Mac's tar otherwise packs a `._` file beside
+      // anything carrying an extended attribute.
+      { encoding: 'utf8', env: { ...process.env, COPYFILE_DISABLE: '1' } },
+    );
+    if (packed.status !== 0) throw new Error(`tar could not pack ${name}: ${packed.stderr}`);
+  }
+}
+
+/**
+ * An npm that records every call and installs nothing.
+ *
+ * `config get` answers a stand-in path, so the test can see that exact path
+ * handed back as `--globalconfig`. `install` refuses a directory holding no
+ * shrinkwrap -- which is what proves the tarball was unpacked into the
+ * directory npm was pointed at -- marks that directory, and fails outright for
+ * the one package it is told to fail.
+ */
+function npmShim(directory: string): void {
+  mkdirSync(directory, { recursive: true });
+  const executable = join(directory, 'npm');
+  writeFileSync(
+    executable,
+    [
+      '#!/bin/sh',
+      'printf "%s\\n" "$*" >>"$NPM_SHIM_LOG"',
+      'if [ "$1" = config ]; then printf "%s\\n" "$NPM_SHIM_GLOBALCONFIG"; exit 0; fi',
+      "prefix=''",
+      "previous=''",
+      'for argument in "$@"; do',
+      '  if [ "$previous" = --prefix ]; then prefix="$argument"; fi',
+      '  previous="$argument"',
+      'done',
+      'case "$prefix" in',
+      '  */"$NPM_SHIM_FAIL".new) echo "npm error stand-in failure in $prefix" >&2; exit 1 ;;',
+      'esac',
+      '[ -f "$prefix/npm-shrinkwrap.json" ] || { echo "no shrinkwrap in $prefix" >&2; exit 1; }',
+      'mkdir -p "$prefix/node_modules"',
+      ': >"$prefix/node_modules/.installed"',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(executable, 0o755);
+}
+
+/**
+ * `install_package` alone, for real, against tarballs this suite packed and an
+ * npm that installs nothing.
+ *
+ * The same `source` trick the settings file uses, and here it is the only way
+ * in: a dry run stops before the step under test, and a whole run would
+ * download a runtime and compile an addon. Everything the step reads comes
+ * from the real resolvers -- the role table, the layout, the AGENTPLEX_PACKAGE
+ * seam -- except npm, which is put where `npm_command` looks first.
+ */
+function packagesInstalled(options: {
+  readonly role: string;
+  /** The directory name whose npm install fails, when one should. */
+  readonly failing?: string;
+  /** What the prefix held before the run, made by the test. */
+  readonly before?: (prefix: string) => void;
+}): {
+  readonly prefix: string;
+  readonly result: RunResult;
+  readonly npmCalls: readonly string[];
+  readonly globalconfig: string;
+} {
+  const { script, home } = scratch();
+  const prefix = join(home, '.agentplex');
+  const packages = join(home, 'package');
+  const shims = join(home, 'npm-shim');
+  const log = join(home, 'npm.log');
+  const globalconfig = join(home, 'stand-in-npmrc');
+  packTarballs(packages);
+  npmShim(shims);
+  if (options.before !== undefined) {
+    options.before(prefix);
+    // Made by the test process, which is root in the check container, and
+    // taken apart by the script, which is `nobody` there.
+    openToEveryone(prefix);
+  }
+
+  const library = sourceableLibrary(script);
+  const driver = `${script}.package`;
+  writeFileSync(
+    driver,
+    [
+      `source ${quote(library)}`,
+      `parse_arguments --role=${options.role} --no-setup`,
+      'resolve_layout',
+      `NODE_DIR=${quote(shims)}`,
+      `DRY_RUN='no'`,
+      'resolve_release',
+      'install_package',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(driver, 0o755);
+
+  const result = run(driver, home, [], {
+    environment: {
+      AGENTPLEX_PACKAGE: packages,
+      NPM_SHIM_LOG: log,
+      NPM_SHIM_GLOBALCONFIG: globalconfig,
+      NPM_SHIM_FAIL: options.failing ?? '',
+    },
+  });
+  const npmCalls = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+  return { prefix, result, npmCalls, globalconfig };
+}
+
+/**
+ * An installed tree as an earlier run left it: a manifest, and a marker the new
+ * package does not carry, so a test can tell the old tree from the new one.
+ */
+function oldTree(prefix: string, name: string): string {
+  const tree = join(scopeDirectory(prefix), name);
+  mkdirSync(tree, { recursive: true });
+  writeFileSync(join(tree, 'package.json'), '{}');
+  writeFileSync(join(tree, 'old-marker'), '');
+  return tree;
+}
+
 /**
  * A node that answers `--version` and nothing else, somewhere a PATH or a
  * prefix can point at.
@@ -1109,6 +1286,49 @@ describe('the plan a dry run prints', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('softiesolutions-agentplex-hub');
   });
+
+  /**
+   * How the packages land, as a line of its own beside the `package` line
+   * rather than folded into it: that line is what npm used to be handed and
+   * what several tests read the specs out of, and the specs did not change.
+   *
+   * Each package is unpacked beside the tree it replaces and installed there
+   * against the shrinkwrap it carries -- the only way npm reads one -- and
+   * moved into place only once every package has staged.
+   */
+  it.each([
+    ['hub', ['cli', 'hub', 'web'], ['server']],
+    ['server', ['cli', 'server'], ['hub', 'web']],
+  ])(
+    'plans --role=%s as staged, installed against its shrinkwrap, then moved',
+    (role, wanted, unwanted) => {
+      const { script, home } = scratch();
+      const prefix = `${home}/.agentplex`;
+      const result = run(script, home, ['--dry-run', `--role=${role}`]);
+
+      expect(result.status).toBe(0);
+      const method = planned(result.stdout, 'method') ?? '';
+      for (const component of wanted) {
+        expect(method, component).toContain(
+          `${scopeDirectory(prefix)}/${PACKAGE_DIRECTORIES[component] ?? ''}.new`,
+        );
+      }
+      for (const component of unwanted) {
+        expect(method, component).not.toContain(`/${PACKAGE_DIRECTORIES[component] ?? ''}.new`);
+      }
+
+      const install = method.indexOf('npm install --omit=dev');
+      const shrinkwrap = method.indexOf('npm-shrinkwrap.json');
+      const link = method.indexOf(
+        `link ${prefix}/bin/agentplex -> ../lib/node_modules/${CLI_PACKAGE}/${ENTRYPOINT}`,
+      );
+      expect(method.startsWith('unpack into ')).toBe(true);
+      expect(install).toBeGreaterThan(0);
+      expect(shrinkwrap).toBeGreaterThan(install);
+      expect(link).toBeGreaterThan(shrinkwrap);
+      expect(method).toContain('move each into place');
+    },
+  );
 
   it('would hand over to setup, with the role it was given', () => {
     const { script, home } = scratch();
@@ -1991,6 +2211,104 @@ describe('refreshing a Node this script installed', () => {
   });
 });
 
+describe('installing the packages against the shrinkwrap each one carries', () => {
+  /**
+   * The mechanism, end to end on a disk: every tarball unpacked into
+   * `<tree>.new`, npm pointed at that directory, the trees swapped in, and the
+   * command linked by hand.
+   *
+   * `npm install --global <tarball>` is what this replaced, and it is asserted
+   * absent by argument rather than by grepping the script: the script's
+   * comments still say those words about how `setup` installs a provider,
+   * which is true and not this.
+   */
+  it('stages every package, installs each against its shrinkwrap, and swaps them in', () => {
+    const { prefix, result, npmCalls, globalconfig } = packagesInstalled({
+      role: 'hub',
+      before: (where) => oldTree(where, 'agentplex-hub'),
+    });
+
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    const scope = scopeDirectory(prefix);
+    expect(npmCalls).toEqual([
+      'config get globalconfig',
+      ...['agentplex', 'agentplex-hub', 'agentplex-web'].map(
+        (name) => `install --prefix ${scope}/${name}.new ${npmInstallFlags(globalconfig)}`,
+      ),
+    ]);
+    expect(npmCalls.flatMap((call) => call.split(' '))).not.toContain('--global');
+
+    // Swapped, with nothing left staged or set aside.
+    expect(readdirSync(scope).sort()).toEqual(['agentplex', 'agentplex-hub', 'agentplex-web']);
+    for (const name of ['agentplex', 'agentplex-hub', 'agentplex-web']) {
+      expect(existsSync(join(scope, name, 'node_modules', '.installed')), name).toBe(true);
+      expect(existsSync(join(scope, name, 'npm-shrinkwrap.json')), name).toBe(true);
+    }
+    expect(existsSync(join(scope, 'agentplex-hub', 'old-marker'))).toBe(false);
+
+    // The link npm used to make, made the way npm makes it: relative, and to a
+    // target with its executable bit back, because the tarball packs it 0644.
+    const link = join(prefix, 'bin', 'agentplex');
+    expect(readlinkSync(link)).toBe(`../lib/node_modules/${CLI_PACKAGE}/${ENTRYPOINT}`);
+    expect(statSync(link).mode & 0o777).toBe(0o755);
+  });
+
+  /**
+   * All or nothing. The last package this role stages fails, after the first
+   * two staged cleanly -- so what is asserted is that those two were taken back
+   * as well, and that the trees and the link the machine was running on were
+   * not touched at all.
+   */
+  it('leaves every installed tree and the link alone when one package fails', () => {
+    let linkTarget = '';
+    const { prefix, result } = packagesInstalled({
+      role: 'hub',
+      failing: 'agentplex-web',
+      before: (where) => {
+        const cli = oldTree(where, 'agentplex');
+        oldTree(where, 'agentplex-hub');
+        const entry = join(cli, 'main.js');
+        writeFileSync(entry, '');
+        mkdirSync(join(where, 'bin'), { recursive: true });
+        linkTarget = `../lib/node_modules/${CLI_PACKAGE}/main.js`;
+        symlinkSync(linkTarget, join(where, 'bin', 'agentplex'));
+      },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('agentplex-web');
+    const scope = scopeDirectory(prefix);
+    expect(readdirSync(scope).sort()).toEqual(['agentplex', 'agentplex-hub']);
+    expect(existsSync(join(scope, 'agentplex', 'old-marker'))).toBe(true);
+    expect(existsSync(join(scope, 'agentplex-hub', 'old-marker'))).toBe(true);
+    expect(readlinkSync(join(prefix, 'bin', 'agentplex'))).toBe(linkTarget);
+  });
+
+  /**
+   * A run killed between the two renames of one swap leaves `<tree>.old` and
+   * no `<tree>`: the machine's package is intact, under a name nothing starts.
+   * The next run puts it back before it stages anything, so that run failing
+   * too still leaves the machine with the package it had -- and a `.new` a
+   * killed run left is discarded rather than taken for this run's.
+   */
+  it('puts back a tree an interrupted swap set aside, and discards a stale staging', () => {
+    const { prefix, result } = packagesInstalled({
+      role: 'hub',
+      failing: 'agentplex-web',
+      before: (where) => {
+        oldTree(where, 'agentplex-hub.old');
+        oldTree(where, 'agentplex.new');
+      },
+    });
+
+    expect(result.status).not.toBe(0);
+    const scope = scopeDirectory(prefix);
+    expect(readdirSync(scope)).toEqual(['agentplex-hub']);
+    expect(existsSync(join(scope, 'agentplex-hub', 'old-marker'))).toBe(true);
+  });
+});
+
 describe('undoing an install', () => {
   it('names the units and the directories it would remove, and removes none of them', () => {
     const { script, home } = scratch();
@@ -2073,6 +2391,64 @@ describe('undoing an install', () => {
     expect(result.status).toBe(0);
     expect(existsSync(join(prefix, 'lib', 'node_modules', '@softiesolutions'))).toBe(false);
     expect(existsSync(prefix)).toBe(false);
+  });
+
+  /**
+   * An install stages each package beside its tree as `<tree>.new` and moves
+   * the old one aside as `<tree>.old` for the length of a rename. A run
+   * interrupted in between leaves either behind, and both are ours: they are
+   * named for our packages under our scope, and nothing else writes them.
+   *
+   * The tree comes first, because `planned` and every reader like it take the
+   * first `package` line as the answer.
+   */
+  it('removes the .new and .old an interrupted install left beside a tree', () => {
+    const { script, home } = scratch();
+    const scope = scopeDirectory(join(home, '.agentplex'));
+    for (const name of ['agentplex-hub', 'agentplex-hub.new', 'agentplex-hub.old']) {
+      mkdirSync(join(scope, name), { recursive: true });
+    }
+
+    const result = run(script, home, ['--uninstall', '--dry-run']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toBe(`remove ${scope}/agentplex-hub`);
+    const removals = result.stdout
+      .split('\n')
+      .filter((line) => line.startsWith('package '))
+      .map((line) => line.slice('package'.length).trim());
+    expect(removals).toEqual([
+      `remove ${scope}/agentplex-hub`,
+      `remove ${scope}/agentplex-hub.new`,
+      `remove ${scope}/agentplex-hub.old`,
+      `remove ${home}/.agentplex/bin/agentplex`,
+    ]);
+    // A dry run, so all three are still there.
+    expect(readdirSync(scope).sort()).toEqual([
+      'agentplex-hub',
+      'agentplex-hub.new',
+      'agentplex-hub.old',
+    ]);
+  });
+
+  /**
+   * A first install that failed while staging leaves no tree at all, only what
+   * it staged -- and the run that failed removes that itself, unless it was
+   * killed. "Nothing to remove" would then be untrue about a directory this
+   * script made, so what an interrupted run leaves counts as something here.
+   */
+  it('counts a prefix holding only what an interrupted install staged', () => {
+    const { script, home } = scratch();
+    const scope = scopeDirectory(join(home, '.agentplex'));
+    mkdirSync(join(scope, 'agentplex.new'), { recursive: true });
+    openToEveryone(join(home, '.agentplex'));
+
+    const result = run(script, home, ['--uninstall']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('Nothing of');
+    expect(planned(result.stdout, 'package')).toBe(`remove ${scope}/agentplex.new`);
+    expect(existsSync(join(home, '.agentplex'))).toBe(false);
   });
 
   it('says there is nothing to remove rather than reporting removals it did not make', () => {
