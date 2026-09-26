@@ -1390,6 +1390,39 @@ describe('terminal frames from the hub', () => {
     expect(terminal(h).printed).toBe(true);
   });
 
+  it('republishes a terminal whose facts did not move as the view it already was', async () => {
+    const h = harness();
+    const socket = await watching(h);
+    h.store.watchTerminal(TARGET);
+    socket.deliver(hubFrames.sessionSubscribed);
+    const other = h.store.getSnapshot().terminals.get(TARGET_KEY);
+    const before = terminal(h);
+
+    // The first chunk moves one fact about one terminal. A pane reading the
+    // other one is handed the object it already holds, so a selector
+    // comparing by reference sees nothing to draw.
+    socket.deliver(hubFrames.terminalOutput);
+
+    expect(other).toBeDefined();
+    expect(h.store.getSnapshot().terminals.get(TARGET_KEY)).toBe(other);
+    expect(terminal(h)).not.toBe(before);
+    expect(terminal(h).printed).toBe(true);
+  });
+
+  it('keeps a view whose session was restated under the same names', async () => {
+    const h = harness();
+    const socket = await watching(h);
+    socket.deliver(hubFrames.sessionSubscribed);
+    const before = terminal(h);
+
+    // The hub answering the subscription again with every fact as it was --
+    // a machine that came back before this pane printed anything. `session`
+    // is a fresh object off the frame, and the same session by its names.
+    socket.deliver(hubFrames.sessionSubscribed);
+
+    expect(terminal(h)).toBe(before);
+  });
+
   it('carries the gap on this link, both legs, as the frame counted it', async () => {
     const h = harness();
     const socket = await watching(h);

@@ -1,7 +1,7 @@
 import { useState, type JSX, type MouseEvent } from 'react';
 import type { FrameId, SessionHolder, SessionRef } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
-import { useHubSnapshot } from '../store/use-hub-store.js';
+import { shallowEqual, useHubSelector } from '../store/use-hub-store.js';
 import { Button, Group, Text } from '../ui/components.js';
 import { colorForTone, type Scheme } from '../ui/tokens.js';
 import { offersStop, stopCommand, stopFollowUp } from './stop-model.js';
@@ -34,15 +34,22 @@ export function StopButton({
   scheme,
   size = 'xs',
 }: StopButtonProps): JSX.Element | null {
-  const snapshot = useHubSnapshot(store);
   /** The stop awaiting an answer, or `null` while none is. */
   const [pending, setPending] = useState<FrameId | null>(null);
   /** The store's own "no" -- an overflowed queue, a failed connection. */
   const [rejected, setRejected] = useState<string | null>(null);
+  // The one answer this button draws, and nothing else off the snapshot: a
+  // card re-rendering for every terminal fact or catalogue page is a list
+  // re-rendering at the speed the fleet reports. Inline because it reads
+  // `pending`.
+  const followUp = useHubSelector(
+    store,
+    (snapshot) => stopFollowUp(pending, snapshot.answers),
+    shallowEqual,
+  );
 
   if (!offersStop(holder)) return null;
 
-  const followUp = stopFollowUp(pending, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : rejected;
 
   function stop(event: MouseEvent<HTMLButtonElement>): void {

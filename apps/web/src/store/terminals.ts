@@ -103,6 +103,41 @@ interface TerminalRecord {
   size: TerminalSize | null;
   /** The session key this was indexed under as well, once a reply named one. */
   bound: string | null;
+  /**
+   * The view this record was last published as, or `null` before its first.
+   *
+   * Handed out again whenever nothing it states has moved, so a pane reading
+   * one terminal is not re-rendered because another printed.
+   */
+  view: TerminalWatchView | null;
+}
+
+/**
+ * Whether two views state the same facts.
+ *
+ * Every field by identity except `session`, which a reply restates as a fresh
+ * object naming the same session; a session is its two names.
+ */
+function sameView(a: TerminalWatchView, b: TerminalWatchView): boolean {
+  return (
+    a.target === b.target &&
+    a.feed === b.feed &&
+    a.attached === b.attached &&
+    sameSession(a.session, b.session) &&
+    a.replayChunks === b.replayChunks &&
+    a.droppedBytes === b.droppedBytes &&
+    a.droppedChunks === b.droppedChunks &&
+    a.evicted === b.evicted &&
+    a.printed === b.printed &&
+    a.problem === b.problem &&
+    a.ended === b.ended &&
+    a.resumed === b.resumed
+  );
+}
+
+function sameSession(a: SessionRef | null, b: SessionRef | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.storeId === b.storeId && a.sessionId === b.sessionId;
 }
 
 /** What a terminal frame this client sent is waiting to be told about. */
@@ -177,11 +212,19 @@ export function createTerminals(dependencies: TerminalsDependencies): Terminals 
    * Called only when one of them actually changed. A chunk arriving is not
    * one of them: bytes go to the feed, and the pane's emulator reads them
    * from there without React ever hearing about it.
+   *
+   * A terminal whose facts did not move is published as the object it was
+   * last time, so one pane's first byte is not every other pane's re-render.
+   * Each view is built and compared rather than tracked with a dirty flag
+   * set at every mutation: two of its facts -- `evicted` and `resumed` -- move
+   * when the feed evicts, which is not an event this store hears, and a flag
+   * one mutation site forgot would publish a stale fact rather than an extra
+   * render.
    */
   function publishTerminals(): void {
     const views = new Map<string, TerminalWatchView>();
     for (const [key, record] of terminals) {
-      views.set(key, {
+      const view: TerminalWatchView = {
         target: record.target,
         feed: record.feed,
         attached: record.attached,
@@ -194,7 +237,9 @@ export function createTerminals(dependencies: TerminalsDependencies): Terminals 
         problem: record.problem,
         ended: record.ended,
         resumed: stillRepeating(record),
-      });
+      };
+      if (record.view === null || !sameView(record.view, view)) record.view = view;
+      views.set(key, record.view);
     }
     dependencies.publish(views);
   }
@@ -362,6 +407,7 @@ export function createTerminals(dependencies: TerminalsDependencies): Terminals 
           subscribeId: null,
           size: null,
           bound: null,
+          view: null,
         };
         terminals.set(key, record);
         // New interest on a live connection is sent now; on a dead one it is
