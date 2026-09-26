@@ -77,9 +77,9 @@ scripts/               install.sh and the package assembler: this repository's o
 tests/hub-server/      the hub driven against the real server end, both in one process
 ```
 
-A package is a seam with at least two consumers, and neither app may import
-the other. Lint refuses one app reaching into another's source by path; an
-import by package name it does not catch.
+A package is a seam with at least two consumers, and no app imports another.
+Lint holds every package import to the importing member's own `package.json`,
+and refuses one app reaching into another's source by path.
 
 ## Running it
 
