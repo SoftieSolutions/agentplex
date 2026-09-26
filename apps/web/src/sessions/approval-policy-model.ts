@@ -8,7 +8,8 @@ import {
 } from '@agentplex/protocol';
 import { PROJECT_KIND } from '../projects/project-kind.js';
 import { followUp, type Reply } from '../store/answers.js';
-import type { ApprovalPolicyView, HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
+import type { ApprovalPolicyView } from '../store/views.js';
 
 /**
  * The standing policy as a screen reads it: the three commands, and the rows

@@ -11,7 +11,8 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import { followUp, type Reply } from '../store/answers.js';
-import type { ConnectionPhase, HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
+import type { ConnectionPhase } from '../store/views.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { serverLabel } from './session-list-model.js';
 

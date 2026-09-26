@@ -17,7 +17,7 @@ import { activityWordsText } from '../activity/activity-words.js';
 import { destinationHash } from '../shell/destinations.js';
 import type { NextAction } from '../shell/next-action.js';
 import type { ShellForm } from '../shell/shell-form.js';
-import type { ConnectionPhase } from '../store/hub-store.js';
+import type { ConnectionPhase } from '../store/views.js';
 import type { Tone } from '../ui/tokens.js';
 
 /**

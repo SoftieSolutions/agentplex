@@ -1,6 +1,6 @@
 import type { FrameId } from '@agentplex/protocol';
 import { followUp, type Reply } from '../store/answers.js';
-import type { HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
 import { unseenPrompt, type SessionListItem } from './session-list-model.js';
 
 /**

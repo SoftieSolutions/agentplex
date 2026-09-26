@@ -1,6 +1,6 @@
 import type { FrameId, Layout, MachineState, ServerRegistrationId } from '@agentplex/protocol';
 import { followUp, type Reply } from '../store/answers.js';
-import type { HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
 import { PROJECT_KIND } from './project-kind.js';
 
 /**

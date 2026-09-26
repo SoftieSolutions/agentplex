@@ -1,6 +1,7 @@
 import { useState, type JSX } from 'react';
 import type { Layout, NodeId, SessionRef } from '@agentplex/protocol';
-import type { CommandOutcome, HubStore } from '../store/hub-store.js';
+import type { CommandOutcome } from '../store/commands.js';
+import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Button, Group, Menu, Modal, Stack, Text, TextInput } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';

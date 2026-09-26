@@ -1,5 +1,5 @@
 import { TRANSCRIPT_ACTIVITIES_MAX, type Activity, type FrameId } from '@agentplex/protocol';
-import type { RefusalView, TranscriptView } from '../store/hub-store.js';
+import type { RefusalView, TranscriptView } from '../store/views.js';
 
 /**
  * What the Transcript tab has to show, as a pure function of what the store

@@ -1,4 +1,4 @@
-import type { StoreSocket } from './hub-store.js';
+import type { StoreSocket } from './connection.js';
 
 /**
  * A `StoreSocket` a test drives by hand: it records what the store sent and

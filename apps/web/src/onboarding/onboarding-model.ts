@@ -1,5 +1,5 @@
 import type { MachineState } from '@agentplex/protocol';
-import type { ConnectionPhase } from '../store/hub-store.js';
+import type { ConnectionPhase } from '../store/views.js';
 import { serverRows } from '../settings/server-rows.js';
 
 /**

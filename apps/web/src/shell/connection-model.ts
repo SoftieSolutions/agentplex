@@ -1,5 +1,5 @@
 import { connectionNotice } from '../sessions/session-list-model.js';
-import type { ConnectionPhase } from '../store/hub-store.js';
+import type { ConnectionPhase } from '../store/views.js';
 import type { Tone } from '../ui/tokens.js';
 import { destinationHash } from './destinations.js';
 import type { NextAction } from './next-action.js';

@@ -8,7 +8,7 @@ import type {
   SessionRef,
 } from '@agentplex/protocol';
 import { followUp, type Reply } from '../store/answers.js';
-import type { HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
 import { FOLDER_KIND, PROJECT_KIND } from './node-kinds.js';
 
 /**

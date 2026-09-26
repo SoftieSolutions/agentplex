@@ -1,6 +1,6 @@
 import type { FrameId, MachineState, SessionHolder, SessionRef } from '@agentplex/protocol';
 import { followUp, type Answer, type Reply } from '../store/answers.js';
-import type { HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
 import { findSessionRow } from '../terminal/presentation.js';
 import { serverLabel } from './session-list-model.js';
 

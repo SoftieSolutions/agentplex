@@ -19,14 +19,11 @@ import {
 import { createFrameIdCounter } from './frame-ids.js';
 import { createFakeSocketFactory, type FakeSocket } from './fake-socket.js';
 import { createFakeTimers } from './timers.js';
-import {
-  createHubStore,
-  MAX_REMEMBERED_TRANSCRIPTS,
-  terminalKey,
-  type HubCommand,
-  type HubStoreDependencies,
-  type StoreSocket,
-} from './hub-store.js';
+import type { HubCommand } from './commands.js';
+import type { StoreSocket } from './connection.js';
+import { createHubStore, type HubStoreDependencies } from './hub-store.js';
+import { MAX_REMEMBERED_TRANSCRIPTS } from './session-replies.js';
+import { terminalKey } from './terminals.js';
 import { followUp, refusalTo, type Answer, type AnswerType, type Reply } from './answers.js';
 import { hubFrames } from './hub-frames.fixture.js';
 

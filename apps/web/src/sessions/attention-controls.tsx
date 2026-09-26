@@ -1,6 +1,7 @@
 import { useState, type JSX, type MouseEvent } from 'react';
 import type { FrameId } from '@agentplex/protocol';
-import type { HubCommand, HubStore } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
+import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Button, Group, Text } from '../ui/components.js';
 import { colorForTone, type Scheme } from '../ui/tokens.js';

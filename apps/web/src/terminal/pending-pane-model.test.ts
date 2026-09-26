@@ -6,7 +6,7 @@ import {
   type MachineState,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { RefusalView, StartedView, StartView } from '../store/hub-store.js';
+import type { RefusalView, StartedView, StartView } from '../store/views.js';
 import { pendingSession, pendingWords } from './pending-pane-model.js';
 
 /**

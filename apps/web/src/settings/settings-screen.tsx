@@ -1,7 +1,8 @@
 import { useState, type JSX } from 'react';
 import type { ServerRegistrationId } from '@agentplex/protocol';
 import { refusalToLatest } from '../store/answers.js';
-import type { HubSnapshot, HubStore } from '../store/hub-store.js';
+import type { HubStore } from '../store/hub-store.js';
+import type { HubSnapshot } from '../store/views.js';
 import type { TokenStore } from '../auth/token.js';
 // The chrome's connection line owns this mapping now (AGX-119). Imported
 // rather than kept here as a second copy: this screen and the top bar draw

@@ -1,6 +1,6 @@
 import type { DirectoryEntry, FrameId, ServerRegistrationId } from '@agentplex/protocol';
 import { followUp, type Answer, type Refusal, type Reply } from '../store/answers.js';
-import type { HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
 
 /**
  * The hub's answer to a browse, exactly as it sent it.

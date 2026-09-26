@@ -17,7 +17,9 @@ import {
 } from '@agentplex/protocol';
 
 import { refusalTo } from '../store/answers.js';
-import { terminalKey, type HubStore, type TerminalWatchView } from '../store/hub-store.js';
+import type { HubStore } from '../store/hub-store.js';
+import { terminalKey } from '../store/terminals.js';
+import type { TerminalWatchView } from '../store/views.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import {
   Box,

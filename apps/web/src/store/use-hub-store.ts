@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import type { Layout } from '@agentplex/protocol';
-import type { HubSnapshot, HubStore } from './hub-store.js';
+import type { HubStore } from './hub-store.js';
+import type { HubSnapshot } from './views.js';
 
 /**
  * How a component reads the hub: `useSyncExternalStore`, never an effect.

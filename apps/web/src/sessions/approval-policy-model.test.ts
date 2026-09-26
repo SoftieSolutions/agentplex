@@ -11,7 +11,7 @@ import {
   type PendingApproval,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { ApprovalPolicyView } from '../store/hub-store.js';
+import type { ApprovalPolicyView } from '../store/views.js';
 import { answersOf, replyFrom } from '../store/replies.fixture.js';
 import {
   allowAlwaysCommand,

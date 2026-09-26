@@ -11,13 +11,8 @@ import type {
   RouteInput,
 } from '@agentplex/protocol';
 import { followUp, refusalTo, type Reply } from '../store/answers.js';
-import type {
-  CommandOutcome,
-  ConnectionPhase,
-  GraphDocumentView,
-  HubCommand,
-  RunHistoryView,
-} from '../store/hub-store.js';
+import type { CommandOutcome, HubCommand } from '../store/commands.js';
+import type { ConnectionPhase, GraphDocumentView, RunHistoryView } from '../store/views.js';
 import type { GraphEdit } from './graph-model.js';
 import { historyIsBehind } from './run-history-model.js';
 import { isRunOpen } from './run-model.js';

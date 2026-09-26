@@ -7,7 +7,7 @@ import {
   type ServerView,
   type SessionRow,
 } from '@agentplex/protocol';
-import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
+import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/views.js';
 import { createTerminalFeed } from './chunk-feed.js';
 import { EMULATOR_SCROLLBACK_LINES } from './emulator.js';
 import {

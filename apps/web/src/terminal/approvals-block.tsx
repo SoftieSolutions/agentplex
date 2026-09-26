@@ -10,7 +10,8 @@ import {
   type PolicyRow,
   type SessionProject,
 } from '../sessions/approval-policy-model.js';
-import type { ApprovalPolicyView, HubStore } from '../store/hub-store.js';
+import type { HubStore } from '../store/hub-store.js';
+import type { ApprovalPolicyView } from '../store/views.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Button, Group, Stack, Text } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';

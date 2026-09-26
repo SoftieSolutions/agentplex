@@ -7,7 +7,7 @@ import type {
   FrameId,
 } from '@agentplex/protocol';
 import { followUp, type Reply } from '../store/answers.js';
-import type { HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
 
 /**
  * Everything answering an approval decides, as pure functions: what the frame

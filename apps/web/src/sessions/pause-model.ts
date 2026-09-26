@@ -1,6 +1,6 @@
 import type { FrameId, SessionHolder, SessionPause, SessionRef } from '@agentplex/protocol';
 import { followUp, type Reply } from '../store/answers.js';
-import type { HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
 
 /**
  * Everything pausing and resuming a session decides, as pure functions:

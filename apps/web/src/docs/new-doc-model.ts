@@ -7,7 +7,8 @@ import {
   type ServerRegistrationId,
 } from '@agentplex/protocol';
 import { followUp, type Reply } from '../store/answers.js';
-import type { ConnectionPhase, HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
+import type { ConnectionPhase } from '../store/views.js';
 
 /**
  * Every rule the New doc action follows, as functions of values.

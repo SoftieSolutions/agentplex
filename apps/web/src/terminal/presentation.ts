@@ -7,7 +7,7 @@ import type {
   SubscriptionEndReason,
 } from '@agentplex/protocol';
 import { serverLabel } from '../sessions/session-list-model.js';
-import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
+import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/views.js';
 import type { Tone } from '../ui/tokens.js';
 import { EMULATOR_SCROLLBACK_LINES, type SearchResults } from './emulator.js';
 
