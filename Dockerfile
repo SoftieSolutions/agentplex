@@ -352,7 +352,15 @@ RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
 # providers are linked into the prefix's bin, and the runtime their shebangs
 # resolve now lives in a directory of its own.
 ENV PATH=/home/alice/.agentplex/bin:/home/alice/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-RUN npm install --global --prefix "$HOME/.agentplex" @anthropic-ai/claude-code
+# The version is exact so that an upstream release cannot turn a pull request
+# red that changed nothing here; the check after it proves the pin is what got
+# installed. Nothing bumps it automatically: edit the ARG to the version
+# `npm view @anthropic-ai/claude-code version` prints. It is declared here and
+# not after FROM so that a bump reruns only these lines, not apt, the Node
+# download and the node-pty compile above.
+ARG CLAUDE_CODE_VERSION=2.1.283
+RUN npm install --global --prefix "$HOME/.agentplex" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+RUN claude --version | grep -qx "${CLAUDE_CODE_VERSION} (Claude Code)"
 
 # What is asserted is the directory: the provider resolved out of the prefix
 # this script created, which is the fact the whole binPath design exists to
