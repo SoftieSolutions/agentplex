@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
-import { createFrameIdCounter } from '../store/frame-ids.js';
+import { createFrameIds } from '../store/frame-ids.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { pairingFor } from './settings-route.js';
@@ -26,7 +26,7 @@ function newStore(): HubStore {
     fetchTicket: () => Promise.resolve('ticket-1'),
     createSocket: (ticket) => sockets.create(ticket),
     timers: createFakeTimers(),
-    frameIds: createFrameIdCounter(),
+    frameIds: createFrameIds(),
   });
 }
 

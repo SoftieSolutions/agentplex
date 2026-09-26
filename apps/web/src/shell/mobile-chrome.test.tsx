@@ -6,7 +6,7 @@ import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/pro
 import { notificationList } from '../sessions/notification-model.js';
 import { listSessions } from '../sessions/session-list-model.js';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
-import { createFrameIdCounter } from '../store/frame-ids.js';
+import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
@@ -85,7 +85,7 @@ const store = createHubStore({
   fetchTicket: () => Promise.resolve('ticket-1'),
   createSocket: (ticket) => createFakeSocketFactory().create(ticket),
   timers: createFakeTimers(),
-  frameIds: createFrameIdCounter(),
+  frameIds: createFrameIds(),
 });
 
 const DOWN = connectionView({

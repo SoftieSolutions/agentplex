@@ -9,7 +9,7 @@ import {
   type ClientFrame,
 } from '@agentplex/protocol';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
-import { createFrameIdCounter } from '../store/frame-ids.js';
+import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
@@ -86,7 +86,7 @@ describe('the new-session form meeting a holder', () => {
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
     });
   });
 

@@ -144,7 +144,7 @@ describe('what saves and what never does', () => {
     // One save carrying the newest tree, not one per edit: the first
     // schedule was cancelled when the second edit arrived.
     expect(h.saves).toEqual([serializePaneLayout(h.store.getSnapshot().tree)]);
-    expect(h.timers.delays).toEqual([500, 500]);
+    expect(h.timers.delayHistory).toEqual([500, 500]);
   });
 
   it('saves a committed divider ratio', () => {
@@ -232,7 +232,7 @@ describe('what saves and what never does', () => {
 
     h.timers.fireAll();
     expect(h.saves).toHaveLength(0);
-    expect(h.timers.delays).toHaveLength(0);
+    expect(h.timers.delayHistory).toHaveLength(0);
   });
 
   it('sends a still-pending save when the last subscriber leaves, not nothing', () => {

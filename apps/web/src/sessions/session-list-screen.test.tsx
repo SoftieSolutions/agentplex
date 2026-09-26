@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCatalogueStore } from '../catalogue/catalogue-store.js';
 import type { ShellForm } from '../shell/shell-form.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
-import { createFrameIdCounter } from '../store/frame-ids.js';
+import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
@@ -108,7 +108,7 @@ describe('the session list', () => {
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
     });
     chrome = createCatalogueStore({ hub: store }).subscribe(() => {});
     window.location.hash = '';

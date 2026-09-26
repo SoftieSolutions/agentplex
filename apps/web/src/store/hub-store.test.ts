@@ -16,7 +16,7 @@ import {
   type ClientFrame,
   type FrameId,
 } from '@agentplex/protocol';
-import { createFrameIdCounter } from './frame-ids.js';
+import { createFrameIds } from './frame-ids.js';
 import { createFakeSocketFactory, type FakeSocket } from './fake-socket.js';
 import { createFakeTimers } from './timers.js';
 import type { HubCommand } from './commands.js';
@@ -99,7 +99,7 @@ function harness(overrides: Partial<HubStoreDependencies> = {}) {
     fetchTicket: () => Promise.resolve(`ticket-${(nextTicket += 1)}`),
     createSocket: (ticket) => sockets.create(ticket),
     timers,
-    frameIds: createFrameIdCounter(),
+    frameIds: createFrameIds(),
     ...overrides,
   });
   return { store, sockets, timers };
@@ -220,13 +220,13 @@ describe('reconnecting', () => {
     // read between those.
     socket.drop();
     expect(h.store.getSnapshot().phase).toBe('reconnecting');
-    expect(h.timers.delays).toEqual([30_000, 500]);
+    expect(h.timers.delayHistory).toEqual([30_000, 500]);
 
     // The redial reaches a socket that drops before it is established.
     (await redial(h)).drop();
-    expect(h.timers.delays).toEqual([30_000, 500, 1_000]);
+    expect(h.timers.delayHistory).toEqual([30_000, 500, 1_000]);
     (await redial(h)).drop();
-    expect(h.timers.delays).toEqual([30_000, 500, 1_000, 2_000]);
+    expect(h.timers.delayHistory).toEqual([30_000, 500, 1_000, 2_000]);
 
     // A connection that holds resets the ladder.
     const fourth = await redial(h);
@@ -234,7 +234,7 @@ describe('reconnecting', () => {
     fourth.deliver(hubFrames.welcome);
     expect(h.store.getSnapshot().phase).toBe('connected');
     fourth.drop();
-    expect(h.timers.delays).toEqual([30_000, 500, 1_000, 2_000, 30_000, 500]);
+    expect(h.timers.delayHistory).toEqual([30_000, 500, 1_000, 2_000, 30_000, 500]);
   });
 
   it('a failed ticket exchange is an ordinary connect failure, said in words', async () => {
@@ -349,22 +349,22 @@ describe('retrying a failed connection', () => {
   it('does nothing while the connection has not failed', async () => {
     const h = harness();
     const { socket } = await establish(h);
-    const heartbeats = h.timers.delays.length;
+    const heartbeats = h.timers.delayHistory.length;
 
     h.store.retry();
     await settle();
     expect(h.sockets.sockets).toHaveLength(1);
     expect(socket.closedByStore).toBe(false);
     expect(h.store.getSnapshot().phase).toBe('connected');
-    expect(h.timers.delays).toHaveLength(heartbeats);
+    expect(h.timers.delayHistory).toHaveLength(heartbeats);
 
     socket.drop();
-    const backoff = h.timers.delays;
+    const backoff = h.timers.delayHistory;
     h.store.retry();
     await settle();
     // A backoff in progress is the store's own retry, and stays its own.
     expect(h.sockets.sockets).toHaveLength(1);
-    expect(h.timers.delays).toEqual(backoff);
+    expect(h.timers.delayHistory).toEqual(backoff);
     expect(h.timers.pending).toBe(1);
     expect(h.store.getSnapshot().phase).toBe('reconnecting');
   });
@@ -420,11 +420,11 @@ describe('heartbeat', () => {
     const socket = sockets.sockets[0] as FakeSocket;
     socket.open();
     socket.deliver(hubFrames.welcome);
-    expect(h.timers.delays).toEqual([30_000]);
+    expect(h.timers.delayHistory).toEqual([30_000]);
 
     h.timers.fireAll();
     expect(sentFrames(socket).at(-1)).toEqual({ type: 'ping', id: 2 });
-    expect(h.timers.delays).toEqual([30_000, 10_000]);
+    expect(h.timers.delayHistory).toEqual([30_000, 10_000]);
     expect(h.store.getSnapshot().phase).toBe('connected');
 
     const answer = h.store.request(A_PAIRING);
@@ -438,14 +438,14 @@ describe('heartbeat', () => {
       ok: false,
       reason: 'the connection dropped before the hub answered',
     });
-    expect(h.timers.delays).toEqual([30_000, 10_000, 500]);
+    expect(h.timers.delayHistory).toEqual([30_000, 10_000, 500]);
     expect(h.timers.pending).toBe(1);
 
     // The close that finally arrives, a minute later, is a socket already
     // given up on and schedules nothing a second time.
     socket.drop();
     expect(h.timers.pending).toBe(1);
-    expect(h.timers.delays).toEqual([30_000, 10_000, 500]);
+    expect(h.timers.delayHistory).toEqual([30_000, 10_000, 500]);
 
     h.timers.fireAll();
     await settle();
@@ -472,7 +472,7 @@ describe('heartbeat', () => {
     // The captured pong answers frame 2, which is this ping.
     socket.deliver(hubFrames.pong);
     expect(h.store.getSnapshot().phase).toBe('connected');
-    expect(h.timers.delays).toEqual([30_000, 10_000, 30_000]);
+    expect(h.timers.delayHistory).toEqual([30_000, 10_000, 30_000]);
     expect(h.timers.pending).toBe(1);
 
     h.timers.fireAll();
@@ -523,7 +523,7 @@ describe('heartbeat', () => {
     expect(sentFrames(socket).at(-1)).toEqual({ type: 'ping', id: 2 });
     // The interval is gone and the deadline is what is pending.
     expect(h.timers.pending).toBe(1);
-    expect(h.timers.delays).toEqual([30_000, 10_000]);
+    expect(h.timers.delayHistory).toEqual([30_000, 10_000]);
 
     // A second wake with the question still open asks nothing more.
     wake.fire();
@@ -562,7 +562,7 @@ describe('heartbeat', () => {
     socket.drop();
     // The deadline went with the socket; only the retry is left.
     expect(h.timers.pending).toBe(1);
-    expect(h.timers.delays.at(-1)).toBe(500);
+    expect(h.timers.delayHistory.at(-1)).toBe(500);
   });
 });
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { serverRegistrationIdSchema } from '@agentplex/protocol';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
-import { createFrameIdCounter } from '../store/frame-ids.js';
+import { createFrameIds } from '../store/frame-ids.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { appSessionFiltersStore, createSessionFiltersStore } from './session-filters-store.js';
@@ -19,7 +19,7 @@ function hubStore(): HubStore {
     fetchTicket: () => Promise.resolve('ticket-1'),
     createSocket: (ticket) => sockets.create(ticket),
     timers: createFakeTimers(),
-    frameIds: createFrameIdCounter(),
+    frameIds: createFrameIds(),
   });
 }
 

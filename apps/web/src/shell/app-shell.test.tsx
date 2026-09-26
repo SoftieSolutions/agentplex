@@ -7,7 +7,7 @@ import { fakeStorage } from '../auth/fake-storage.js';
 import { createTokenStore, type TokenStore } from '../auth/token.js';
 import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
-import { createFrameIdCounter } from '../store/frame-ids.js';
+import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
@@ -159,7 +159,7 @@ describe('the shell', () => {
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
     });
     const storage = fakeStorage();
     tokens = createTokenStore(() => storage);
@@ -561,7 +561,7 @@ describe('the shell', () => {
       fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
     });
     await act(async () => {
       root = createRoot(container);
@@ -582,7 +582,7 @@ describe('the shell', () => {
       fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
     });
     await act(async () => {
       root = createRoot(container);
@@ -637,7 +637,7 @@ describe('the shell', () => {
       fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
     });
     await act(async () => {
       root = createRoot(container);
@@ -799,7 +799,7 @@ describe('the shell on a phone', () => {
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
     });
     const storage = fakeStorage();
     tokens = createTokenStore(() => storage);

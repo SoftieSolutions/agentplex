@@ -126,7 +126,7 @@ describe('createSizePacer', () => {
     expect(h.sent).toEqual([{ cols: 100, rows: 30 }]);
     // And the window that bounds what follows it is the one this module
     // names, rather than whatever a test happened to inject.
-    expect(h.timers.delays).toEqual([RESIZE_SETTLE_MS]);
+    expect(h.timers.delayHistory).toEqual([RESIZE_SETTLE_MS]);
   });
 
   it('sends one frame for a drag through many grids, and the one it came to rest at', () => {

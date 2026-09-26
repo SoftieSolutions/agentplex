@@ -111,7 +111,7 @@ describe('the typing', () => {
     h.search.search('au');
     h.search.search('auth');
     expect(h.asked).toHaveLength(0);
-    expect(h.timers.delays).toEqual([
+    expect(h.timers.delayHistory).toEqual([
       PALETTE_SEARCH_DELAY_MS,
       PALETTE_SEARCH_DELAY_MS,
       PALETTE_SEARCH_DELAY_MS,

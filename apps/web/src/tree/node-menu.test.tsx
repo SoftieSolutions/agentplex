@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { nodeIdSchema } from '@agentplex/protocol';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
-import { createFrameIdCounter } from '../store/frame-ids.js';
+import { createFrameIds } from '../store/frame-ids.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
@@ -48,7 +48,7 @@ describe('the node menu', () => {
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
-      frameIds: createFrameIdCounter(),
+      frameIds: createFrameIds(),
     });
   });
 

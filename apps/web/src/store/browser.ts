@@ -1,6 +1,6 @@
 import type { ParseResult } from '@agentplex/protocol';
 import type { TokenStore } from '../auth/token.js';
-import { createFrameIdCounter } from './frame-ids.js';
+import { createFrameIds } from './frame-ids.js';
 import type { StoreSocket } from './connection.js';
 import type { HubStoreDependencies } from './hub-store.js';
 import { browserTimers } from './timers.js';
@@ -131,7 +131,7 @@ export function createBrowserDependencies(options: BrowserDependencyOptions): Hu
     },
     createSocket: (ticket) => wrapWebSocket(new WebSocket(socketUrl(window.location, ticket))),
     timers: browserTimers,
-    frameIds: createFrameIdCounter(),
+    frameIds: createFrameIds(),
     wake: subscribeWake,
   };
 }
