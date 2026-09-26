@@ -249,6 +249,111 @@ describe('reconnecting', () => {
   });
 });
 
+/**
+ * A failure the store will not retry on its own, retried because a person
+ * asked. The store stays out of the backoff for it -- a person who pressed
+ * a button is owed a dial now, not in thirty seconds -- and what it dials on
+ * has to be a connection that starts clean, whatever the failed one left open.
+ */
+describe('retrying a failed connection', () => {
+  it('dials at once after a protocol-error, and a welcome puts it back', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.deliver(hubFrames.protocolError);
+    socket.drop();
+    expect(h.store.getSnapshot().phase).toBe('failed');
+    expect(h.sockets.tickets).toHaveLength(1);
+
+    h.store.retry();
+    expect(h.timers.pending).toBe(0);
+    expect(h.store.getSnapshot().phase).toBe('reconnecting');
+    await settle();
+    expect(h.sockets.tickets).toHaveLength(2);
+
+    const next = h.sockets.sockets[1] as FakeSocket;
+    next.open();
+    next.deliver(hubFrames.welcome);
+    expect(h.store.getSnapshot().phase).toBe('connected');
+    expect(h.store.getSnapshot().problem).toBeNull();
+    expect(h.store.sendCommand(STOP).accepted).toBe(true);
+  });
+
+  it('closes a socket the failure left open before dialling the next', async () => {
+    // The hub closes after a protocol-error, but the store sets `failed` the
+    // moment the frame arrives: a retry pressed before the close lands finds
+    // the old socket, its heartbeat and its `established` still in place.
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.deliver(hubFrames.protocolError);
+
+    h.store.retry();
+    expect(socket.closedByStore).toBe(true);
+    expect(h.timers.pending).toBe(0);
+    // Nothing goes out on the old socket after it was given up.
+    expect(h.store.sendCommand(STOP).accepted).toBe(true);
+    expect(sentFrames(socket).map((frame) => frame.type)).toEqual(['hello']);
+
+    await settle();
+    const next = h.sockets.sockets[1] as FakeSocket;
+    next.open();
+    const beforeWelcome = sentFrames(next);
+    expect(beforeWelcome).toHaveLength(1);
+    const [hello] = beforeWelcome;
+    expect(hello?.type).toBe('hello');
+
+    next.deliver(hubFrames.welcome);
+    expect(h.store.getSnapshot().phase).toBe('connected');
+    // The command queued while the retry dialled goes out on the new socket.
+    expect(sentFrames(next).map((frame) => frame.type)).toEqual(['hello', 'session-stop']);
+  });
+
+  it('retries a protocol version refusal from the start', async () => {
+    // A refusal before any welcome was a first connection that never held.
+    // A real mismatch refuses again at once, which is the answer to give.
+    const h = harness();
+    h.store.subscribe(() => {});
+    await settle();
+    const socket = h.sockets.sockets[0] as FakeSocket;
+    socket.open();
+    socket.deliver(hubFrames.refusalProtocolVersion);
+    expect(h.store.getSnapshot().phase).toBe('failed');
+
+    h.store.retry();
+    expect(socket.closedByStore).toBe(true);
+    expect(h.store.getSnapshot().phase).toBe('connecting');
+    expect(h.store.getSnapshot().problem).toContain('protocol');
+    await settle();
+    const next = h.sockets.sockets[1] as FakeSocket;
+    next.open();
+    next.deliver(hubFrames.refusalProtocolVersion);
+    expect(h.store.getSnapshot().phase).toBe('failed');
+    expect(h.timers.pending).toBe(0);
+  });
+
+  it('does nothing while the connection has not failed', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const heartbeats = h.timers.delays.length;
+
+    h.store.retry();
+    await settle();
+    expect(h.sockets.sockets).toHaveLength(1);
+    expect(socket.closedByStore).toBe(false);
+    expect(h.store.getSnapshot().phase).toBe('connected');
+    expect(h.timers.delays).toHaveLength(heartbeats);
+
+    socket.drop();
+    const backoff = h.timers.delays;
+    h.store.retry();
+    await settle();
+    // A backoff in progress is the store's own retry, and stays its own.
+    expect(h.sockets.sockets).toHaveLength(1);
+    expect(h.timers.delays).toEqual(backoff);
+    expect(h.timers.pending).toBe(1);
+    expect(h.store.getSnapshot().phase).toBe('reconnecting');
+  });
+});
+
 describe('heartbeat', () => {
   const A_PAIRING = {
     type: 'server-pair',
