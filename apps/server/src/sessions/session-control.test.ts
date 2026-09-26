@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SESSION_BRANCH_MAX_CHARS,
+  sessionDescriptorSchema,
   sessionIdSchema,
   storeIdSchema,
   type StoreDescriptor,
@@ -501,6 +503,30 @@ describe('a report', () => {
     expect(byId.get(session('session-busy'))).toBe('fix/auth-refresh');
     expect(byId.get(session('session-homeless'))).toBe('master');
     expect([...workingTree.askedBranch].sort()).toEqual(['/volumes/work', '/volumes/work/project']);
+  });
+
+  it('reports no branch rather than a prefix of one too long for the wire', async () => {
+    // git sets no bound on a ref name and the descriptor does. A clipped name
+    // is not the branch the checkout is on -- it is another branch, or none --
+    // so a name past the bound is shown as no branch, which claims nothing,
+    // and the descriptor carrying it still parses rather than costing the
+    // store report every session in it rides on.
+    const long = `feature/${'x'.repeat(SESSION_BRANCH_MAX_CHARS)}`;
+    const { sessions } = machine({
+      workingTree: createFakeWorkingTree(
+        {},
+        { '/volumes/work/project': long, '/volumes/work': 'master' },
+      ),
+    });
+
+    const report = await sessions.report(WORK);
+    const byId = new Map(report?.sessions.map((one) => [one.sessionId, one]));
+
+    expect(byId.get(session('session-1'))?.branch).toBeNull();
+    expect(byId.get(session('session-homeless'))?.branch).toBe('master');
+    for (const one of report?.sessions ?? []) {
+      expect(sessionDescriptorSchema.safeParse(one).success).toBe(true);
+    }
   });
 
   it('reports no branch rather than a guess when git could not be asked', async () => {
