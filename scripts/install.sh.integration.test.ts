@@ -24,6 +24,7 @@ import {
   type ReleaseProtocol,
   type VersionsManifest,
 } from '@agentplex/release';
+import { PIN_GRAMMAR_CASES, SERIES_RESOLUTION_CASES } from '@agentplex/release/testing';
 import { CLI_PACKAGE, ENTRYPOINT, PACKAGES } from './assemble-package.js';
 
 /**
@@ -3093,100 +3094,72 @@ describe('the protocol a pinned release speaks, checked before anything is insta
 
 describe('a pin that names a series rather than a tag', () => {
   /**
-   * The shape a fleet operator wanting security patches without a minor jump
-   * reaches for, and the whole reason the manifest carries history.
+   * Every word in the one pin table, read by the script's flag grammar. The
+   * same rows run against `readPin` in `packages/release`, so the bash and the
+   * TypeScript cannot classify a word differently without one of the two
+   * suites going red -- see `pin-cases.ts`.
+   *
+   * Each kind is read by what the script does with it rather than by an exit
+   * code alone. An exact word is planned as its own tag, against a history
+   * that lists it. A series word is resolved and comes up empty, against a hub
+   * whose one release sits under the next major -- so the only sentence that
+   * can explain the refusal is the resolver's. A refused word never reaches
+   * the manifest at all.
    */
-  it('takes the newest release in the series, and not the newest overall', () => {
+  it.each(PIN_GRAMMAR_CASES)('reads $word as $kind', ({ word, kind }) => {
     const { script, home, versions } = scratch();
-    writeHistory(versions, {
-      hub: { '1.2.9': FIXTURE_PROTOCOL, '1.1.4': FIXTURE_PROTOCOL },
-    });
+    if (kind === 'exact') writeHistory(versions, { hub: { [word]: FIXTURE_PROTOCOL } });
+    if (kind === 'series') {
+      const major = Number(word.split('.')[0]);
+      writeVersions(versions, { ...CURRENT, hub: `${String(major + 1)}.0.0` });
+    }
 
-    const result = run(script, home, ['--dry-run', '--role=hub@1.1']);
+    const result = run(script, home, ['--dry-run', `--role=hub@${word}`]);
 
-    expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(
-      `${packageSpecs('hub', { ...CURRENT, hub: '1.1.4' })} into ${home}/.agentplex`,
+    switch (kind) {
+      case 'exact':
+        expect(result.status).toBe(0);
+        expect(packagePlan(result.stdout).source).toContain(`/hub-v${word}/`);
+        break;
+      case 'series':
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(`offers no hub release under ${word}`);
+        break;
+      case 'refused':
+        expect(result.status).toBe(1);
+        expect(result.stderr).toMatch(/not a version this can install|nothing after it/);
+        break;
+    }
+  });
+
+  /**
+   * Every resolution in the table, through the script's `newest_in_series`,
+   * against a manifest holding exactly the case's releases in the order a
+   * release job would have published them. The same rows run against
+   * `newestInSeries` in `packages/release`.
+   */
+  it.each(SERIES_RESOLUTION_CASES)('$name', ({ releases, series, expect: expected }) => {
+    const { script, home, versions } = scratch();
+    const last = releases.at(-1) ?? '';
+    writeVersions(
+      versions,
+      { ...CURRENT, hub: last },
+      {
+        history: {
+          hub: Object.fromEntries(releases.slice(0, -1).map((one) => [one, FIXTURE_PROTOCOL])),
+        },
+      },
     );
-  });
 
-  /**
-   * Numerically and field by field, which is the reason the comparison is
-   * written out in the script rather than handed to `sort`: `1.3.10` is newer
-   * than `1.3.9` and sorts before it in every ordering that compares text.
-   */
-  it('compares the patch as a number and not as text', () => {
-    const { script, home, versions } = scratch();
-    writeHistory(versions, {
-      hub: { '1.3.9': FIXTURE_PROTOCOL, '1.3.10': FIXTURE_PROTOCOL, '1.3.2': FIXTURE_PROTOCOL },
-    });
+    const result = run(script, home, ['--dry-run', `--role=hub@${series}`]);
 
-    const result = run(script, home, ['--dry-run', '--role=hub@1.3']);
-
-    expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toContain('/hub-v1.3.10/');
-  });
-
-  /**
-   * A major on its own resolves too, and that was the open question. It is the
-   * same resolver -- a prefix at a dot boundary and the newest release under it
-   * -- so refusing it would mean a second grammar and a second refusal to
-   * explain, in exchange for withholding the pin semver says constrains the
-   * breaking axis.
-   */
-  it('takes the newest release under a major', () => {
-    const { script, home, versions } = scratch();
-    writeHistory(versions, {
-      hub: { '1.9.1': FIXTURE_PROTOCOL, '2.0.0': FIXTURE_PROTOCOL },
-    });
-
-    const result = run(script, home, ['--dry-run', '--role=hub@1']);
-
-    expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toContain('/hub-v1.9.1/');
-  });
-
-  /**
-   * A series is how a fleet asks for the newest patch, and a release candidate
-   * is not one. Naming it exactly still installs it -- that is a tag, and it
-   * exists.
-   */
-  it('never resolves a series to a prerelease, and still pins one by name', () => {
-    const { script, home, versions } = scratch();
-    // The order a release job would publish them in, through the code that
-    // writes the file: the candidate lands in `releases` and never in
-    // `current`, which is what makes the second half of this test possible at
-    // all.
-    writeHistory(versions, {
-      hub: { '1.3.7': FIXTURE_PROTOCOL, '1.3.8-rc1': FIXTURE_PROTOCOL },
-    });
-
-    const series = run(script, home, ['--dry-run', '--role=hub@1.3']);
-    expect(series.status).toBe(0);
-    expect(planned(series.stdout, 'package')).toContain('/hub-v1.3.7/');
-
-    const exact = run(script, home, ['--dry-run', '--role=hub@1.3.8-rc1']);
-    expect(exact.status).toBe(0);
-    expect(planned(exact.stdout, 'package')).toContain('/hub-v1.3.8-rc1/');
-  });
-
-  /** A prefix at a dot boundary: `1.3` is not the start of `1.30`. */
-  it('does not take a series to be a prefix of a longer number', () => {
-    const { script, home, versions } = scratch();
-    writeHistory(versions, { hub: { '1.30.0': FIXTURE_PROTOCOL } });
-
-    const result = run(script, home, ['--dry-run', '--role=hub@1.3']);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('offers no hub release under 1.3');
-  });
-
-  it('stops when the series holds no release at all', () => {
-    const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--role=hub@7']);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('offers no hub release under 7');
+    if (expected === null) {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`offers no hub release under ${series}`);
+    } else {
+      expect(result.status).toBe(0);
+      expect(packagePlan(result.stdout).source).toContain(`/hub-v${expected}/`);
+    }
   });
 
   /** The command takes the same pins, through its own flag. */

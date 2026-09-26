@@ -180,7 +180,16 @@ readonly COMPONENTS='cli hub server web'
 
 # The exact version a pin may name: the release tag `<component>-v<version>`
 # with the stem taken off.
-readonly RELEASE_VERSION='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+#
+# semver.org's grammar, the expression `packages/release` keys the manifest by,
+# with `\d` spelled `[0-9]` and every group capturing because bash has no
+# `(?:`. It used to take any run of `[0-9A-Za-z.-]` as a prerelease tail, which
+# accepted `1.2.3-01` and `1.2.3-.` -- tags the manifest can never list, so a
+# pin to one could only fail later as unpublished. The two copies are held
+# together by the table in `packages/release/src/pin-cases.ts`, which
+# `install.sh.integration.test.ts` runs through this script and the release
+# package runs through `readPin`.
+readonly RELEASE_VERSION='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?(\+([0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*))?$'
 
 # The series a pin may name instead: `1.3`, or `1`.
 #
