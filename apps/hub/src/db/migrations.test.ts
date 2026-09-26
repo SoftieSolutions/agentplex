@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createFakeDatabase } from './fake-database.js';
 import { MigrationError, migrate, orderMigrations, type Migration } from './migrations.js';
@@ -13,6 +14,11 @@ function migration(version: number, name: string, sql = `CREATE TABLE t${version
 }
 
 const clock = { now: () => 1_756_000_000_000 };
+
+/** Computed here rather than imported, so the test states what a digest is. */
+function digestOf(sql: string): string {
+  return createHash('sha256').update(sql).digest('hex');
+}
 
 describe('orderMigrations', () => {
   it('orders by version number, not by filename text', () => {
@@ -42,7 +48,9 @@ describe('migrate', () => {
   });
 
   it('applies nothing on a second run', async () => {
-    const database = createFakeDatabase({ applied: new Map([[1, 'first']]) });
+    const database = createFakeDatabase({
+      applied: new Map([[1, { name: 'first', digest: digestOf(migration(1, 'first').sql) }]]),
+    });
     const { logger } = silentLogger();
 
     const outcome = await migrate(database, [migration(1, 'first')], logger, clock);
@@ -52,7 +60,9 @@ describe('migrate', () => {
   });
 
   it('applies only what is missing', async () => {
-    const database = createFakeDatabase({ applied: new Map([[1, 'first']]) });
+    const database = createFakeDatabase({
+      applied: new Map([[1, { name: 'first', digest: digestOf(migration(1, 'first').sql) }]]),
+    });
     const { logger } = silentLogger();
 
     const outcome = await migrate(
@@ -72,7 +82,11 @@ describe('migrate', () => {
     // not read as history, and the lower number is not skipped for having been
     // overtaken. Editing 16 to renumber it is the alternative, and that is the
     // one thing an applied migration may never be.
-    const database = createFakeDatabase({ applied: new Map([[16, 'later_branch']]) });
+    const database = createFakeDatabase({
+      applied: new Map([
+        [16, { name: 'later_branch', digest: digestOf(migration(16, 'later_branch').sql) }],
+      ]),
+    });
     const { logger } = silentLogger();
 
     const outcome = await migrate(
@@ -88,8 +102,8 @@ describe('migrate', () => {
   it('throws rather than opening a database ahead of this build', async () => {
     const database = createFakeDatabase({
       applied: new Map([
-        [1, 'first'],
-        [2, 'from_a_newer_build'],
+        [1, { name: 'first', digest: digestOf(migration(1, 'first').sql) }],
+        [2, { name: 'from_a_newer_build', digest: null }],
       ]),
     });
     const { logger } = silentLogger();
@@ -100,7 +114,9 @@ describe('migrate', () => {
   });
 
   it('throws when an applied migration was renamed or edited under it', async () => {
-    const database = createFakeDatabase({ applied: new Map([[1, 'first']]) });
+    const database = createFakeDatabase({
+      applied: new Map([[1, { name: 'first', digest: digestOf(migration(1, 'first').sql) }]]),
+    });
     const { logger } = silentLogger();
 
     await expect(
@@ -145,5 +161,81 @@ describe('migrate', () => {
     await migrate(database, [migration(1, 'first')], logger, clock);
 
     expect(records.map((record) => record.fields)).toContainEqual({ version: 1, name: 'first' });
+  });
+
+  it('throws when an applied migration keeps its name but its SQL was edited', async () => {
+    const database = createFakeDatabase({
+      applied: new Map([[1, { name: 'first', digest: 'a'.repeat(64) }]]),
+    });
+    const { logger } = silentLogger();
+
+    const failure = migrate(database, [migration(1, 'first')], logger, clock);
+
+    await expect(failure).rejects.toMatchObject({ code: 'history-edited' });
+    await expect(failure).rejects.toThrow(/migration 1\b/);
+  });
+
+  it('records the digest of a row applied before digests were kept, and starts', async () => {
+    const database = createFakeDatabase({
+      applied: new Map([[1, { name: 'first', digest: null }]]),
+    });
+    const { logger, records } = silentLogger();
+
+    const outcome = await migrate(database, [migration(1, 'first')], logger, clock);
+
+    expect(outcome.applied).toEqual([]);
+    expect(database.statements.some((text) => text.startsWith('UPDATE schema_migrations'))).toBe(
+      true,
+    );
+    expect(database.appliedRows.get(1)).toEqual({
+      name: 'first',
+      digest: digestOf(migration(1, 'first').sql),
+    });
+    // The first digest trusts whatever file is on disk at this start, and the
+    // deploy log is where that trust is written down.
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        message: 'migration digests recorded from the files present at this start',
+        fields: { count: 1 },
+      }),
+    );
+  });
+
+  it('issues no backfill when every applied row already has its digest', async () => {
+    const database = createFakeDatabase({
+      applied: new Map([[1, { name: 'first', digest: digestOf(migration(1, 'first').sql) }]]),
+    });
+    const { logger } = silentLogger();
+
+    await migrate(database, [migration(1, 'first')], logger, clock);
+
+    expect(database.statements.some((text) => text.startsWith('UPDATE schema_migrations'))).toBe(
+      false,
+    );
+  });
+
+  it('records a digest for every migration a fresh run applies', async () => {
+    const database = createFakeDatabase();
+    const { logger } = silentLogger();
+
+    await migrate(database, [migration(1, 'first'), migration(2, 'second')], logger, clock);
+
+    expect(database.appliedRows).toEqual(
+      new Map([
+        [1, { name: 'first', digest: digestOf(migration(1, 'first').sql) }],
+        [2, { name: 'second', digest: digestOf(migration(2, 'second').sql) }],
+      ]),
+    );
+  });
+
+  it('adds the digest column once, and not again when it is already there', async () => {
+    const database = createFakeDatabase();
+    const { logger } = silentLogger();
+
+    await migrate(database, [migration(1, 'first')], logger, clock);
+    await migrate(database, [migration(1, 'first')], logger, clock);
+
+    const alters = database.statements.filter((text) => text.startsWith('ALTER TABLE'));
+    expect(alters).toHaveLength(1);
   });
 });

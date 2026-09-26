@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { Database, Queryable } from './database.js';
 import type { Clock, Logger } from '@agentplex/node-shared';
@@ -10,8 +11,10 @@ import type { Clock, Logger } from '@agentplex/node-shared';
  * - Forward only. There is no `down`. A rollback script is written when the
  *   schema is understood and run when it is not.
  * - Append only. An applied migration is history. Editing one leaves every
- *   database that already ran it disagreeing with every one that has not, and
- *   nothing says so.
+ *   database that already ran it disagreeing with every one that has not, so
+ *   each applied row keeps the sha256 of the SQL it ran, and a start whose file
+ *   no longer matches that digest refuses to open rather than serving from a
+ *   schema nobody can reproduce.
  * - A database ahead of the running build throws rather than opening. An older
  *   binary meeting a newer schema is a rollback in progress; serving from it
  *   writes rows the new schema will have to explain.
@@ -55,10 +58,39 @@ const BOOKKEEPING_TABLE = `
   )
 `;
 
+/**
+ * The digest column is not in the CREATE above, and that is deliberate.
+ *
+ * The bookkeeping table sits outside the numbered migrations, so it cannot be
+ * upgraded by one: this is how it upgrades. Every start asks the table which
+ * columns it has and adds the missing one, so a fresh database and one created
+ * by an older build take the same path. The column is nullable because an
+ * older build rolled back onto an upgraded file still inserts three columns,
+ * and the null it leaves is backfilled by the next start of this one.
+ */
+const DIGEST_COLUMN = 'sql_sha256';
+
+const columnSchema = z.object({ name: z.string() });
+
 const appliedRowSchema = z.object({
   version: z.coerce.number().int(),
   name: z.string(),
+  sql_sha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .nullable(),
 });
+
+interface AppliedMigration {
+  readonly name: string;
+  /** `null` for a row recorded before digests were kept. */
+  readonly digest: string | null;
+}
+
+/** The hex sha256 of a migration's SQL, exactly as the file holds it. */
+function migrationDigest(sql: string): string {
+  return createHash('sha256').update(sql).digest('hex');
+}
 
 export interface MigrationOutcome {
   readonly applied: readonly Migration[];
@@ -99,9 +131,17 @@ export async function migrate(
 
   return database.transaction(async (tx: Queryable) => {
     await tx.query(BOOKKEEPING_TABLE);
+    await addDigestColumn(tx);
     const applied = await readApplied(tx);
 
     reconcile(ordered, applied);
+
+    const recorded = await backfillDigests(tx, ordered, applied);
+    if (recorded > 0) {
+      logger.info('migration digests recorded from the files present at this start', {
+        count: recorded,
+      });
+    }
 
     const pending = ordered.filter((migration) => !applied.has(migration.version));
     for (const migration of pending) {
@@ -129,37 +169,86 @@ export function orderMigrations(migrations: readonly Migration[]): readonly Migr
   return ordered;
 }
 
-async function readApplied(tx: Queryable): Promise<ReadonlyMap<number, string>> {
-  const result = await tx.query('SELECT version, name FROM schema_migrations');
-  const applied = new Map<number, string>();
+/** Adds the digest column to a bookkeeping table that predates it. Forward only. */
+async function addDigestColumn(tx: Queryable): Promise<void> {
+  const result = await tx.query('PRAGMA table_info(schema_migrations)');
+  const columns = result.rows.map((row) => columnSchema.parse(row).name);
+  if (columns.includes(DIGEST_COLUMN)) return;
+  await tx.query(`ALTER TABLE schema_migrations ADD COLUMN ${DIGEST_COLUMN} text`);
+}
+
+async function readApplied(tx: Queryable): Promise<ReadonlyMap<number, AppliedMigration>> {
+  const result = await tx.query('SELECT version, name, sql_sha256 FROM schema_migrations');
+  const applied = new Map<number, AppliedMigration>();
   for (const row of result.rows) {
     // Rows are read back as claims, not as the shape we assume we wrote.
     const parsed = appliedRowSchema.parse(row);
-    applied.set(parsed.version, parsed.name);
+    applied.set(parsed.version, { name: parsed.name, digest: parsed.sql_sha256 });
   }
   return applied;
 }
 
-function reconcile(ordered: readonly Migration[], applied: ReadonlyMap<number, string>): void {
-  const known = new Map(ordered.map((migration) => [migration.version, migration.name]));
+function reconcile(
+  ordered: readonly Migration[],
+  applied: ReadonlyMap<number, AppliedMigration>,
+): void {
+  const known = new Map(ordered.map((migration) => [migration.version, migration]));
 
-  for (const [version, name] of applied) {
-    const shipped = known.get(version);
-    if (shipped === undefined) {
+  for (const [version, { name, digest }] of applied) {
+    const migration = known.get(version);
+    if (migration === undefined) {
       throw new MigrationError(
         'database-ahead',
         `the database has run migration ${version} (${name}), which this build does not ship. ` +
           'Run a build that includes it rather than serving from a schema this one cannot explain.',
       );
     }
-    if (shipped !== name) {
+    if (migration.name !== name) {
       throw new MigrationError(
         'history-edited',
         `migration ${version} ran as ${JSON.stringify(name)} but this build calls it ` +
-          `${JSON.stringify(shipped)}. Applied migrations are history: add a new one instead.`,
+          `${JSON.stringify(migration.name)}. Applied migrations are history: add a new one instead.`,
+      );
+    }
+    const shipped = migrationDigest(migration.sql);
+    if (digest !== null && shipped !== digest) {
+      throw new MigrationError(
+        'history-edited',
+        `migration ${version} (${name}) was edited after this database ran it: ` +
+          `it ran SQL with sha256 ${digest}, and this build ships ${shipped}. ` +
+          'Restore the file as it was applied and put the change in a new migration, ' +
+          'or, if this is a development database, delete it and start again.',
       );
     }
   }
+}
+
+/**
+ * Records the digest of every applied row that has none, from the SQL shipped
+ * now. Runs after `reconcile`, so every row here names a migration this build
+ * ships under the same name.
+ *
+ * The first digest trusts the file present at this start: a row applied before
+ * digests were kept cannot say what it ran, so an edit made before that start
+ * goes unnoticed, and every edit after it does not. The count is logged so a
+ * deploy log shows the moment that trust was extended.
+ */
+async function backfillDigests(
+  tx: Queryable,
+  ordered: readonly Migration[],
+  applied: ReadonlyMap<number, AppliedMigration>,
+): Promise<number> {
+  let recorded = 0;
+  for (const migration of ordered) {
+    const row = applied.get(migration.version);
+    if (row === undefined || row.digest !== null) continue;
+    await tx.query('UPDATE schema_migrations SET sql_sha256 = ? WHERE version = ?', [
+      migrationDigest(migration.sql),
+      migration.version,
+    ]);
+    recorded += 1;
+  }
+  return recorded;
 }
 
 /**
@@ -172,11 +261,10 @@ function reconcile(ordered: readonly Migration[], applied: ReadonlyMap<number, s
 async function apply(tx: Queryable, migration: Migration, clock: Clock): Promise<void> {
   try {
     await tx.query(migration.sql);
-    await tx.query('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)', [
-      migration.version,
-      migration.name,
-      clock.now(),
-    ]);
+    await tx.query(
+      'INSERT INTO schema_migrations (version, name, applied_at, sql_sha256) VALUES (?, ?, ?, ?)',
+      [migration.version, migration.name, clock.now(), migrationDigest(migration.sql)],
+    );
   } catch (error) {
     throw new MigrationError(
       'apply-failed',

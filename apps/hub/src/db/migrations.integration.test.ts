@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -46,6 +47,17 @@ function emptyDatabase(options?: { readonly busyTimeoutMs?: number }): SqliteDat
 
 async function shippedMigrations(): Promise<readonly Migration[]> {
   return loadMigrations(MIGRATIONS_DIRECTORY, nodeMigrationFileSystem);
+}
+
+function digestOf(sql: string): string {
+  return createHash('sha256').update(sql).digest('hex');
+}
+
+async function storedDigests(database: SqliteDatabase): Promise<readonly (string | null)[]> {
+  const result = await database.query<{ sql_sha256: string | null }>(
+    'SELECT sql_sha256 FROM schema_migrations ORDER BY version',
+  );
+  return result.rows.map((row) => row.sql_sha256);
 }
 
 afterEach(async () => {
@@ -120,6 +132,70 @@ describe('the shipped migrations against SQLite', () => {
     await expect(migrate(database, migrations, logger, clock)).rejects.toMatchObject({
       code: 'database-ahead',
     });
+  });
+
+  it('records the sha256 of every migration it applies', async () => {
+    const database = emptyDatabase();
+    const migrations = await shippedMigrations();
+
+    await migrate(database, migrations, logger, clock);
+
+    expect(await storedDigests(database)).toEqual(migrations.map((each) => digestOf(each.sql)));
+  });
+
+  it('starts over rows with no digest and fills them in from the shipped SQL', async () => {
+    // What an older build rolled back onto an upgraded file leaves: its INSERT
+    // names three columns, so the digest is null until this build starts again.
+    const database = emptyDatabase();
+    const migrations = await shippedMigrations();
+    await migrate(database, migrations, logger, clock);
+    await database.query('UPDATE schema_migrations SET sql_sha256 = NULL');
+
+    const outcome = await migrate(database, migrations, logger, clock);
+
+    expect(outcome.applied).toEqual([]);
+    expect(await storedDigests(database)).toEqual(migrations.map((each) => digestOf(each.sql)));
+  });
+
+  it('refuses to open when an applied migration keeps its name but its SQL was edited', async () => {
+    const database = emptyDatabase();
+    const migrations = await shippedMigrations();
+    await migrate(database, migrations, logger, clock);
+    const [first, ...rest] = migrations;
+    if (first === undefined) throw new Error('no shipped migrations');
+
+    const edited = [{ ...first, sql: `${first.sql}\n-- edited after it ran\n` }, ...rest];
+
+    await expect(migrate(database, edited, logger, clock)).rejects.toMatchObject({
+      code: 'history-edited',
+    });
+  });
+
+  it('upgrades a database whose bookkeeping table predates the digest column', async () => {
+    // Built the way a build before digests left it: the three-column table,
+    // each shipped migration run, and a three-column row for each.
+    const database = emptyDatabase();
+    const migrations = await shippedMigrations();
+    await database.query(`
+      CREATE TABLE schema_migrations (
+        version    integer PRIMARY KEY,
+        name       text    NOT NULL,
+        applied_at integer NOT NULL
+      )
+    `);
+    for (const each of migrations) {
+      await database.query(each.sql);
+      await database.query(
+        'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',
+        [each.version, each.name, MINTED_AT],
+      );
+    }
+
+    const outcome = await migrate(database, migrations, logger, clock);
+
+    expect(outcome.applied).toEqual([]);
+    expect(outcome.alreadyApplied).toBe(migrations.length);
+    expect(await storedDigests(database)).toEqual(migrations.map((each) => digestOf(each.sql)));
   });
 
   it('applies every statement of a migration that is a script, not just the first', async () => {
