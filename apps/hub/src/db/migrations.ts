@@ -18,6 +18,19 @@ import type { Clock, Logger } from '@agentplex/node-shared';
  * - A database ahead of the running build throws rather than opening. An older
  *   binary meeting a newer schema is a rollback in progress; serving from it
  *   writes rows the new schema will have to explain.
+ *
+ * The numbering has gaps, and the SQL comments that mention them are wrong in
+ * ways the digests forbid fixing there, so the history is kept here:
+ *
+ * - 0007 was reserved for AGX-240's catalogue sort index, as 0008_docs.sql
+ *   says. AGX-240 landed without a migration, and no file under 0007 was ever
+ *   written.
+ * - No migration under 0012 through 0015 ever existed.
+ * - 0016 exists: 0016_session_task.sql landed before 0017_graphs.sql, whose
+ *   header says 0012 through 0016 are skipped. Only 0012 through 0015 are.
+ *
+ * The runner refuses a duplicate version and an edited or renamed file, but not
+ * a gap. See `pending` below for what that means for a gap number.
  */
 
 export interface Migration {
@@ -143,6 +156,10 @@ export async function migrate(
       });
     }
 
+    // Pending is every version not yet applied, not every version above the
+    // highest applied. A migration numbered into a gap (0007, 0012-0015) is
+    // applied at the next start even though higher versions ran before it, so
+    // one written there must not assume the schema those higher versions left.
     const pending = ordered.filter((migration) => !applied.has(migration.version));
     for (const migration of pending) {
       await apply(tx, migration, clock);

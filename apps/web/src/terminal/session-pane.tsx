@@ -444,8 +444,10 @@ export function SessionPane({
 
   const [registry] = useState<ShortcutRegistry>(() => {
     const bindings = createShortcutRegistry();
-    // The minimal real bindings; the layout ticket (AGX-34) registers its
-    // pane and region navigation into this same registry.
+    // This pane's own registry, one per mounted pane, holding the pane's
+    // verbs. The layout's chords (split, close, move focus) live in a separate
+    // registry at the layout screen's root, whose capture handler decides a
+    // key before this pane's does; a document pane keeps a third of its own.
     bindings.register({
       key: 't',
       description: 'focus the terminal',

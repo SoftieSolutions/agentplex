@@ -1483,10 +1483,8 @@ export function serveClientConnection(
   /**
    * Makes a document on one machine and answers the client that asked.
    *
-   * The reply carries the node and nothing else. There is no broadcast saying
-   * the tree changed -- `catalogue-changed` is AGX-239's frame and supersedes
-   * this -- so what keeps the screen honest until then is the client asking
-   * for the layout again, exactly as it does after a project create.
+   * The reply carries the node and nothing else. The tree change reaches
+   * everybody as `catalogue-changed`, so there is nothing else to say here.
    */
   async function answerDocCreate(
     replyTo: FrameId,
