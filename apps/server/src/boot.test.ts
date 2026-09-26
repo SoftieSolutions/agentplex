@@ -5,9 +5,9 @@ import {
   createFakeProviderFiles,
   createFakeProcessProbe,
   createFakeProcessRunner,
-  createFakeGrantFiles,
   createFakeStoreFiles,
 } from '@agentplex/providers/testing';
+import { createFakeGrantFiles } from './grants/fake-grant-files.js';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { SERVER_PROTOCOL_VERSION } from '@agentplex/protocol';

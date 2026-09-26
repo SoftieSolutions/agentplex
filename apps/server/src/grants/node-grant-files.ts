@@ -2,7 +2,7 @@ import { rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 import type { FileWrite, GrantFileSystem } from './server-grants.js';
-import { nodeStoreFileSystem } from './node-store-files.js';
+import { nodeStoreFileSystem } from '@agentplex/providers';
 
 /**
  * The real grants file, named in one place so tests never reach for a disk.

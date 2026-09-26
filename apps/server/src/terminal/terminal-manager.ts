@@ -8,7 +8,8 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import { DEFAULT_TERMINAL_CAP, type Clock, type Timers } from '@agentplex/node-shared';
-import type { GrantId, Launch, SessionLiveness } from '@agentplex/providers';
+import type { Launch, SessionLiveness } from '@agentplex/providers';
+import type { GrantId } from '../grants/server-grants.js';
 import type { LaunchOptions, PtyExit, PtyRun, PtySupervisor } from '@agentplex/pty';
 
 /**

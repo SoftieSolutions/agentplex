@@ -21,7 +21,8 @@ import {
 import type { FakePty, FakePtyFactory } from '@agentplex/pty/testing';
 import type { Launch } from '@agentplex/providers';
 import type { ServerIdentity } from '@agentplex/providers';
-import { createFakeGrantAuthority, readyProvider } from '@agentplex/providers/testing';
+import { readyProvider } from '@agentplex/providers/testing';
+import { createFakeGrantAuthority } from '../grants/fake-grant-authority.js';
 import { createHubAudience } from './hub-audience.js';
 import { createDirectoryBrowser } from '../directories/directory-browse.js';
 import { createFakeDirectoryReader } from '../directories/fake-directory-reader.js';
