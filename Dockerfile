@@ -30,7 +30,19 @@ WORKDIR /app
 COPY package.json .npmrc ./
 # `corepack install` reads the version out of packageManager, so the pinned
 # pnpm lives in exactly one place.
-RUN corepack enable && corepack install
+#
+# It is also one registry download with no retry of its own and no setting to
+# ask for one, and CI runs 35003811530 and 35047068283 each lost a job to a
+# single failed fetch of the pnpm tarball. So it is retried here, five times
+# with a growing pause. The explicit `exit 1` is load-bearing: this RUN has no
+# `-e`, and without it a fifth failure would end the loop, and the layer, as a
+# success with no pnpm in it.
+RUN corepack enable \
+    && for attempt in 1 2 3 4 5; do \
+        corepack install && break; \
+        [ "$attempt" = 5 ] && exit 1; \
+        sleep $((attempt * 5)); \
+    done
 
 # Manifests before sources: the install layer is then reused across every edit
 # that does not touch a dependency.

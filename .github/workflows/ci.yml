@@ -91,10 +91,34 @@ jobs:
           target: build
           cache-from: type=gha
 
+      # The pnpm corepack downloads, kept between runs so the registry is not
+      # asked for it on every job: CI runs 35003811530 and 35047068283 each
+      # lost a job to that one fetch. Keyed on package.json because the
+      # version lives in its packageManager field. This is the only cache the
+      # runner needs: the pnpm store is not on the runner at all. Every
+      # install runs inside the Docker build against a BuildKit cache mount
+      # (Dockerfile, `id=pnpm-store`) that `cache-to: type=gha` does not
+      # export, and what CI carries between runs is the install layer itself.
+      - name: Restore corepack's pnpm
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/node/corepack
+          key: corepack-${{ runner.os }}-${{ hashFiles('package.json') }}
+
       # corepack reads the pinned pnpm out of packageManager, the same way the
-      # image does, so the runner cannot end up on a different one.
+      # image does, so the runner cannot end up on a different one. It has no
+      # retry setting, so a cache miss is retried here, five times with a
+      # growing pause. The explicit `exit 1` is load-bearing: the step's
+      # `bash -e` does not stop on a command that fails inside `&&`, so
+      # without it a fifth failure would end the loop green with no pnpm.
       - name: Install pnpm
-        run: corepack enable && corepack install
+        run: |
+          corepack enable
+          for attempt in 1 2 3 4 5; do
+            corepack install && break
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 5))
+          done
 
       # Every check is one container and nothing else: docker-compose.test.yml
       # has no service for a database to run in any more, because the hub's is
@@ -188,10 +212,24 @@ jobs:
         with:
           node-version: 24
 
+      # The same corepack cache as the check jobs, for the same reason.
+      - name: Restore corepack's pnpm
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/node/corepack
+          key: corepack-${{ runner.os }}-${{ hashFiles('package.json') }}
+
       # So that the command run here is the command in package.json, which is
       # the command a contributor runs. shellcheck itself is on the runner.
+      # Retried as in the check jobs, and for the same reason.
       - name: Install pnpm
-        run: corepack enable && corepack install
+        run: |
+          corepack enable
+          for attempt in 1 2 3 4 5; do
+            corepack install && break
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 5))
+          done
 
       - name: Lint install.sh
         run: pnpm lint:shell
