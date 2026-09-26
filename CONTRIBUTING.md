@@ -318,14 +318,46 @@ list in `apps/cli` passes lint with a pty import one hop away -- checked by
 experiment, in that pull request, rather than assumed. Where a thing lives
 decides which rules can see it.
 
-**4. A protocol frame, and every party moves together.** This is the expensive
-rung, and it is expensive in a currency the others are not: `PROTOCOL_VERSION`
-is compared with `===` and never with a range, so a hub and a server that
-disagree do not speak at all. A frame change is the bump, both parsers, both
-exhaustive switches, a re-captured client fixture and an upgrade on every paired
-machine. That is the right behaviour rather than a tax -- the alternative is
-carrying forever the question of which fields the other end understood -- but it
-is paid by people who did not read the ticket. AGX-242's three document frames
+**4. A protocol frame, and every party on its leg moves together.** This is the
+expensive rung, and it is expensive in a currency the others are not. The
+protocol has two legs, each with its own version in
+`packages/protocol/src/version.ts`, and each compared with `===` and never with
+a range: `CLIENT_PROTOCOL_VERSION` for what a browser or MCP caller and the hub
+say to each other (`clientFrameSchema`, `hubFrameSchema`), and
+`SERVER_PROTOCOL_VERSION` for what the hub and a server say
+(`hubToServerFrameSchema`, `serverToHubFrameSchema`) plus the discovery beacon.
+Two peers that disagree on their leg do not speak at all. A frame change is the
+bump, both parsers, both exhaustive switches, a re-captured client fixture if a
+hub-to-client frame moved, and an upgrade of every package that records that
+leg: the hub and the web client for either leg, the server as well for the
+server leg, never the CLI. That is the right behaviour rather than a tax -- the
+alternative is carrying forever the question of which fields the other end
+understood -- but it is paid by people who did not read the ticket. Splitting
+the version (AGX-284) is what keeps it paid only by the peers on the leg that
+moved: a client-only change no longer refuses every paired server.
+
+Which leg bumps is decided by the snapshot that moves, not by the file you
+edited. `client.ts` and `server.ts` share a good deal -- approval, directory,
+doc, frames, identity, machine-state, session, terminal, transcript and
+readiness schemas are imported by both -- so an edit to one of those can move
+either leg or both. `packages/protocol/src/wire-shape.test.ts` renders each
+leg's schemas to JSON Schema and compares them with
+`wire-shape/<leg>-leg.v<version>.json`: change a shape without a bump and the
+file for the current number no longer matches; bump without committing the new
+file and CI fails, because vitest writes a missing file snapshot only when `CI`
+is unset (the check containers are handed `CI` for exactly this). Run the suite
+locally after the bump to write the new file, commit it, and delete the old one
+by hand: `toMatchFileSnapshot` never reports an obsolete file. What the guard
+cannot see is logic inside a `.refine` or `.transform`, which JSON Schema has no
+way to say; a change there needs the bump without the guard's help.
+
+The web client records both legs, not only the one its `hello` speaks. It judges
+a discovered server's beacon against its own `SERVER_PROTOCOL_VERSION`
+(`apps/web/src/settings/pairing-form.ts`), and that verdict is the hub's only
+while the two builds hold the same number. Recording the leg is what lets
+`install.sh`, the image and `agentplex update` refuse a web and a hub that
+disagree on it; the price is that a server-leg change releases the web client
+too. AGX-242's three document frames
 are what it looks like: protocol 20, `packages/protocol/src/client.ts`, the
 hub's `client-connection.ts` and `frame-router.ts`, the web store, a regenerated
 `hub-frames.fixture.ts` and the `tests/hub-server` suite. The feature folder was
@@ -530,7 +562,10 @@ to do about strangers arriving on a port.
 
 **A server announces; it does not call.** The UDP beacon on `BEACON_PORT`
 (50081) says there is a server at this address, calling itself this, speaking
-this protocol version, and nothing else. That "nothing else" is enforced rather
+this server-leg protocol version, and nothing else. It belongs to the server
+leg: the number it carries is `SERVER_PROTOCOL_VERSION`, the one the hub would
+meet at the handshake, and its schema is snapshotted with the hub-to-server
+frames, so a change to it bumps the server leg and never the client one. That "nothing else" is enforced rather
 than intended: `serverBeaconSchema` in `packages/protocol/src/beacon.ts` is the
 one strict schema in a package whose frame schemas otherwise tolerate unknown
 fields. The others can afford tolerance because they arrive on an authenticated
