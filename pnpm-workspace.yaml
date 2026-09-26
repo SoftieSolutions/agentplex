@@ -20,3 +20,11 @@ allowBuilds:
   # re-checks it, because when the bit is missing the only symptom is an opaque
   # posix_spawnp failure at the first spawn.
   node-pty: true
+
+# Registry fetches retry for longer than pnpm's defaults (2 retries, 10s then
+# 1min backoff, 60s timeout). Here and not in .npmrc, which pnpm 11 reads only
+# for auth; the Dockerfile's `manifests` stage asserts fetchRetries.
+fetchRetries: 5
+fetchRetryMintimeout: 10000
+fetchRetryMaxtimeout: 60000
+fetchTimeout: 120000

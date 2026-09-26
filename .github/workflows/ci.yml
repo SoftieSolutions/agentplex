@@ -81,9 +81,8 @@ jobs:
 
       # Nothing is loaded or pushed here; the layers this leaves in the job's
       # builder are the point. `build` already wrote them to the cache this
-      # reads, so a job that changes no dependency restores `pnpm install` and
-      # `pnpm build` instead of re-running them. The compose build below
-      # resolves the same target on the same builder and reuses every one.
+      # reads. The `docker compose run --build` below does not reuse them yet
+      # and rebuilds the image, `pnpm install` included.
       - name: Restore the build cache
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -91,10 +90,42 @@ jobs:
           target: build
           cache-from: type=gha
 
+      # The pnpm corepack downloads, kept so the registry is not asked for it
+      # on every job. Keyed on package.json, whose packageManager pins it.
+      - name: Restore corepack's pnpm
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/node/corepack
+          key: corepack-${{ runner.os }}-${{ hashFiles('package.json') }}
+
       # corepack reads the pinned pnpm out of packageManager, the same way the
-      # image does, so the runner cannot end up on a different one.
+      # image does, so the runner cannot end up on a different one. corepack
+      # has no retry setting, so it is retried here; `bash -e` does not stop
+      # on a failure inside `&&`, hence the explicit `exit 1`.
       - name: Install pnpm
-        run: corepack enable && corepack install
+        run: |
+          corepack enable
+          for attempt in 1 2 3 4 5; do
+            corepack install && break
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 5))
+          done
+
+      # `pnpm docker:*` installs the whole workspace on the runner before it
+      # runs, so the store it downloads into is kept between runs. The compose
+      # build installs again from an empty store rather than reusing the layers
+      # restored above; that is a separate problem, not solved here.
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
 
       # Every check is one container and nothing else: docker-compose.test.yml
       # has no service for a database to run in any more, because the hub's is
@@ -188,10 +219,38 @@ jobs:
         with:
           node-version: 24
 
+      # The same corepack cache as the check jobs, for the same reason.
+      - name: Restore corepack's pnpm
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/node/corepack
+          key: corepack-${{ runner.os }}-${{ hashFiles('package.json') }}
+
       # So that the command run here is the command in package.json, which is
       # the command a contributor runs. shellcheck itself is on the runner.
+      # Retried as in the check jobs, and for the same reason.
       - name: Install pnpm
-        run: corepack enable && corepack install
+        run: |
+          corepack enable
+          for attempt in 1 2 3 4 5; do
+            corepack install && break
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 5))
+          done
+
+      # The same store cache as the check jobs: `pnpm lint:shell` installs the
+      # workspace on the runner first as well.
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
 
       - name: Lint install.sh
         run: pnpm lint:shell
