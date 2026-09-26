@@ -19,8 +19,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --config ../../scripts/vitest.config.ts --passWithNoTests",
-    "test:coverage": "vitest run --config ../../scripts/vitest.config.ts --coverage --passWithNoTests"
+    "test": "vitest run --config ../../scripts/vitest.config.ts",
+    "test:coverage": "vitest run --config ../../scripts/vitest.config.ts --coverage"
   },
   "dependencies": {
     "zod": ">=4.5.4 <5.0.0"
