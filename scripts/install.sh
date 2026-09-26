@@ -243,6 +243,10 @@ readonly DOCS_URL='https://github.com/SoftieSolutions/agentplex/blob/master/apps
 # cannot drift. The server drains on SIGTERM: no new sessions, and the agents
 # already running are given until the drain budget to reach a turn boundary,
 # because killing one mid-tool is how a half-applied edit gets left on disk.
+# That is only a drain because the server unit says KillMode=mixed: systemd's
+# default signals every process in the unit's cgroup at once, and the agents
+# are in it, so they would get the same SIGTERM in the same millisecond the
+# server started waiting for them. With mixed the server alone gets it.
 # systemd sends SIGKILL after TimeoutStopSec whatever the daemon is doing, so a
 # drain that outlasted it would not be a drain -- it would be a hang followed by
 # the same kill. The margin is what the process has left after it stops waiting:
@@ -2084,6 +2088,22 @@ render_unit() {
     reload="ExecReload=/bin/sh -c 'kill -HUP \$MAINPID'
 "
   fi
+  # How a stop is delivered, the server only. systemd's default is
+  # control-group: SIGTERM to every process in the unit at once. A session's
+  # agent is in this unit's cgroup -- forkpty gives it its own session, not its
+  # own cgroup, and systemd kills by cgroup -- so the default would terminate
+  # every agent in the same millisecond the server starts draining for them.
+  # mixed signals the main process alone, and SIGKILLs whatever is left in the
+  # cgroup once it exits or at TimeoutStopSec, whichever comes first. The server
+  # closes its terminals itself before it exits, so anything that kill finds is
+  # something that already outlived its SIGHUP and its grace.
+  #
+  # The hub runs no children to spare, so it keeps the default.
+  local kill_mode=''
+  if [ "$daemon" = 'server' ]; then
+    kill_mode="KillMode=mixed
+"
+  fi
   if [ "$UNIT_SCOPE" = 'system' ]; then
     install_target='multi-user.target'
     identity="User=$SERVICE_USER
@@ -2125,12 +2145,18 @@ RestartSec=5s
 # message in a restart loop.
 RestartPreventExitStatus=2
 # SIGTERM is the default and the signal main.ts shuts down on. The server drains
-# first -- it waits for the turns it is holding to reach a boundary -- and the
-# two lines below are the one number that bounds both halves of that: the daemon
-# stops waiting with the margin still to go, and systemd's SIGKILL is what it is
+# first -- it waits for the turns it is holding to reach a boundary -- and that
+# wait is only worth anything because systemd signals the server alone: the
+# server's unit carries KillMode=mixed, so the agents it is waiting for are not
+# sent the same SIGTERM in the same millisecond, and whatever is left in the
+# cgroup is SIGKILLed once the server exits. The drain and TimeoutStopSec lines
+# are the one number that bounds both halves of the drain: the daemon stops
+# waiting with the margin still to go, and systemd's SIGKILL is what it is
 # racing. A second SIGTERM means the operator is done waiting and skips to the
-# kill. The hub ignores the drain setting; both daemons share this unit template.
-Environment=AGENTPLEX_SERVER_DRAIN_SECONDS=$((STOP_TIMEOUT_SECONDS - STOP_KILL_MARGIN_SECONDS))
+# kill -- sent with \`systemctl kill --kill-whom=main\`, because a bare
+# \`systemctl kill\` signals every process in the unit whatever KillMode says.
+# The hub ignores the drain setting; both daemons share this unit template.
+${kill_mode}Environment=AGENTPLEX_SERVER_DRAIN_SECONDS=$((STOP_TIMEOUT_SECONDS - STOP_KILL_MARGIN_SECONDS))
 TimeoutStopSec=${STOP_TIMEOUT_SECONDS}s
 
 # There is deliberately no sandboxing here -- no ProtectHome, no

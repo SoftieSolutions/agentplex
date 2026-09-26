@@ -63,6 +63,11 @@ export const DEFAULT_TERMINAL_CAP = 8;
  * before systemd stops caring. This default is what a checkout, a container and
  * anything else without that unit gets, and it matches what the installer
  * writes so that the two cannot say different things about the same server.
+ *
+ * The unit also says `KillMode=mixed`, and the budget means nothing without it:
+ * systemd's default stop signals every process in the unit, the agents
+ * included, so they would be terminated as the drain began rather than waited
+ * for. A unit written some other way needs that line as well as this number.
  */
 export const DEFAULT_DRAIN_MS = 15_000;
 
@@ -162,7 +167,9 @@ export const SERVER_SETTINGS = {
   /**
    * In seconds, because the number it has to agree with is in the unit beside
    * it and systemd writes `TimeoutStopSec=20s`. Two settings in two units for
-   * one decision is how the two drift.
+   * one decision is how the two drift. It only bounds a drain in a unit that
+   * also says `KillMode=mixed`; under systemd's default the agents get the
+   * stop's SIGTERM alongside the server.
    */
   drainSeconds: { flag: '--drain-seconds', env: 'AGENTPLEX_SERVER_DRAIN_SECONDS' },
   /**
@@ -306,7 +313,8 @@ export function readTerminalCap(raw: string | undefined, problems: string[]): nu
  * bound here, because the bound that matters is the unit's and this file cannot
  * see it -- a drain longer than `TimeoutStopSec` is not a longer drain, it is
  * the same SIGKILL with a wait in front of it, and the installer is what keeps
- * the two in step.
+ * the two in step. It is also what writes `KillMode=mixed`, without which the
+ * wait is for agents systemd has already sent SIGTERM.
  */
 export function readDrainSeconds(raw: string | undefined, problems: string[]): number {
   if (raw === undefined) return DEFAULT_DRAIN_MS;

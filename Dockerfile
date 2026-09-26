@@ -325,12 +325,14 @@ RUN test "$(stat -c '%a' "$HOME/.agentplex/agentplex.env")" = 600 \
 # The unit, and then systemd's own reading of it. `verify` resolves ExecStart,
 # so it is also an assertion that the unit points at a program that is really
 # there -- which is what makes this worth more than matching strings. One unit
-# for `--role=server`, and no hub unit beside it.
+# for `--role=server`, and no hub unit beside it. KillMode=mixed is what lets
+# the server drain: a stop signals it alone, not the agents in its cgroup.
 RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
     && ! test -e "$HOME/.config/systemd/user/agentplex-hub.service" \
     && grep -qx "ExecStart=$HOME/.agentplex/node/bin/node $HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex-server/apps/server/dist/main.js" "$HOME/.config/systemd/user/agentplex-server.service" \
     && ! grep -q '^User=' "$HOME/.config/systemd/user/agentplex-server.service" \
     && grep -qx "Environment=PATH=$HOME/.agentplex/bin:$HOME/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$HOME/.config/systemd/user/agentplex-server.service" \
+    && grep -qx 'KillMode=mixed' "$HOME/.config/systemd/user/agentplex-server.service" \
     && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-server.service"
 
 # The ticket's own verification: a stock container, and `doctor` at the end of
@@ -640,6 +642,7 @@ RUN id agentplex \
     && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-hub/apps/hub/dist/main.js' /etc/systemd/system/agentplex-hub.service \
     && ! test -e /etc/systemd/system/agentplex-server.service \
     && grep -qx 'WantedBy=multi-user.target' /etc/systemd/system/agentplex-hub.service \
+    && ! grep -q '^KillMode=' /etc/systemd/system/agentplex-hub.service \
     && systemd-analyze verify /etc/systemd/system/agentplex-hub.service
 # Who owns what, which on this machine is a security boundary and not
 # bookkeeping. The service account runs coding agents, so everything it owns is
@@ -708,10 +711,12 @@ RUN su agentplex -s /bin/sh -c 'touch /opt/agentplex/bin/probe /opt/agentplex/li
     && rm -f /opt/agentplex/bin/probe /opt/agentplex/lib/node_modules/probe /opt/agentplex/share/probe /var/lib/agentplex/probe
 
 # The two-unit shape, which is the one this epic exists for on a single box:
-# `--role=both` renders both units, and each starts one daemon.
+# `--role=both` renders both units, and each starts one daemon. One KillMode
+# between them, because only the server has agents to leave to its drain.
 RUN bash /install.sh --system --role=both --print-unit >/tmp/both-units.txt \
     && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-hub/apps/hub/dist/main.js' /tmp/both-units.txt \
-    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-server/apps/server/dist/main.js' /tmp/both-units.txt
+    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-server/apps/server/dist/main.js' /tmp/both-units.txt \
+    && test "$(grep -cx 'KillMode=mixed' /tmp/both-units.txt)" = 1
 
 # The fleet uninstall, which is a different scope, a different prefix and a
 # different set of things to leave alone. The service account stays: it owns
@@ -783,6 +788,7 @@ RUN test -x "$HOME/.agentplex/node/bin/node" \
     && test -f "$HOME/.config/systemd/user/agentplex-hub.service" \
     && ! test -e "$HOME/.config/systemd/user/agentplex-server.service" \
     && grep -qx "ExecStart=$HOME/.agentplex/node/bin/node $HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex-hub/apps/hub/dist/main.js" "$HOME/.config/systemd/user/agentplex-hub.service" \
+    && ! grep -q '^KillMode=' "$HOME/.config/systemd/user/agentplex-hub.service" \
     && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-hub.service"
 
 # The role table, read off the machine: this install took the command, the hub

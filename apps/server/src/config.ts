@@ -178,7 +178,10 @@ export interface ServerConfig {
    * `TimeoutStopSec`, and only the thing that wrote the unit knows what that
    * says. `install.sh` renders both from one pair, so a machine installed by it
    * has a single number and a margin; the default is what a checkout, an image
-   * and anything else without such a unit gets.
+   * and anything else without such a unit gets. The same unit says
+   * `KillMode=mixed`, which is what makes this a wait for the agents rather
+   * than beside them: systemd's default would send them the stop's SIGTERM
+   * too, at the moment the wait begins.
    *
    * Zero is legal and is not the same as no drain: a server told to wait for
    * nothing still closes at a boundary whatever is already at one, which is
