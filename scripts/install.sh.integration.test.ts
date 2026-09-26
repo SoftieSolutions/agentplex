@@ -1650,6 +1650,43 @@ describe('the systemd unit', () => {
     expect(hub).not.toContain('ExecReload=');
   });
 
+  it('signals the server alone on stop, so its agents wait for the drain', () => {
+    const { script, home } = scratch();
+    const unit = run(script, home, ['--print-unit', '--role=server']).stdout;
+    // systemd's default, control-group, sends SIGTERM to every process in the
+    // unit at once: the agents a session runs are in that cgroup, so they die
+    // in the same millisecond the server starts draining for them. mixed sends
+    // SIGTERM to the main process alone and SIGKILLs whatever is left once it
+    // has exited, which is what makes the drain a drain.
+    expect(unit.split('\n').filter((line) => line === 'KillMode=mixed')).toHaveLength(1);
+  });
+
+  it('gives the hub no KillMode, because it runs no children to spare', () => {
+    const { script, home } = scratch();
+    const unit = run(script, home, ['--print-unit', '--role=hub']).stdout;
+    expect(unit.split('\n').filter((line) => line.startsWith('KillMode='))).toEqual([]);
+  });
+
+  it('puts the one KillMode of a --role=both install in the server unit', () => {
+    const { script, home } = scratch();
+    const units = run(script, home, ['--print-unit', '--role=both']).stdout;
+    const [hub = '', server = ''] = units.split('[Unit]').slice(1);
+
+    expect(units.split('\n').filter((line) => line === 'KillMode=mixed')).toHaveLength(1);
+    expect(server).toContain('Description=agentplex server');
+    expect(server.split('\n').filter((line) => line === 'KillMode=mixed')).toHaveLength(1);
+    expect(hub).toContain('Description=agentplex hub');
+    expect(hub.split('\n').filter((line) => line.startsWith('KillMode='))).toEqual([]);
+  });
+
+  it.skipIf(!suiteIsRoot)('signals the server alone on stop in system scope too', () => {
+    const { script, home } = scratch();
+    const unit = run(script, home, ['--print-unit', '--system', '--role=server'], {
+      asRoot: true,
+    }).stdout;
+    expect(unit.split('\n').filter((line) => line === 'KillMode=mixed')).toHaveLength(1);
+  });
+
   it('carries no sandboxing, because the service exists to reach the operator files', () => {
     const { script, home } = scratch();
     const unit = run(script, home, ['--print-unit']).stdout;

@@ -45,6 +45,14 @@ import type { TerminalManager } from './terminal/terminal-manager.js';
  *   steps. What the budget buys is that the common turn finishes; what it
  *   cannot buy is that every turn does.
  *
+ * The wait is only a wait because the unit says `KillMode=mixed`. systemd's
+ * default signals every process in the unit's cgroup at once, and an agent is
+ * in it -- forkpty gives it its own session, not its own cgroup -- so under the
+ * default the turns this drains for are sent SIGTERM in the same millisecond
+ * this process is. With mixed, systemd signals this process alone and kills
+ * what is left of the cgroup once it has exited, which is after the terminals
+ * are closed here.
+ *
  * The latency is in the safe direction. A status is derived from a file the
  * provider appends to, so the reading can lag the truth -- but a lagging
  * reading says `working` for a session that has just finished, which costs a
