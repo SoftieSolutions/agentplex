@@ -21,10 +21,17 @@ import type { FileOutcome, UpdateMachine } from './update-machine.js';
  *
  * The swap itself is safe while this very process is running on the runtime
  * being replaced, and that is worth stating because it looks like it should not
- * be: deleting the binary of a running process leaves the process alive on the
- * old inode. `install.sh` already does exactly this on every re-run, and this
- * command is started from the prefix's own `bin/agentplex`, whose shebang
- * resolved the interpreter before any of this ran.
+ * be: moving and then deleting the binary of a running process leaves the
+ * process alive on the old inode. This command is started from the prefix's
+ * own `bin/agentplex`, whose shebang resolved the interpreter before any of
+ * this ran.
+ *
+ * The old runtime is set aside rather than deleted, and deleted only once the
+ * new one is in place. `install.sh` deletes it first and then moves, which
+ * leaves a machine with no interpreter if the move fails; here a failed move is
+ * undone by moving the old one back, so the window in which there is no
+ * runtime lies between two renames, and the only way to be left in it is for
+ * the rename back to fail as well.
  *
  * ## What this will not touch
  *
@@ -192,7 +199,10 @@ export type RuntimeSwap =
  * reason is the same: by the time anything under `<prefix>/node` is touched the
  * archive has already been proved to be the one nodejs.org published, so a
  * failure at the last step is a full disk or a signal rather than a bad
- * download -- and the moment where this machine has no interpreter is a rename.
+ * download. What is not `ensure_node`'s is the last step: the old runtime is
+ * renamed to `<prefix>/node.old` rather than removed, the new one is renamed
+ * in, and only then is the old one removed -- so a move that fails is undone
+ * by moving the old one back, and the units restart on what they ran before.
  *
  * `--no-same-owner` is the flag that was learned rather than reasoned about: a
  * nodejs.org tarball carries `iojs:iojs`, no machine has that account, and tar
@@ -207,6 +217,7 @@ export async function swapRuntime(
 ): Promise<RuntimeSwap> {
   const home = join(layout.prefix, NODE_DIRECTORY);
   const staging = `${home}.new`;
+  const old = `${home}.old`;
 
   const work = await machine.temporaryDirectory();
   if (work === null) {
@@ -236,6 +247,11 @@ export async function swapRuntime(
       );
     }
 
+    // An old runtime a previous run could not remove. Cleared first, because
+    // the current one cannot be renamed onto a directory with something in it,
+    // and a failure here has touched nothing the units run.
+    const leftOver = await machine.removeDirectory(old);
+    if (!leftOver.ok) return failed(leftOver.problem);
     const cleared = await machine.removeDirectory(staging);
     if (!cleared.ok) return failed(cleared.problem);
     const made = await machine.makeDirectory(staging);
@@ -252,27 +268,57 @@ export async function swapRuntime(
     const stamped = await machine.writeFile(join(staging, NODE_STAMP), `${stale.available}\n`);
     if (!stamped.ok) return failed(stamped.problem);
 
-    const removed = await machine.removeDirectory(home);
-    if (!removed.ok) return failed(removed.problem);
+    const setAside = await machine.rename(home, old);
+    if (!setAside.ok) return failed(setAside.problem);
     const moved = await machine.rename(staging, home);
     if (!moved.ok) {
+      const restored = await machine.rename(old, home);
+      if (restored.ok) {
+        return {
+          ok: false,
+          lines: [
+            `${stale.installed} put back in ${home}: ${stale.available} would not move into place: ${moved.problem}`,
+            `The unpacked ${stale.available} is at ${staging}; running this again replaces it.`,
+          ],
+        };
+      }
+      // The one way this still leaves the machine worse than it was found.
+      // Said with the command that fixes it, because until somebody runs it the
+      // prefix has no stamp, reads its runtime as adopted, and no later update
+      // will replace it.
       return {
         ok: false,
-        // The worst moment to fail, and the only one where the machine is left
-        // worse than it was found. Said plainly, with the directory named,
-        // because the fix is to run this again.
         lines: [
-          `this machine has no runtime in ${home}: ${moved.problem}`,
-          `The unpacked ${stale.available} is at ${staging}; running this again replaces it.`,
+          `this machine has no runtime in ${home}.`,
+          `  ${stale.available} would not move in from ${staging}: ${moved.problem}`,
+          `  ${stale.installed} would not move back from ${old}: ${restored.problem}`,
+          `Put the old one back with: mv ${old} ${home}`,
         ],
       };
     }
 
-    return { ok: true, lines: [`replaced ${stale.installed} with ${stale.available} in ${home}`] };
+    // The new runtime is in place and stamped, so an old one that will not go
+    // costs a line rather than the run.
+    const discarded = await machine.removeDirectory(old);
+    return {
+      ok: true,
+      lines: [
+        `replaced ${stale.installed} with ${stale.available} in ${home}`,
+        ...(discarded.ok
+          ? []
+          : [
+              `${stale.installed} is still at ${old}: ${discarded.problem}; the next run removes it.`,
+            ]),
+      ],
+    };
   } finally {
     // The download, whatever happened. The staging directory is deliberately
     // left where it is on a failure: it is inside the prefix, it is named in
-    // the line above, and the next run removes it before it unpacks.
+    // the line above, and the next run removes it before it unpacks. So is an
+    // old runtime that would not be removed, which the next run clears before
+    // it sets the current one aside. One that would not move back is left too,
+    // but that one is the runtime: the line above names the command that
+    // restores it, and no run touches it until somebody has.
     await machine.removeDirectory(work);
   }
 }

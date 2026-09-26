@@ -172,6 +172,8 @@ interface World {
   readonly sums?: string | null;
   readonly cacheFile?: string | null;
   readonly unwritable?: Readonly<Record<string, string>>;
+  readonly unremovable?: Readonly<Record<string, string>>;
+  readonly refusedRenames?: Readonly<Record<string, string>>;
 }
 
 async function run(argv: readonly string[] = [], world: World = {}): Promise<Run> {
@@ -219,6 +221,8 @@ async function run(argv: readonly string[] = [], world: World = {}): Promise<Run
     hashes: world.hashes ?? { '/tmp/agentplex-update/node.tar.gz': 'a'.repeat(64) },
     ...(world.answer === undefined ? {} : { answer: world.answer }),
     ...(world.unwritable === undefined ? {} : { unwritable: world.unwritable }),
+    ...(world.unremovable === undefined ? {} : { unremovable: world.unremovable }),
+    ...(world.refusedRenames === undefined ? {} : { refusedRenames: world.refusedRenames }),
   });
 
   const network = createFakeNetwork({
@@ -281,8 +285,10 @@ describe('the order things happen in', () => {
   });
 
   /**
-   * The runtime is replaced by unpacking beside the old one and renaming, so
-   * that the moment this machine has no interpreter is one syscall long -- and
+   * The runtime is replaced by unpacking beside the old one, setting the old
+   * one aside and renaming the new one in, so that the moment this machine has
+   * no interpreter lies between two renames and the second failing is undone by
+   * a third. The old runtime is removed only once the new one is in place, and
    * the stamp goes in before the move, so the directory that arrives is either
    * a complete runtime with its record or is not there at all.
    */
@@ -290,14 +296,18 @@ describe('the order things happen in', () => {
     const updated = await run(['--node']);
 
     expect(updated.machine.acts.filter((act) => act.includes(`${PREFIX}/node`))).toEqual([
-      // Cleared first, because a staging directory left by an earlier failed
-      // run is what would otherwise be unpacked over.
+      // Both cleared first, because a staging directory left by an earlier
+      // failed run is what would otherwise be unpacked over, and an old
+      // runtime left behind is what the current one could not be set aside on.
+      `rm ${PREFIX}/node.old`,
       `rm ${PREFIX}/node.new`,
       `mkdir ${PREFIX}/node.new`,
       `write ${PREFIX}/node.new/.agentplex-node-version`,
-      `rm ${PREFIX}/node`,
+      `mv ${PREFIX}/node ${PREFIX}/node.old`,
       `mv ${PREFIX}/node.new ${PREFIX}/node`,
+      `rm ${PREFIX}/node.old`,
     ]);
+    expect(updated.machine.acts).not.toContain(`rm ${PREFIX}/node`);
     expect(updated.machine.contents.get(`${PREFIX}/node/.agentplex-node-version`)).toBe(
       'v24.10.0\n',
     );
@@ -590,6 +600,95 @@ describe('the runtime', () => {
     // And the units it stopped are running again: what is on this disk is what
     // was running a moment ago.
     expect(spawned(updated.runner).join('\n')).toContain(`systemctl --user start ${HUB}`);
+  });
+});
+
+describe('the runtime swap, when a move fails', () => {
+  const STAMP = `${PREFIX}/node/.agentplex-node-version`;
+
+  /** Every act on the runtime's directories, in order. */
+  function runtimeActs(machine: FakeUpdateMachine): readonly string[] {
+    return machine.acts.filter((act) => act.includes(`${PREFIX}/node`));
+  }
+
+  /**
+   * The failure the old order could not recover from: the old runtime was
+   * already deleted when the new one would not move in. Set aside instead, it
+   * is moved back, and the units come back on exactly what they were running.
+   */
+  it('puts the old runtime back when the new one will not move into place', async () => {
+    const updated = await run(['--node'], {
+      refusedRenames: { [`${PREFIX}/node.new -> ${PREFIX}/node`]: 'EXDEV: cross-device link' },
+    });
+
+    expect(updated.code).toBe(1);
+    expect(updated.out).toContain('EXDEV: cross-device link');
+    expect(updated.out).toContain(`v24.9.0 put back in ${PREFIX}/node`);
+    const acts = runtimeActs(updated.machine);
+    expect(acts.at(-1)).toBe(`mv ${PREFIX}/node.old ${PREFIX}/node`);
+    expect(acts).not.toContain(`rm ${PREFIX}/node`);
+    expect(updated.machine.contents.get(STAMP)).toBe('v24.9.0\n');
+    expect(spawned(updated.runner)).toContain(`systemctl --user start ${HUB} ${SERVER}`);
+  });
+
+  /**
+   * An old runtime an earlier run left behind is cleared before the current
+   * one is set aside, because a rename onto a directory with something in it
+   * is refused.
+   */
+  it('clears an old runtime an earlier run left behind, then swaps', async () => {
+    const updated = await run(['--node'], {
+      files: { ...wholeMachine(), [`${PREFIX}/node.old/.agentplex-node-version`]: 'v24.8.0\n' },
+    });
+
+    expect(updated.code).toBe(0);
+    expect(runtimeActs(updated.machine)[0]).toBe(`rm ${PREFIX}/node.old`);
+    expect(updated.machine.contents.get(STAMP)).toBe('v24.10.0\n');
+    expect(updated.machine.contents.has(`${PREFIX}/node.old/.agentplex-node-version`)).toBe(false);
+  });
+
+  /**
+   * The one state this can still leave a machine in without a runtime: neither
+   * the new one nor the old one would move into place. Said with the command
+   * that fixes it, because until somebody runs it this install has no stamp
+   * and reads its runtime as adopted, so no later update would put one back.
+   */
+  it('names both problems and the command that restores the runtime when neither will move', async () => {
+    const updated = await run(['--node'], {
+      unwritable: { [`${PREFIX}/node`]: 'EROFS: read-only file system' },
+    });
+
+    expect(updated.code).toBe(1);
+    const acts = runtimeActs(updated.machine);
+    expect(acts.slice(-2)).toEqual([
+      `mv ${PREFIX}/node.new ${PREFIX}/node`,
+      `mv ${PREFIX}/node.old ${PREFIX}/node`,
+    ]);
+    const setAside = acts.indexOf(`mv ${PREFIX}/node ${PREFIX}/node.old`);
+    expect(setAside).toBeGreaterThan(-1);
+    expect(acts.slice(setAside)).not.toContain(`rm ${PREFIX}/node.old`);
+    expect(updated.out.match(/EROFS: read-only file system/g)).toHaveLength(2);
+    expect(updated.out).toContain(`mv ${PREFIX}/node.old ${PREFIX}/node`);
+    expect(updated.machine.contents.get(`${PREFIX}/node.old/.agentplex-node-version`)).toBe(
+      'v24.9.0\n',
+    );
+  });
+
+  /**
+   * The new runtime is in place and stamped, so the run did what it was for.
+   * The old one left behind costs a line, not the run, and the next run clears
+   * it before it sets the current one aside.
+   */
+  it('succeeds and names the old runtime when it cannot be removed afterwards', async () => {
+    const updated = await run(['--node'], {
+      unremovable: { [`${PREFIX}/node.old`]: 'EBUSY: resource busy' },
+    });
+
+    expect(updated.code).toBe(0);
+    expect(updated.machine.contents.get(STAMP)).toBe('v24.10.0\n');
+    expect(updated.out).toContain(`${PREFIX}/node.old`);
+    expect(updated.out).toContain('EBUSY: resource busy');
+    expect(updated.out).toContain('the next run removes it');
   });
 });
 

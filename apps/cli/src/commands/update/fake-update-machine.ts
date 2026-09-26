@@ -18,8 +18,16 @@ import type { ManifestRead, ManifestReader, ManifestSource } from '../../version
 export interface FakeUpdateMachineOptions extends FakeInstallationFilesOptions {
   /** Paths a directory cannot be made at, or a file written to, by the reason. */
   readonly unwritable?: Readonly<Record<string, string>>;
-  /** Paths that will not be removed, by the reason. */
+  /**
+   * Paths that will not be removed while something is there, by the reason. A
+   * path with nothing at it is removed, as the seam promises.
+   */
   readonly unremovable?: Readonly<Record<string, string>>;
+  /**
+   * Renames that are refused, keyed `<from> -> <to>`, by the reason. Asked
+   * before `unwritable`, for a move whose destination is fine on its own.
+   */
+  readonly refusedRenames?: Readonly<Record<string, string>>;
   /** What a downloaded file hashes to, by path. Anything else hashes to nothing. */
   readonly hashes?: Readonly<Record<string, string>>;
   /** `null` for a machine that will not give this run a temporary directory. */
@@ -43,12 +51,16 @@ export function createFakeUpdateMachine(options: FakeUpdateMachineOptions = {}):
   const directories = new Set<string>();
   const unwritable = new Map(Object.entries(options.unwritable ?? {}));
   const unremovable = new Map(Object.entries(options.unremovable ?? {}));
+  const refusedRenames = new Map(Object.entries(options.refusedRenames ?? {}));
   const hashes = new Map(Object.entries(options.hashes ?? {}));
   const acts: string[] = [];
   const questions: string[] = [];
 
   const refusal = (table: ReadonlyMap<string, string>, path: string): string | undefined =>
     table.get(path);
+  const holds = (path: string): boolean =>
+    directories.has(path) ||
+    [...contents.keys()].some((held) => held === path || held.startsWith(`${path}/`));
 
   return {
     acts,
@@ -80,7 +92,7 @@ export function createFakeUpdateMachine(options: FakeUpdateMachineOptions = {}):
 
     async removeDirectory(path: string): Promise<FileOutcome> {
       acts.push(`rm ${path}`);
-      const problem = refusal(unremovable, path);
+      const problem = holds(path) ? refusal(unremovable, path) : undefined;
       if (problem !== undefined) return { ok: false, problem };
       directories.delete(path);
       for (const held of [...contents.keys()]) {
@@ -91,8 +103,16 @@ export function createFakeUpdateMachine(options: FakeUpdateMachineOptions = {}):
 
     async rename(from: string, to: string): Promise<FileOutcome> {
       acts.push(`mv ${from} ${to}`);
-      const problem = refusal(unwritable, to);
+      const problem = refusedRenames.get(`${from} -> ${to}`) ?? refusal(unwritable, to);
       if (problem !== undefined) return { ok: false, problem };
+      // A real rename onto a directory with something in it is refused, and a
+      // fake that merged instead would pass a swap that forgot to clear it.
+      if ([...contents.keys()].some((held) => held === to || held.startsWith(`${to}/`))) {
+        return {
+          ok: false,
+          problem: `ENOTEMPTY: directory not empty, rename '${from}' -> '${to}'`,
+        };
+      }
       for (const [held, text] of [...contents.entries()]) {
         if (held === from || held.startsWith(`${from}/`)) {
           contents.delete(held);
