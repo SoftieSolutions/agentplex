@@ -9,7 +9,10 @@ function ref(storeId: string, sessionId: string): SessionRef {
 describe('sessionRefKey', () => {
   it('gives equal refs equal keys, however the ref was built', () => {
     expect(sessionRefKey(ref('store-a', 'session-a'))).toBe(
-      sessionRefKey({ sessionId: ref('x', 'session-a').sessionId, storeId: ref('store-a', 'y').storeId }),
+      sessionRefKey({
+        sessionId: ref('x', 'session-a').sessionId,
+        storeId: ref('store-a', 'y').storeId,
+      }),
     );
   });
 
