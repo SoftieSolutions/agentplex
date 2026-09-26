@@ -1,5 +1,6 @@
+import { createServer, type Server } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createLogger } from '@agentplex/node-shared';
+import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { createUnreachableDialer, createFakeTimers } from '@agentplex/node-shared/testing';
 import { createFakeStoreFiles } from '@agentplex/providers/testing';
 import { startHubRuntime, type HubRuntime } from './boot.js';
@@ -150,4 +151,57 @@ describe('startHubRuntime', () => {
 
     expect(database.closed).toBe(true);
   });
+
+  it('stops what it had started when the port cannot be bound', async () => {
+    // A failure this late is one where most of the hub is already running: the
+    // ear is listening, the servers have been dialled and a redial is on the
+    // clock. A rejection that left them behind would be a process that failed
+    // to start and still kept a socket and a timer alive.
+    const taken = await holdAPort();
+    try {
+      const records: LogRecord[] = [];
+      const timers = createFakeTimers();
+      const discovery = createFakeBeaconSource();
+      const dialer = createUnreachableDialer();
+      const database = createFakeDatabase({ respondWith: [hubIdentityRow, pairedLaptop] });
+
+      await expect(
+        startHubRuntime(
+          { ...config, port: portOf(taken) },
+          {
+            ...dependencies(database, dialer),
+            logger: createLogger('debug', (record) => records.push(record)),
+            timers,
+            discovery,
+          },
+        ),
+      ).rejects.toThrow();
+
+      // The dial happened, so the redial it scheduled was real and its absence
+      // below is something the unwind did rather than something never started.
+      expect(dialer.dialled).toEqual(['wss://laptop.example:8443']);
+      expect(discovery.closed).toBe(1);
+      expect(timers.pending).toBe(0);
+      expect(records.map((record) => record.message)).toContain('graph runs stopped');
+      expect(database.closed).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => taken.close(() => resolve()));
+    }
+  });
 });
+
+/** A port somebody else already holds, so that the hub's own bind fails. */
+async function holdAPort(): Promise<Server> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+  return server;
+}
+
+function portOf(server: Server): number {
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('not bound to a port');
+  return address.port;
+}
