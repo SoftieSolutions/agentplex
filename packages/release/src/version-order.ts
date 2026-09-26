@@ -8,12 +8,9 @@
  * writer asks it of two keys to keep a component's history sorted newest first.
  * All three compare two versions that already exist.
  *
- * Nothing here selects a version out of a set. `install.sh` does that -- it is
- * what resolves `--role=hub@1.3` against the history `versions.json` carries --
- * and it does it in bash, because it runs before there is a Node on the
- * machine. So the resolver and this module are two programs by necessity, and
- * what holds them together is that the resolver's candidates are keys this
- * ordering wrote.
+ * Nothing here selects a version out of a set; `pin.ts` does, when it resolves
+ * `hub@1.3` against the history `versions.json` carries, and it asks this
+ * module which of two candidates is newer.
  *
  * ## What it implements, and what it does not
  *

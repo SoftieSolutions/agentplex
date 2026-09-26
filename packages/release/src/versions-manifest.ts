@@ -116,19 +116,13 @@ const SEMVER =
 
 /**
  * Whether a word is a version this can install, asked of something a person
- * typed.
+ * typed: an exact pin, which names a release tag.
  *
- * The same grammar `install.sh` carries as `RELEASE_VERSION`, restated here for
- * the command that takes the same pins. Exact, and for this caller that is
- * still the whole of it: `agentplex update --hub=1.3.0` names a release tag,
- * and a tag is a string that either exists or does not.
- *
- * `install.sh` now takes a partial pin as well, because it resolves one against
- * the release history this manifest carries before it builds a URL. This
- * command does not, and the difference is deliberate rather than an oversight:
- * the installer is what a fleet points at, so `hub@1.3` earns a resolver there,
- * and a second resolver here would be a second thing to keep agreeing with the
- * first for a command an operator runs by hand on one machine.
+ * The exact half of the pin grammar `pin.ts` reads, and the grammar the schema
+ * below keys releases by, so a pin this accepts is one the manifest could list.
+ * `install.sh` carries the same expression as `RELEASE_VERSION`. The two are
+ * held together by the table in `pin-cases.ts`, which this package's suite and
+ * `scripts/install.sh.integration.test.ts` both run.
  */
 export function isReleaseVersion(value: string): boolean {
   return SEMVER.test(value);

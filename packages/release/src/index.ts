@@ -15,3 +15,6 @@ export type {
 } from './versions-manifest.js';
 
 export { compareVersions, isNewerVersion } from './version-order.js';
+
+export { newestInSeries, readPin, resolvePin } from './pin.js';
+export type { Pin } from './pin.js';
