@@ -1,5 +1,5 @@
 import { delimiter } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, onTestFinished } from 'vitest';
 import { childEnvironment, systemClock, randomIdGenerator } from '@agentplex/node-shared';
 import { nodePtyFactory } from './node-pty-factory.js';
 import { createProbeProgram } from '@agentplex/providers/testing';
@@ -195,6 +195,12 @@ describe('nodePtyFactory', () => {
           'setInterval(() => {}, 1000);' +
           'process.stdout.write("ready\\n");',
       );
+      // Whatever happens below. A child that ignores a hangup outlives the
+      // worker that started it -- closing the pty is only another hangup -- so
+      // a failure before the kill would leave it running under init for good.
+      onTestFinished(() => {
+        if (run.exit === null) run.kill('SIGKILL');
+      });
       // Before the handler is installed a hangup would end it, and the test
       // would prove nothing about a child that ignores one.
       await printed(run, 'ready');
