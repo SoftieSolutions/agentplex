@@ -1,0 +1,50 @@
+The settings files scripts/install.sh writes, captured off machines it really
+installed, so that settings-template.ts is held against real output rather
+than against a copy somebody typed.
+
+Script: scripts/install.sh at 74e9d9e62e76287842cfd210fc5c53fb2afe8484
+  (AGX-326: install.sh reads pins against the one table), as checked out at
+  c7654a0a3109ef7f43e090fddfcef6f3d384a647. A change to
+  write_environment_file re-captures both files here. The header still says
+  "install.sh wrote this file once": that is the script's wording, and it
+  changes only when the script stops being the writer (AGX-329), which
+  re-captures these.
+
+Captured on 2026-09-26 from the repository root, with docker, out of the two
+bootstrap stages of the Dockerfile at that commit, built with
+
+  COMPOSE_PROJECT_NAME=agx-slot-6 pnpm docker:bootstrap
+
+which builds `bootstrap-check` and `hub-bootstrap-check` from
+debian:bookworm-slim
+(debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251).
+
+user.env, from hub-bootstrap-check (image
+sha256:3fea63461f7358ddbbf463bdde2dad3a84e2d4b3e096f44133e0c65fe2db41ca). That
+stage runs, as the unprivileged user alice with HOME=/home/alice,
+
+  AGENTPLEX_PACKAGE=/package bash /install.sh --role=hub --no-setup
+
+and nothing after it edits the file. bootstrap-check's own per-user file is
+not the one taken: the wizard it drives afterwards rewrites the identity line.
+
+  docker run --rm --entrypoint cat agx-slot-6-bootstrap-hub \
+    /home/alice/.agentplex/agentplex.env >user.env
+  docker run --rm --entrypoint stat agx-slot-6-bootstrap-hub \
+    -c '%a %U:%G' /home/alice/.agentplex/agentplex.env
+  600 alice:alice
+
+system.env, from bootstrap-check (image
+sha256:bd2b84085c1a79fbfcd9cf0f32eb8f73f6e420d9aee1f8486afda60fbda4ad9a). That
+stage runs, as root,
+
+  AGENTPLEX_PACKAGE=/package bash /install.sh --system --role=hub
+
+--system declines the wizard, and the uninstall that follows leaves the file
+where it is, so the finished image holds it as the script wrote it:
+
+  docker run --rm --user root --entrypoint cat agx-slot-6-bootstrap \
+    /etc/agentplex/agentplex.env >system.env
+  docker run --rm --user root --entrypoint stat agx-slot-6-bootstrap \
+    -c '%a %U:%G' /etc/agentplex/agentplex.env
+  640 root:agentplex

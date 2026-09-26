@@ -1,6 +1,6 @@
 import { createFakeInstallationFiles } from './fake-installation-files.js';
 import type { FakeInstallationFilesOptions } from './fake-installation-files.js';
-import type { FileOutcome, WriteMachine } from './write-machine.js';
+import type { FileOutcome, WriteFileOptions, WriteMachine } from './write-machine.js';
 import type { ManifestRead, ManifestReader, ManifestSource } from '../versions/version-check.js';
 
 /**
@@ -47,6 +47,8 @@ export interface FakeWriteMachine extends WriteMachine {
   readonly links: ReadonlyMap<string, string>;
   /** What is on the disk now, for reading back what this run wrote. */
   readonly contents: ReadonlyMap<string, string>;
+  /** The permission bits of every file this run created with one, or chmodded. */
+  readonly modes: ReadonlyMap<string, number>;
 }
 
 export function createFakeWriteMachine(options: FakeWriteMachineOptions = {}): FakeWriteMachine {
@@ -65,6 +67,7 @@ export function createFakeWriteMachine(options: FakeWriteMachineOptions = {}): F
     },
   };
   const links = new Map<string, string>();
+  const modes = new Map<string, number>();
 
   const refusal = (table: ReadonlyMap<string, string>, path: string): string | undefined =>
     table.get(path);
@@ -72,10 +75,14 @@ export function createFakeWriteMachine(options: FakeWriteMachineOptions = {}): F
     directories.has(path) ||
     [...contents.keys()].some((held) => held === path || held.startsWith(`${path}/`));
 
+  const somethingAt = async (path: string): Promise<boolean> =>
+    holds(path) || links.has(path) || (await reads.isFile(path));
+
   return {
     acts: recorded,
     links,
     contents,
+    modes,
 
     // Reads see what the test described *and* what this run has written, so a
     // stamp written by the swap is a stamp a later read finds -- which is how a
@@ -140,14 +147,14 @@ export function createFakeWriteMachine(options: FakeWriteMachineOptions = {}): F
       return { ok: true };
     },
 
-    async exists(path: string): Promise<boolean> {
-      return holds(path) || links.has(path) || (await reads.isFile(path));
-    },
+    exists: somethingAt,
 
     async chmod(path: string, mode: number): Promise<FileOutcome> {
       acts.push(`chmod ${mode.toString(8).padStart(4, '0')} ${path}`);
       const problem = refusal(unwritable, path);
-      return problem === undefined ? { ok: true } : { ok: false, problem };
+      if (problem !== undefined) return { ok: false, problem };
+      modes.set(path, mode);
+      return { ok: true };
     },
 
     async link(target: string, path: string): Promise<FileOutcome> {
@@ -158,10 +165,13 @@ export function createFakeWriteMachine(options: FakeWriteMachineOptions = {}): F
       return { ok: true };
     },
 
-    async writeFile(path: string, text: string): Promise<FileOutcome> {
+    async writeFile(path: string, text: string, written?: WriteFileOptions): Promise<FileOutcome> {
       acts.push(`write ${path}`);
       const problem = refusal(unwritable, path);
       if (problem !== undefined) return { ok: false, problem };
+      // Only a file this creates gets the mode, as the real one only sets it
+      // on creation.
+      if (written?.mode !== undefined && !(await somethingAt(path))) modes.set(path, written.mode);
       contents.set(path, text);
       return { ok: true };
     },

@@ -42,6 +42,10 @@ export interface Downloader {
   download(url: string, path: string): Promise<FileOutcome>;
 }
 
+export interface WriteFileOptions {
+  readonly mode?: number;
+}
+
 export interface WriteMachine extends InstallationFiles {
   /**
    * A directory this run may put a download in, or `null` when the machine will
@@ -88,8 +92,17 @@ export interface WriteMachine extends InstallationFiles {
    * is no moment at which the command is not on the prefix's `bin`.
    */
   link(target: string, path: string): Promise<FileOutcome>;
-  /** Writes a file whole. What is written through this is the runtime's stamp. */
-  writeFile(path: string, contents: string): Promise<FileOutcome>;
+  /**
+   * Writes a file whole: the runtime's stamp, the settings file, a unit.
+   *
+   * `mode` is the permission bits a file this write *creates* is created with,
+   * before a byte is in it -- the settings file holds the client token, and a
+   * file that is briefly world-readable is world-readable. It is `umask 077`
+   * in `write_environment_file`, said per file rather than per process. A file
+   * that already exists keeps its own bits; nothing that passes one writes
+   * over a file that is there.
+   */
+  writeFile(path: string, contents: string, options?: WriteFileOptions): Promise<FileOutcome>;
   /** The SHA-256 of a file, as lowercase hex, or `null` if it could not be read. */
   sha256(path: string): Promise<string | null>;
 }

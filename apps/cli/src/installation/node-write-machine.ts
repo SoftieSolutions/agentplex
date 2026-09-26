@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { errnoCode } from '@agentplex/node-shared';
 import { nodeInstallationFiles } from './node-installation-files.js';
-import type { FileOutcome, WriteMachine } from './write-machine.js';
+import type { FileOutcome, WriteFileOptions, WriteMachine } from './write-machine.js';
 
 /**
  * The real disk, named in one place so that nothing in the update or install
@@ -75,8 +75,19 @@ export const nodeWriteMachine: WriteMachine = {
     }, `${path} -> ${target}`);
   },
 
-  async writeFile(path: string, contents: string): Promise<FileOutcome> {
-    return attempt(async () => void (await writeFile(path, contents, 'utf8')), path);
+  async writeFile(
+    path: string,
+    contents: string,
+    options?: WriteFileOptions,
+  ): Promise<FileOutcome> {
+    return attempt(
+      async () =>
+        void (await writeFile(path, contents, {
+          encoding: 'utf8',
+          ...(options?.mode === undefined ? {} : { mode: options.mode }),
+        })),
+      path,
+    );
   },
 
   /**

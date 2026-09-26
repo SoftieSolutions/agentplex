@@ -64,4 +64,14 @@ describe('the real write machine', () => {
     expect(changed.ok).toBe(false);
     expect(changed.ok ? '' : changed.problem).toContain(missing);
   });
+
+  it('creates a file with the mode it was given, never wider for a moment', async () => {
+    const settings = join(root, 'agentplex.env');
+
+    expect(
+      await nodeWriteMachine.writeFile(settings, 'AGENTPLEX_ROLE=hub\n', { mode: 0o600 }),
+    ).toEqual({ ok: true });
+    expect((await stat(settings)).mode & 0o777).toBe(0o600);
+    expect(await readFile(settings, 'utf8')).toBe('AGENTPLEX_ROLE=hub\n');
+  });
 });
