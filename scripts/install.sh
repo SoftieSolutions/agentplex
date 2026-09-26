@@ -9,25 +9,26 @@
 #   curl -fsSL <url> | bash -s -- --no-setup             # stop after the binary lands
 #   curl -fsSL <url> | bash -s -- --uninstall            # take the runtime back off
 #
-# Deliberately ignorant. It ensures a Node runtime and the build toolchain,
-# installs the published packages the role needs, writes the systemd units it
-# does not start -- one per daemon the role runs, both for --role=both -- and
-# hands over to `agentplex setup`. It knows nothing about providers, stores or
-# databases: everything provider-specific lives in TypeScript beside the adapter
-# that knows the provider, so a new provider is a new file rather than an edit
-# to a shell script nobody tests.
+# Deliberately ignorant, and now also deliberately short. It does what has to
+# happen before there is an `agentplex` on the machine -- a Node runtime, the
+# build toolchain a server's native addon needs, the service account of a
+# --system install, and the command's own package -- and then hands the rest to
+# that command. `agentplex install` resolves and installs the role's other
+# packages, checks that they agree on the protocol, gives the service account
+# what it writes into, and writes the settings file and a systemd unit per
+# daemon the role runs, starting none of them. Last, this script hands over to
+# `agentplex setup`. It knows nothing about providers, stores or databases:
+# everything provider-specific lives in TypeScript beside the adapter that
+# knows the provider, so a new provider is a new file rather than an edit to a
+# shell script nobody tests.
 #
-# Two settings are the exception, and the line is drawn where this script's own
-# knowledge ends. It writes AGENTPLEX_ROLE, because --role is its own flag, and
-# AGENTPLEX_BIN_PATH, because the prefix is the directory it just made. It never
-# writes a database path, a store path or a token, because it has no way to know
-# one and a guessed value is worse than an absent one.
-#
-# AGENTPLEX_ROLE is the role and never the version pins that may have come with
-# it. A role is a property of the machine -- it is what the machine is for, and
-# it is still true a year later. A pin is a choice somebody made on one
-# afternoon, and a machine reinstalled from this file has to come back as the
-# same machine rather than at the versions that happened to be current then.
+# The line is drawn at the bin. This script is fetched on its own over HTTPS
+# and run on a machine that may have no Node, so it has to get a runtime and
+# the command there by itself; everything after that is TypeScript, tested as
+# TypeScript, and the same install step `agentplex update` runs. What it still
+# has to know is which command to install, because --package-version is exact
+# or a series, so it reads the versions manifest for the command's entry alone.
+# The command records no protocol leg, so there is nothing here to check.
 #
 # Everything below is a function and `main` is the last line, so a download that
 # is cut short does nothing at all rather than half of something. That is not
@@ -167,16 +168,25 @@ readonly RELEASE_DOWNLOAD_URL='https://github.com/SoftieSolutions/agentplex/rele
 # through the same raw.githubusercontent.com mechanism that already serves this
 # script, written by the same job that already advances that branch. One
 # unauthenticated fetch of a few hundred bytes answers what is current for every
-# component and whether the set agrees on each protocol leg -- before anything
-# is downloaded, which is the whole point of asking.
+# component and what each release speaks -- before anything is downloaded, which
+# is the whole point of asking.
 #
-# It is read off the network, so `versions_entry` parses it and can say no.
+# This script reads one entry of it, the command's, because the command is the
+# one package it installs; the command reads the rest for itself once it is
+# here. It is read off the network, so `read_component_entry` parses it and can
+# say no.
 readonly VERSIONS_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/versions.json'
 
 # Every component, which is not every role. `cli` goes on every machine because
 # `setup` and `doctor` do; `web` comes with every hub because a hub without the
-# client serves 503. Neither is something --role can name.
+# client serves 503. Neither is something --role can name. This script installs
+# only the first and removes all four, which is what --uninstall reads this for.
 readonly COMPONENTS='cli hub server web'
+
+# The command's release asset, the one tarball this script downloads. A constant
+# for ever, for the reason RELEASE_DOWNLOAD_URL gives, and held against the
+# assembler's own name by `install.sh.integration.test.ts`.
+readonly CLI_ASSET='agentplex.tgz'
 
 # The exact version a pin may name: the release tag `<component>-v<version>`
 # with the stem taken off.
@@ -251,27 +261,6 @@ readonly SYSTEM_UNIT_DIR='/etc/systemd/system'
 
 readonly DOCS_URL='https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md'
 
-# How long a stop may take, and how much of that the server may spend waiting.
-#
-# One decision written as two numbers because systemd needs one of them and the
-# daemon needs the other, and the unit below renders both from here so they
-# cannot drift. The server drains on SIGTERM: no new sessions, and the agents
-# already running are given until the drain budget to reach a turn boundary,
-# because killing one mid-tool is how a half-applied edit gets left on disk.
-# That is only a drain because the server unit says KillMode=mixed: systemd's
-# default signals every process in the unit's cgroup at once, and the agents
-# are in it, so they would get the same SIGTERM in the same millisecond the
-# server started waiting for them. With mixed the server alone gets it.
-# systemd sends SIGKILL after TimeoutStopSec whatever the daemon is doing, so a
-# drain that outlasted it would not be a drain -- it would be a hang followed by
-# the same kill. The margin is what the process has left after it stops waiting:
-# kill the stragglers, close the sockets, exit.
-#
-# The daemon's own default is the same fifteen seconds, for a checkout or an
-# image that has no unit to read this from.
-readonly STOP_TIMEOUT_SECONDS=20
-readonly STOP_KILL_MARGIN_SECONDS=5
-
 # The PATH this script was started with, kept because the script changes its own
 # further down. What the summary has to answer is whether the operator's shell
 # will find `agentplex` tomorrow, and asking that of a PATH this run has
@@ -284,7 +273,8 @@ readonly ORIGINAL_PATH="${PATH:-}"
 # ROLE is still one of hub, server and both, and it is derived rather than
 # typed: --role is repeatable now, so `--role=hub --role=server` and
 # `--role=both` are the same machine and have to record the same word. It is
-# the word that goes into AGENTPLEX_ROLE and into the handover to `setup`.
+# the word the handover to `setup` and the summary carry; `agentplex install`
+# derives the same word from the same flags.
 ROLE='both'
 RUN_SETUP='yes'
 SYSTEM='no'
@@ -301,47 +291,40 @@ UNIT_SCOPE=''
 # COMPONENT_PINS also by --package-version, which is the CLI's pin.
 ROLE_COMPONENTS=''
 COMPONENT_PINS=''
-# The daemons this role runs, one unit each, and the components this role
-# installs. Both set by resolve_role from ROLE_COMPONENTS.
+# The arguments `agentplex install` is handed, exactly as they were typed:
+# every --role, --package-version, --prefix and --system, in order. --dry-run
+# and --print-unit are added by the step that hands over, and --no-setup is
+# never passed, because handing over to setup is this script's. Set by
+# parse_arguments.
+INSTALL_ARGS=()
+# The daemons this role runs, which is what the summary and the toolchain ask
+# about. Set by resolve_role from ROLE_COMPONENTS.
 DAEMONS=''
-INSTALL_COMPONENTS=''
 SERVICE_USER=''
 STATE_DIR=''
-# Where each component's tarball comes from -- a release URL, or a file under
-# AGENTPLEX_PACKAGE -- one per component in INSTALL_COMPONENTS, and empty when a
-# dry run could not resolve one. The plan prints it; `install_package` fetches
-# and unpacks the same list. Set by resolve_release.
-PACKAGE_SPECS=''
+# Where the command's tarball comes from -- a release URL, or a file under
+# AGENTPLEX_PACKAGE -- and empty when a dry run could not resolve one. The plan
+# prints it; `install_package` fetches and unpacks it. Set by resolve_release.
+CLI_SPEC=''
+# The version of the command this run would install: resolved out of the
+# manifest, or read off the name of a local tarball, and empty when a dry run
+# could not say. The handover compares it with what the prefix already holds.
+# Set by resolve_release.
+CLI_VERSION=''
 # The versions manifest as text, and where it was read from -- empty when it was
 # not read at all, which is every dry run that would have had to download it.
 # Set by load_versions.
 VERSIONS_TEXT=''
 VERSIONS_SOURCE=''
-# One component's line out of that manifest: the version it calls current, the
-# versions its release history lists, and each of those as
-# `<version>=<client>:<server>`, a leg left empty where that release records
-# none. Set by read_component_entry, which checks the whole history against the
-# grammar before either list is filled, and read by the two functions that
-# resolve a version.
+# The command's line out of that manifest: the version it calls current and the
+# versions its release history lists. Set by read_component_entry, which checks
+# the whole history against the grammar before the list is filled, and read by
+# the two functions that resolve a version.
 MANIFEST_CURRENT=''
 MANIFEST_RELEASE_VERSIONS=''
-MANIFEST_RELEASE_LEGS=''
-# The release one component resolved to: its version, and the version of each
-# protocol leg it records -- empty for a leg that package does not speak. The
-# CLI records neither, the server only the server leg. Set by
-# read_versions_entry and read_pinned_release.
+# The release a pin or the manifest resolved to. Set by read_versions_entry and
+# read_pinned_release.
 RESOLVED_VERSION=''
-RESOLVED_CLIENT_PROTOCOL=''
-RESOLVED_SERVER_PROTOCOL=''
-# `<component>=<version>` for what this run would install, and
-# `<component>=<protocol>` once per leg for the components that record that
-# leg. A component with no version is one whose version this run has no way to
-# know, which is a dry run that declined to download and nothing else; a
-# component missing from a leg's list is one that does not speak that leg, or
-# the same dry run.
-COMPONENT_VERSIONS=''
-COMPONENT_CLIENT_PROTOCOLS=''
-COMPONENT_SERVER_PROTOCOLS=''
 PLATFORM=''
 ARCH=''
 # The directory the runtime tarball unpacks into whole, and the directory inside
@@ -353,7 +336,8 @@ NODE_ACTION=''
 # not install.
 NODE_INSTALLED_VERSION=''
 # Why this machine can hold no systemd unit, and empty when it can hold one.
-# Set by resolve_unit_support, read by the unit step and by the summary.
+# Set by resolve_unit_support, read by --uninstall and by the summary; the units
+# themselves are `agentplex install`'s, which asks the same question.
 UNIT_SKIP_REASON=''
 
 usage() {
@@ -371,10 +355,17 @@ Usage: bash install.sh [options]
   --package-version=<version>  pin the ${PACKAGE_NAME} command, which every role installs
   --prefix=<directory>         install somewhere other than the default prefix
   --dry-run                    print what this would do and change nothing
-  --print-unit                 print the systemd units this would write, and stop
+  --print-unit                 print the systemd units, through the ${PACKAGE_NAME} command
+                               already in the prefix, and stop
   --uninstall                  remove the units, the runtime and the package; keep the state
   --version                    print this script's own version, and stop
   --help                       this
+
+  This script installs a runtime and the ${PACKAGE_NAME} command, then hands
+  the rest to \`${PACKAGE_NAME} install\` with the same --role, --package-version,
+  --prefix and --system: the role's other packages, the settings file and the
+  units. --dry-run asks that command for its half of the plan when it is already
+  here at the version this would install, and names it otherwise.
 
   --role pre-seeds setup rather than replacing it. --no-setup is for a machine
   that will receive a plan file and run \`${PACKAGE_NAME} setup --plan\` itself.
@@ -387,7 +378,8 @@ Usage: bash install.sh [options]
   is read by every install, pinned or not: it lists the releases of each
   component and what each one speaks, which is what an unpinned component
   resolves through and what a pin is checked against. Set AGENTPLEX_VERSIONS to
-  a directory holding a copy of it to install without reaching that host.
+  a directory holding a copy of it to install without reaching that host; the
+  ${PACKAGE_NAME} command is handed the same variable.
 
   Served from ${INSTALL_SH_URL}
   Documentation at ${DOCS_URL}
@@ -398,11 +390,10 @@ main() {
   parse_arguments "$@"
   resolve_layout
 
+  # Before any network or runtime is touched: the units are the command's to
+  # render, and printing them asks nothing but which interpreter they name.
   if [ "$PRINT_UNIT" = 'yes' ]; then
-    local daemon
-    for daemon in $DAEMONS; do
-      render_unit "$daemon"
-    done
+    print_units
     return 0
   fi
 
@@ -417,19 +408,16 @@ main() {
   fi
 
   # After the uninstall branch, because an uninstall is about what is on this
-  # disk and has no business asking a network what is current -- and after
-  # --print-unit returned above, for the same reason.
+  # disk and has no business asking a network what is current.
   resolve_release
   ensure_toolchain
   ensure_node
-  # Before anything is written, because the environment file below is chowned to
-  # this account and a chown to a user that does not exist yet stops the run
-  # after the package has landed -- half an install, and the confusing half.
+  # Before the handover, because `agentplex install --system` gives this
+  # account the directories it writes into and the settings file's group, and
+  # stops before it installs anything when there is no such account.
   ensure_service_account
   install_package
-  grant_service_account_ownership
-  write_environment_file
-  write_units
+  hand_over
   run_setup
   summary
 }
@@ -444,8 +432,14 @@ main() {
 parse_arguments() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --role=*) add_role "${1#*=}" ;;
-      --package-version=*) set_pin 'cli' "${1#*=}" '--package-version=' ;;
+      --role=*)
+        add_role "${1#*=}"
+        INSTALL_ARGS+=("$1")
+        ;;
+      --package-version=*)
+        set_pin 'cli' "${1#*=}" '--package-version='
+        INSTALL_ARGS+=("$1")
+        ;;
       --prefix=*)
         PREFIX="${1#*=}"
         # An empty value is almost always an unset variable in the command that
@@ -453,9 +447,13 @@ parse_arguments() {
         # It matters most for --uninstall, where a flag that falls back to a
         # default is a removal nobody typed.
         [ -n "$PREFIX" ] || die '--prefix was given with nothing after it, which is usually an unset variable: name the directory, or leave the flag off to take the default'
+        INSTALL_ARGS+=("$1")
         ;;
       --no-setup) RUN_SETUP='no' ;;
-      --system) SYSTEM='yes' ;;
+      --system)
+        SYSTEM='yes'
+        INSTALL_ARGS+=("$1")
+        ;;
       --dry-run) DRY_RUN='yes' ;;
       --print-unit) PRINT_UNIT='yes' ;;
       --uninstall) UNINSTALL='yes' ;;
@@ -567,12 +565,9 @@ set_pin() {
   COMPONENT_PINS="${COMPONENT_PINS:+$COMPONENT_PINS }$component=$pin"
 }
 
-# What the role decides, in one place: the word this machine records, the
-# daemons that get a unit, and the components that get installed.
-#
-# The command is in every row because `setup` and `doctor` belong on every
-# machine; the client is in every row a hub is in, because a hub with no client
-# serves 503 and says so at startup.
+# What the role decides here: the word this machine records and the daemons it
+# runs. Which components each role installs is `agentplex install`'s, which
+# reads the same flags.
 resolve_role() {
   local has_hub='no' has_server='no' component
   for component in $ROLE_COMPONENTS; do
@@ -585,25 +580,22 @@ resolve_role() {
   if [ "$has_hub" = 'yes' ] && [ "$has_server" = 'yes' ]; then
     ROLE='both'
     DAEMONS='hub server'
-    INSTALL_COMPONENTS='cli hub web server'
   elif [ "$has_hub" = 'yes' ]; then
     ROLE='hub'
     DAEMONS='hub'
-    INSTALL_COMPONENTS='cli hub web'
   else
     ROLE='server'
     DAEMONS='server'
-    INSTALL_COMPONENTS='cli server'
   fi
 }
 
-# The published name and the stable asset name, for one component.
+# The published name of one component, which is the directory npm's layout puts
+# it in under lib/node_modules.
 #
-# Three cases rather than three strings built out of the component word. The
-# names happen to end in the component's word today, and what a machine
-# downloads is the wrong thing to have depend on that continuing to be true.
-# `scripts/install.sh.integration.test.ts` reads the assembler's own table and
-# holds these against it, so a rename there fails here rather than at a 404.
+# Four cases rather than four strings built out of the component word. The
+# names happen to end in the component's word today, and what a machine removes
+# is the wrong thing to have depend on that continuing to be true. The command
+# is the one this script installs; all four are what --uninstall takes away.
 component_package() {
   case "$1" in
     cli) printf '%s' "$NPM_PACKAGE" ;;
@@ -614,16 +606,6 @@ component_package() {
   esac
 }
 
-component_asset() {
-  case "$1" in
-    cli) printf 'agentplex.tgz' ;;
-    hub) printf 'agentplex-hub.tgz' ;;
-    server) printf 'agentplex-server.tgz' ;;
-    web) printf 'agentplex-web.tgz' ;;
-    *) die "no asset holds the $1 component" ;;
-  esac
-}
-
 # One file published at one release tag.
 release_url() {
   printf '%s/%s-v%s/%s' "$RELEASE_DOWNLOAD_URL" "$1" "$2" "$3"
@@ -631,8 +613,7 @@ release_url() {
 
 # The value one of the `<component>=<value>` lists holds for a component, and
 # nothing at all when it holds none. Empty is an answer here rather than a
-# failure: an unpinned component has no pin, and a dry run that declined to
-# download has no version.
+# failure: an unpinned component has no pin.
 lookup() {
   local pair
   for pair in $1; do
@@ -646,7 +627,6 @@ lookup() {
 }
 
 component_pin() { lookup "$COMPONENT_PINS" "$1"; }
-component_version() { lookup "$COMPONENT_VERSIONS" "$1"; }
 
 # The shape a prefix has to have before anything is done with it.
 #
@@ -729,44 +709,41 @@ resolve_layout() {
 # Which release this machine installs
 # ---------------------------------------------------------------------------
 
-# Where each package this role installs comes from, one entry per component,
-# and the one check made before anything is downloaded.
+# Where the command's package comes from, and which release it is.
+#
+# The command's alone. It is the one package this script installs, because it
+# is the one thing that has to be on the machine before the rest can be done by
+# something other than bash; every other package a role needs, and whether they
+# agree on the protocol, is `agentplex install`'s to resolve, out of the same
+# manifest, handed the same two variables.
 #
 # Two sources, and only one of them is a release.
 #
 # **AGENTPLEX_PACKAGE** is the seam this repository's own container check
 # installs through: a directory of packed tarballs from a build that has never
-# been published. A directory rather than four variables, because four variables
-# can be half set -- a machine that took a local hub beside a released command
-# would be a green check of a build it had not installed. Nothing here is a
-# release, so nothing is resolved and no protocol is checked, and this says so
-# rather than implying a version it does not have.
+# been published. Nothing in it is a release, so nothing is resolved, and this
+# says so rather than implying a version it does not have. The name npm packed
+# the command's tarball under still carries a version, and that is read off it
+# the way `agentplex install` reads it, so the handover can tell whether the
+# prefix already holds this build.
 #
 # **versions.json** answers everything else, in one unauthenticated fetch,
-# before a byte of any tarball is downloaded -- including everything a pin
-# leaves open. It carries every release each component has published, so it
-# says what an exact pin speaks and which release a series resolves to. This
-# used to be two questions with two answers: the file said what was current, and
-# a second artifact published beside each tarball said what that one tag spoke,
-# at one extra download per pin. History in the file already being fetched
-# retires both.
+# before a byte of any tarball is downloaded. It carries every release the
+# command has published, so it says which release a series resolves to and
+# whether an exact pin names one at all.
 resolve_release() {
   if [ -n "${AGENTPLEX_PACKAGE:-}" ]; then
     [ -d "$AGENTPLEX_PACKAGE" ] || die "AGENTPLEX_PACKAGE names $(quote "$AGENTPLEX_PACKAGE"), which is not a directory: it is the directory holding the packed tarballs to install, one per package"
-    local component
-    PACKAGE_SPECS=''
-    for component in $INSTALL_COMPONENTS; do
-      PACKAGE_SPECS="$PACKAGE_SPECS $(package_tarball "$(component_package "$component")")"
-    done
-    PACKAGE_SPECS="${PACKAGE_SPECS# }"
+    CLI_SPEC="$(package_tarball "$NPM_PACKAGE")"
+    CLI_VERSION="$(tarball_version "$CLI_SPEC" "$NPM_PACKAGE")"
     report 'release' "the tarballs in $AGENTPLEX_PACKAGE; no version is resolved and no protocol is checked, because a directory of tarballs is one build and not a release"
     return 0
   fi
 
   load_versions
-  resolve_component_versions
-  check_protocol_agreement
-  build_package_specs
+  resolve_cli_version
+  CLI_SPEC=''
+  [ -z "$CLI_VERSION" ] || CLI_SPEC="$(release_url cli "$CLI_VERSION" "$CLI_ASSET")"
   report_release
 }
 
@@ -774,7 +751,7 @@ resolve_release() {
 #
 # Always, now, and not only when something was left unpinned. The file carries
 # every release each component has published, so a pinned run reads it too: an
-# exact pin to learn what that release speaks, a series to find out which
+# exact pin to learn that it names a release, a series to find out which
 # release it is. That is one fetch where a fully pinned install used to make one
 # per pin against a second artifact, so this is fewer requests and not more --
 # what it costs is that a machine that cannot reach the manifest at all can no
@@ -784,7 +761,7 @@ resolve_release() {
 # **A dry run downloads nothing**, which is the rule `ensure_node` already keeps
 # about the Node release file, and for the same reason: "would install 1.4.0" is
 # a claim a run that performed no download cannot make. So a dry run with
-# nothing to read the manifest from names the components and says the question
+# nothing to read the manifest from names the command and says the question
 # went unasked, rather than printing a version it guessed.
 #
 # AGENTPLEX_VERSIONS is what makes that testable and what an air-gapped mirror
@@ -814,67 +791,40 @@ load_versions() {
   VERSIONS_SOURCE="$VERSIONS_URL"
 }
 
-# A version for every component this machine installs, and the protocol legs
-# each one records.
-resolve_component_versions() {
-  local component pin
-  COMPONENT_VERSIONS=''
-  COMPONENT_CLIENT_PROTOCOLS=''
-  COMPONENT_SERVER_PROTOCOLS=''
+# The command's version, pinned or current.
+#
+# Only a dry run reaches here with no manifest; a real run has already died
+# trying to fetch one. An exact pin is still an answer without it -- it names
+# the tag outright -- and a series is not, because resolving one is exactly
+# what needed the file.
+resolve_cli_version() {
+  local pin
+  pin="$(component_pin cli)"
+  CLI_VERSION=''
 
-  for component in $INSTALL_COMPONENTS; do
-    pin="$(component_pin "$component")"
-
-    # Only a dry run reaches here with no manifest; a real run has already died
-    # trying to fetch one. An exact pin is still an answer without it -- it
-    # names the tag outright, and only its protocol went unread -- and a series
-    # is not, because resolving one is exactly what needed the file.
-    if [ -z "$VERSIONS_SOURCE" ]; then
-      if [ -n "$pin" ] && [[ "$pin" =~ $RELEASE_VERSION ]]; then
-        record_component "$component" "$pin" '' ''
-      fi
-      continue
+  if [ -z "$VERSIONS_SOURCE" ]; then
+    if [ -n "$pin" ] && [[ "$pin" =~ $RELEASE_VERSION ]]; then
+      CLI_VERSION="$pin"
     fi
+    return 0
+  fi
 
-    if [ -n "$pin" ]; then
-      read_pinned_release "$component" "$pin"
-    else
-      read_versions_entry "$component"
-    fi
-    record_component "$component" "$RESOLVED_VERSION" "$RESOLVED_CLIENT_PROTOCOL" "$RESOLVED_SERVER_PROTOCOL"
-  done
-}
-
-# `record_component <component> <version> <client> <server>`, an empty leg
-# being one the component does not record.
-record_component() {
-  COMPONENT_VERSIONS="${COMPONENT_VERSIONS:+$COMPONENT_VERSIONS }$1=$2"
-  [ -z "$3" ] || COMPONENT_CLIENT_PROTOCOLS="${COMPONENT_CLIENT_PROTOCOLS:+$COMPONENT_CLIENT_PROTOCOLS }$1=$3"
-  [ -z "$4" ] || COMPONENT_SERVER_PROTOCOLS="${COMPONENT_SERVER_PROTOCOLS:+$COMPONENT_SERVER_PROTOCOLS }$1=$4"
+  if [ -n "$pin" ]; then
+    read_pinned_release cli "$pin"
+  else
+    read_versions_entry cli
+  fi
+  CLI_VERSION="$RESOLVED_VERSION"
 }
 
 # The release a pin names, decided before anything is installed. Sets
-# RESOLVED_VERSION and the RESOLVED_*_PROTOCOL legs.
-#
-# This is the judgement call in the delivery grammar, so it is written down. A
-# pinned component's protocol has to be known *before* the install, because the
-# alternatives were to install first and check afterwards or not to check a
-# pinned component at all, and both end at the same machine: a hub and a server
-# that are installed, running, and unable to pair, which is exactly the failure
-# this whole grammar exists to prevent.
-#
-# What changed is where the answer comes from. It used to be a second artifact
-# published at each tag, because the manifest described only what was current
-# and a pin is by definition a request for something else. The manifest carries
-# every release now, so the answer is in the file this run has already read: no
-# second artifact, no extra download, and the same refusal with both numbers
-# named and nothing written.
+# RESOLVED_VERSION.
 #
 # A pin the manifest does not list stops the run, and the refusal says what the
 # file is rather than what exists. It is the set of releases this source
 # advertises: the `v1` branch lists every 1.x release including prereleases, so
-# `--role=hub@1.3.8-rc1` resolves here like any other, but it lists no 2.x --
-# that train advertises itself from its own branch -- and a mirror holds
+# `--package-version=1.3.8-rc1` resolves here like any other, but it lists no
+# 2.x -- that train advertises itself from its own branch -- and a mirror holds
 # whatever was copied into it. Refusing here is still better than the
 # alternative, which is a 404 partway through an npm install.
 read_pinned_release() {
@@ -888,126 +838,18 @@ read_pinned_release() {
     [ -n "$RESOLVED_VERSION" ] || die "$VERSIONS_SOURCE offers no $component release under $pin, so ${component}@${pin} names a series it advertises nothing in. A series takes the newest release under it and never a prerelease; a prerelease named exactly is installed"
   fi
 
-  resolve_release_legs "$RESOLVED_VERSION" || die "$VERSIONS_SOURCE offers no $component release at $RESOLVED_VERSION, so there is nothing here to install ${component}-v${RESOLVED_VERSION} from. This file is the set of releases it advertises and not the set of tags that exist: a 2.x release is advertised from its own branch, and a mirror holds whatever was copied into it"
+  release_listed "$RESOLVED_VERSION" || die "$VERSIONS_SOURCE offers no $component release at $RESOLVED_VERSION, so there is nothing here to install ${component}-v${RESOLVED_VERSION} from. This file is the set of releases it advertises and not the set of tags that exist: a 2.x release is advertised from its own branch, and a mirror holds whatever was copied into it"
 }
 
-# Every component this machine would install, agreeing on each protocol leg.
-#
-# The protocol has two legs, each with its own version: the client leg a
-# browser speaks to the hub, and the server leg the hub speaks to a server. A
-# package records the legs it speaks -- the hub and the web client both, the
-# server only its own, the CLI neither -- and each leg is asked separately, of
-# the components that recorded it. Numbers on different legs are never
-# compared: a hub at client 4 and server 3 beside a server at 3 is the set a
-# client-only change produces, and it is the reason there are two.
-#
-# A tripwire and not a resolver, and the difference is the whole design. A
-# change to a leg releases every component that records it together, so the
-# current entries in `versions.json` always agree on it; if they ever do not,
-# that is a release process that broke rather than a choice this script should
-# be making. Working out "the newest set of versions that happens to agree" is
-# something the release history would now let this attempt, and it is still not
-# done: it would quietly paper over exactly the mistake the tripwire is there to
-# report, and a machine installed at a set nobody released is worse than a
-# machine that refused.
-#
-# Asked of the components this machine installs and not of the whole manifest. A
-# hub install refused because the `server` entry disagrees would be refusing over
-# a package this machine will never download -- and a server elsewhere that does
-# disagree is refused at its own handshake, naming the leg.
-check_protocol_agreement() {
-  check_leg_agreement 'client' "$COMPONENT_CLIENT_PROTOCOLS"
-  check_leg_agreement 'server' "$COMPONENT_SERVER_PROTOCOLS"
-}
-
-# `check_leg_agreement <leg> <component>=<protocol>...`
-check_leg_agreement() {
-  local leg="$1" recorded="$2" component protocol first='' first_component=''
-
-  for component in $INSTALL_COMPONENTS; do
-    protocol="$(lookup "$recorded" "$component")"
-    [ -n "$protocol" ] || continue
-    if [ -z "$first" ]; then
-      first="$protocol"
-      first_component="$component"
-      continue
-    fi
-    [ "$protocol" = "$first" ] || die "this machine would install a $first_component speaking $leg protocol $first and a $component speaking $leg protocol $protocol, and two components that disagree about the $leg protocol do not talk to each other. A change to a leg releases every component that records it together, so this is a broken release rather than a choice to make: nothing has been installed"
-  done
-}
-
-# The URL for each component, or nothing at all.
-#
-# All or none: a plan that named three URLs and left the fourth as a shrug would
-# install three packages, and a machine missing one of them is the
-# half-installed machine every check above exists to prevent.
-build_package_specs() {
-  local component version
-  PACKAGE_SPECS=''
-
-  for component in $INSTALL_COMPONENTS; do
-    version="$(component_version "$component")"
-    if [ -z "$version" ]; then
-      PACKAGE_SPECS=''
-      return 0
-    fi
-    PACKAGE_SPECS="$PACKAGE_SPECS $(release_url "$component" "$version" "$(component_asset "$component")")"
-  done
-  PACKAGE_SPECS="${PACKAGE_SPECS# }"
-}
-
-# The versions, the protocol legs they agree on, and where each of those came
-# from.
-#
-# One line for the versions and one per leg, and each says what it does not
-# know. A component with no version is a dry run that declined to download, or
-# one whose pin named a series there was no manifest to resolve it against; a
-# leg with no number is the same run, or a leg nothing this machine installs
-# speaks -- a server-only machine has no client leg to agree on.
+# The command's release, and where it came from -- or, for a dry run that read
+# no manifest, what it could not know. One line, because the command records no
+# protocol leg: there is no agreement here to report, and the lines about the
+# other packages are the command's own, printed when it is handed the rest.
 report_release() {
-  local component line='' version
-
-  for component in $INSTALL_COMPONENTS; do
-    version="$(component_version "$component")"
-    line="${line:+$line, }$component ${version:-(not resolved)}"
-  done
-
   if [ -n "$VERSIONS_SOURCE" ]; then
-    line="$line (from $VERSIONS_SOURCE)"
+    report 'release' "cli $CLI_VERSION (from $VERSIONS_SOURCE)"
   else
-    line="$line: a dry run downloads nothing, and $VERSIONS_URL is a download"
-  fi
-
-  report 'release' "$line"
-  report_leg 'client' "$COMPONENT_CLIENT_PROTOCOLS"
-  report_leg 'server' "$COMPONENT_SERVER_PROTOCOLS"
-}
-
-# `report_leg <leg> <component>=<protocol>...`: the number, and which of the
-# components this machine installs agree on it -- which is every component that
-# recorded one, since `check_protocol_agreement` has already refused the rest.
-report_leg() {
-  local leg="$1" recorded="$2" component protocol='' speakers='' last='' count=0
-
-  if [ -z "$VERSIONS_SOURCE" ]; then
-    report "$leg protocol" "not checked: a dry run downloads nothing, and the file that says what a release speaks is a download"
-    return 0
-  fi
-
-  for component in $INSTALL_COMPONENTS; do
-    [ -n "$(lookup "$recorded" "$component")" ] || continue
-    [ -n "$protocol" ] || protocol="$(lookup "$recorded" "$component")"
-    [ -z "$last" ] || speakers="${speakers:+$speakers, }$last"
-    last="$component"
-    count=$((count + 1))
-  done
-
-  if [ "$count" -eq 0 ]; then
-    report "$leg protocol" 'not spoken by anything this machine installs'
-  elif [ "$count" -eq 1 ]; then
-    report "$leg protocol" "$protocol, which $last agrees on"
-  else
-    report "$leg protocol" "$protocol, which $speakers and $last agree on"
+    report 'release' "cli ${CLI_VERSION:-(not resolved)}: a dry run downloads nothing, and $VERSIONS_URL is a download"
   fi
 }
 
@@ -1029,7 +871,8 @@ report_leg() {
 # put one there -- so the parser is bash, and it is written as a grammar that
 # refuses rather than as an extractor that guesses: a field that is not there, a
 # version that is not a version and a protocol leg that is not a positive
-# integer each stop the run naming the file.
+# integer each stop the run naming the file. It reads the command's entry, the
+# only one this script installs from, and all of it.
 #
 # There used to be a second file, `<component>-v<version>.json` beside each
 # tarball, and the release history is what deleted it -- see `read_pinned_release`.
@@ -1109,8 +952,8 @@ object_body() {
   return 1
 }
 
-# One component's line out of the versions manifest. Sets MANIFEST_CURRENT,
-# MANIFEST_RELEASE_VERSIONS and MANIFEST_RELEASE_LEGS.
+# One component's line out of the versions manifest. Sets MANIFEST_CURRENT and
+# MANIFEST_RELEASE_VERSIONS.
 #
 # It assigns rather than prints, and that is not a style choice. A refusal in
 # here is a `die`, and `die` inside `$(...)` exits the subshell -- which the
@@ -1123,8 +966,7 @@ object_body() {
 # and every caller of one writes the `|| die` out.
 #
 # A component this run needs and the manifest does not name is a refusal and not
-# a fallback to anything: the manifest is what says which releases there are,
-# and a machine that carried on would install three quarters of a set.
+# a fallback to anything: the manifest is what says which releases there are.
 read_component_entry() {
   local component="$1" flat entry releases
 
@@ -1136,7 +978,7 @@ read_component_entry() {
 
   case "$flat" in
     *"\"$component\":{"*) ;;
-    *) die "$VERSIONS_SOURCE names no $component, and this machine installs one. It is the manifest of every release of every component, so a missing entry is a release that did not finish rather than something to guess at" ;;
+    *) die "$VERSIONS_SOURCE names no $component, and every machine installs one. It is the manifest of every release of every component, so a missing entry is a release that did not finish rather than something to guess at" ;;
   esac
   entry="$(object_body "${flat#*\""$component"\":\{}")" || die "$VERSIONS_SOURCE ends in the middle of the $component entry"
 
@@ -1150,12 +992,17 @@ read_component_entry() {
 }
 
 # Every release in one component's history, checked against the grammar and
-# recorded. Sets MANIFEST_RELEASE_VERSIONS and MANIFEST_RELEASE_LEGS.
+# recorded. Sets MANIFEST_RELEASE_VERSIONS.
 #
 # The whole history and not only the release this run wants, so that a file
 # that is wrong anywhere is refused rather than being right about the one
 # release somebody happened to ask for. And it assigns rather than prints, for
 # the reason `read_component_entry` gives: every refusal here is a `die`.
+#
+# The legs are read and not kept. The command records none, and what the other
+# components speak is `agentplex install`'s question -- but a leg this cannot
+# read is a file this cannot read, and saying nothing about it would be reading
+# the one release somebody asked for and calling the rest fine.
 #
 # One release is `"<version>":{<legs>}`, where the legs are `"client":<n>`,
 # `"server":<n>`, both in either order, or neither -- the CLI records none. `<n>`
@@ -1165,11 +1012,10 @@ read_component_entry() {
 # number is the shape the file had while there was one protocol, which nothing
 # was ever published in.
 read_release_history() {
-  local component="$1" rest="$2" version legs leg value client server
+  local component="$1" rest="$2" version legs leg client server
   local key_pattern='^"([^"]*)":' body_pattern='^[{]([^{}]*)[}]'
   local leg_pattern='^"(client|server)":([1-9][0-9]*)'
   MANIFEST_RELEASE_VERSIONS=''
-  MANIFEST_RELEASE_LEGS=''
 
   while [ -n "$rest" ]; do
     [[ "$rest" =~ $key_pattern ]] || die "$VERSIONS_SOURCE lists the $component releases in a shape this cannot read: each is \"<version>\":{<protocol legs>}"
@@ -1186,16 +1032,15 @@ read_release_history() {
     while [ -n "$legs" ]; do
       [[ "$legs" =~ $leg_pattern ]] || die "$VERSIONS_SOURCE gives the $component release $version a protocol leg this cannot read in $(quote "$legs"): the legs are client and server, each a positive integer"
       leg="${BASH_REMATCH[1]}"
-      value="${BASH_REMATCH[2]}"
       legs="${legs#"${BASH_REMATCH[0]}"}"
       case "$leg" in
         client)
           [ -z "$client" ] || die "$VERSIONS_SOURCE gives the $component release $version the client leg twice"
-          client="$value"
+          client='yes'
           ;;
         server)
           [ -z "$server" ] || die "$VERSIONS_SOURCE gives the $component release $version the server leg twice"
-          server="$value"
+          server='yes'
           ;;
       esac
       case "$legs" in
@@ -1206,7 +1051,6 @@ read_release_history() {
     done
 
     MANIFEST_RELEASE_VERSIONS="${MANIFEST_RELEASE_VERSIONS:+$MANIFEST_RELEASE_VERSIONS }$version"
-    MANIFEST_RELEASE_LEGS="${MANIFEST_RELEASE_LEGS:+$MANIFEST_RELEASE_LEGS }$version=$client:$server"
 
     case "$rest" in
       '') ;;
@@ -1216,28 +1060,26 @@ read_release_history() {
   done
 }
 
-# The legs one listed release records, into RESOLVED_CLIENT_PROTOCOL and
-# RESOLVED_SERVER_PROTOCOL, or a non-zero when the history lists no such
-# release. It returns a status rather than dying, so every caller writes its own
-# `|| die` naming what it was looking for; and it assigns rather than prints, so
-# it is called directly rather than through `$(...)`.
-resolve_release_legs() {
-  local legs
-  legs="$(lookup "$MANIFEST_RELEASE_LEGS" "$1")"
-  [ -n "$legs" ] || return 1
-  RESOLVED_CLIENT_PROTOCOL="${legs%%:*}"
-  RESOLVED_SERVER_PROTOCOL="${legs#*:}"
+# Whether the history lists one release, as a status rather than a refusal, so
+# every caller writes its own `|| die` naming what it was looking for. Split on
+# the spaces `read_release_history` put there, and never globbed: every word
+# has already matched RELEASE_VERSION, which admits no `*`, `?` or `[`.
+release_listed() {
+  local listed
+  for listed in $MANIFEST_RELEASE_VERSIONS; do
+    [ "$listed" != "$1" ] || return 0
+  done
+  return 1
 }
 
-# The release a component's entry calls current. Sets RESOLVED_VERSION and the
-# RESOLVED_*_PROTOCOL legs.
+# The release a component's entry calls current. Sets RESOLVED_VERSION.
 read_versions_entry() {
   local component="$1"
 
   read_component_entry "$component"
   [[ "$MANIFEST_CURRENT" =~ $RELEASE_VERSION ]] || die "$VERSIONS_SOURCE gives $component the current version $(quote "$MANIFEST_CURRENT"), which is not a version this can install"
   RESOLVED_VERSION="$MANIFEST_CURRENT"
-  resolve_release_legs "$RESOLVED_VERSION" || die "$VERSIONS_SOURCE calls $RESOLVED_VERSION the current $component and lists no protocol beside it, and the protocol is what says whether the components on this machine can talk to each other"
+  release_listed "$RESOLVED_VERSION" || die "$VERSIONS_SOURCE calls $RESOLVED_VERSION the current $component and lists no such release beside it, and the release history is what says which versions of it exist"
 }
 
 # The newest release in one series, out of the versions a component's release
@@ -1323,7 +1165,20 @@ package_tarball() {
     esac
   done
 
-  die "no ${flat}-<version>.tgz in $AGENTPLEX_PACKAGE, and --role=$ROLE installs $1. A directory missing one of the packages a role needs would install the rest and quietly leave that one to a registry"
+  die "no ${flat}-<version>.tgz in $AGENTPLEX_PACKAGE, and every role installs $1. A directory missing one of the packages a role needs would install the rest and quietly leave that one to a registry"
+}
+
+# The version the name npm packed a tarball under carries, or nothing when it is
+# not a release version: `<flattened name>-<version>.tgz`, read the way
+# `agentplex install` reads it, since the two are compared.
+tarball_version() {
+  local flat base version
+  flat="${2#@}"
+  flat="${flat//\//-}"
+  base="$(basename "$1" .tgz)"
+  version="${base#"$flat"-}"
+  [[ "$version" =~ $RELEASE_VERSION ]] || return 0
+  printf '%s' "$version"
 }
 
 detect_platform() {
@@ -1494,15 +1349,13 @@ escalate() {
 # release that has been superseded, which a machine that adopted 24.0.0 two
 # years ago never used to get.
 #
-# The answer is also the unit's, which is the whole reason this is resolved
-# rather than merely done -- and it is now the unit's literally: ExecStart names
-# "$NODE_DIR/node", so whatever this function decides is the interpreter systemd
-# starts. That used to be an indirect claim, through a PATH the unit set so that
-# a `#!/usr/bin/env node` line could find something; the failure it was written
-# about was a version manager keeping its Node somewhere systemd has never heard
-# of. Naming the answer instead of arranging for it to be found is the same
-# decision reaching further, and the wrong answer here is now visibly wrong
-# rather than a service that dies looking for an interpreter.
+# The answer is the unit's as well, which is the whole reason this is resolved
+# rather than merely done: ExecStart names the interpreter outright, so the Node
+# this settles on is the one systemd starts. `agentplex install` writes the unit
+# and asks the same question the same way -- `resolveNodeDirectory` in
+# `apps/cli/src/installation/node-directory.ts`, held to this by its suite --
+# and gets the same answer, because it is run through the Node this function
+# chose, on the PATH `ensure_node` put that Node at the front of.
 resolve_node_directory() {
   NODE_HOME="$PREFIX/node"
 
@@ -1565,14 +1418,15 @@ ensure_node() {
   # happens.
   #
   # Every program this script starts from here down is a script whose first line
-  # is `#!/usr/bin/env node` -- npm, and then agentplex itself. A Node unpacked
-  # into the prefix is on nobody's PATH yet, so `$PREFIX/bin/npm` would resolve
-  # `node` to whatever the machine had, which is the runtime this install exists
-  # because of: too old, or absent, and in the first case it compiles a native
-  # addon against the wrong one and says nothing. Captured here rather than
-  # reasoned about -- an end-to-end run with a v20 shim ahead of PATH had npm's
-  # shebang find the shim, print its version and exit 0, and the install then
-  # reported success with no binary anywhere.
+  # is `#!/usr/bin/env node`, or starts one: npm, and agentplex, which is named
+  # through this interpreter (see `run_cli`) and runs npm for every other
+  # package. A Node unpacked into the prefix is on nobody's PATH yet, so
+  # `$PREFIX/bin/npm` would resolve `node` to whatever the machine had, which is
+  # the runtime this install exists because of: too old, or absent, and in the
+  # first case it compiles a native addon against the wrong one and says
+  # nothing. Captured here rather than reasoned about -- an end-to-end run with
+  # a v20 shim ahead of PATH had npm's shebang find the shim, print its version
+  # and exit 0, and the install then reported success with no binary anywhere.
   export PATH="$BIN_DIR:$NODE_DIR:$PATH"
 
   if [ "$NODE_ACTION" = 'adopt' ]; then
@@ -1665,11 +1519,11 @@ ensure_node() {
   # name -- so tar falls back to the numeric uid and a --system install unpacked
   # $PREFIX/node/bin/node as uid 1001, which on a machine with a first human
   # account is that person. That is the interpreter the unit's ExecStart names
-  # outright: root-owned is the whole point of keeping it out of the
-  # chown below, and an unrelated local user owning it instead is the same hole
-  # with a stranger in it. Captured, not reasoned about: the --system block
-  # asserts root over the whole of $PREFIX/node, and read UNKNOWN there until
-  # this flag was on the line.
+  # outright: root-owned is the whole point of keeping it out of what `agentplex
+  # install` gives the service account, and an unrelated local user owning it
+  # instead is the same hole with a stranger in it. Captured, not reasoned
+  # about: the --system block asserts root over the whole of $PREFIX/node, and
+  # read UNKNOWN there until this flag was on the line.
   rm -rf "$NODE_HOME.new"
   mkdir -p "$NODE_HOME.new"
   tar -xzf "$work/$file" -C "$NODE_HOME.new" --strip-components=1 --no-same-owner
@@ -1727,14 +1581,20 @@ fetch() {
 # The package
 # ---------------------------------------------------------------------------
 
-# The packages, each installed against the versions CI tested it with.
+# The command's package, installed against the versions CI tested it with.
 #
-# Every tarball carries an `npm-shrinkwrap.json`: the third-party versions this
+# The command's alone, because it is the one package that has to be here before
+# anything but bash can install the rest. `agentplex install` then installs the
+# role's other packages with the same step in TypeScript -- `installPackages`
+# in `apps/cli/src/installation/package-install.ts` -- as one set that moves in
+# whole or not at all.
+#
+# The tarball carries an `npm-shrinkwrap.json`: the third-party versions this
 # build was tested against, transitive ones included. `npm install --global
 # <tarball>` ignores it (AGX-322, Q8) and resolves every range afresh against
 # whatever the registry calls newest that day, so two machines installed a week
 # apart ran different code under one version number. npm reads a shrinkwrap only
-# when the package is the project it installs into, so each tarball is unpacked
+# when the package is the project it installs into, so the tarball is unpacked
 # first and npm is pointed at the unpacked directory.
 #
 # `npm install` and not `npm ci`, although `ci` is the command that sounds like
@@ -1743,72 +1603,61 @@ fetch() {
 # names nothing is published as -- E404 (AGX-322, Q1). `install` keeps what the
 # tarball brought and fetches the rest at the shrinkwrap's versions.
 #
-# Staged beside the tree it replaces, as `<tree>.new`, and every package the role
-# needs is staged before any tree is moved. A hub whose client failed to install
-# is a hub serving 503, so a machine ends up with the new set or keeps the old
-# one whole: any failure while staging removes every `.new` so far, and the
-# trees and the link the machine was running on are not touched. Only after the
-# last one has staged does each swap happen, as two renames on one filesystem.
+# Staged beside the tree it replaces, as `<tree>.new`, so a failure while
+# staging removes the `.new` and leaves the tree and the link the machine was
+# running on untouched. The swap is two renames on one filesystem.
 install_package() {
-  local component staged=''
-  for component in $INSTALL_COMPONENTS; do
-    staged="$staged $(package_tree "$component").new"
-  done
-  local method
-  method="unpack into${staged}; npm install --omit=dev in each, against the npm-shrinkwrap.json it carries; then move each into place and link $BIN_DIR/$PACKAGE_NAME -> $(command_link_target)"
+  local tree method
+  tree="$(package_tree cli)"
+  method="unpack into $tree.new; npm install --omit=dev in it, against the npm-shrinkwrap.json it carries; then move it into place and link $BIN_DIR/$PACKAGE_NAME -> $(command_link_target)"
 
   # The one shape the plan has two of, and the second one is a dry run that
   # declined to download. It names what would be installed and where from, and
   # not a URL it would have had to invent a version for.
-  if [ -z "$PACKAGE_SPECS" ]; then
-    report 'package' "$INSTALL_COMPONENTS from $RELEASE_DOWNLOAD_URL into $PREFIX, at whatever versions the line above resolves to"
+  if [ -z "$CLI_SPEC" ]; then
+    report 'package' "cli from $RELEASE_DOWNLOAD_URL into $PREFIX, at whatever version the line above resolves to"
     report 'method' "$method"
     return 0
   fi
 
-  report 'package' "$PACKAGE_SPECS into $PREFIX"
+  report 'package' "$CLI_SPEC into $PREFIX"
   report 'method' "$method"
   [ "$DRY_RUN" = 'no' ] || return 0
 
-  local npm globalconfig work tree tarball url
+  local npm globalconfig work tarball
   npm="$(npm_command)"
 
   # The operator's global npmrc -- a registry mirror, a proxy, a CA bundle -- has
-  # to reach every install below, and `--prefix` takes it away: npm looks for
-  # the global config under the prefix it was given, so a staging directory's
-  # own `etc/npmrc`, which does not exist (AGX-322, Q14). So the path is asked
-  # once without `--prefix`, from `/` so that no project config the run happened
-  # to start inside can answer, and handed back to each install.
+  # to reach the install below, and `--prefix` takes it away: npm looks for the
+  # global config under the prefix it was given, so a staging directory's own
+  # `etc/npmrc`, which does not exist (AGX-322, Q14). So the path is asked once
+  # without `--prefix`, from `/` so that no project config the run happened to
+  # start inside can answer, and handed back to the install.
   globalconfig="$(cd / && "$npm" config get globalconfig)" \
-    || die "npm could not say where its global config is, so the installs below could not be pointed at it"
+    || die "npm could not say where its global config is, so the install below could not be pointed at it"
 
   work="$(mktemp -d)"
-  # A failure anywhere below, a `die` or a signal, takes back every `.new` this
-  # run staged, so what is left is exactly what was there before it started.
+  # A failure anywhere below, a `die` or a signal, takes back what this run
+  # staged, so what is left is exactly what was there before it started.
   # shellcheck disable=SC2064
-  trap "rm -rf '$work'; discard_staged_packages" EXIT
+  trap "rm -rf '$work' '$tree.new'" EXIT
 
   recover_interrupted_swap
 
-  # Every tarball unpacked before npm runs once, so a download that fails or an
-  # archive that will not unpack costs nothing but the fetch. --no-same-owner
-  # for the reason the runtime's unpack gives: an archive's owner is the
-  # machine it was packed on, and tar run as root would restore it.
-  for component in $INSTALL_COMPONENTS; do
-    tree="$(package_tree "$component")"
-    if [ -n "${AGENTPLEX_PACKAGE:-}" ]; then
-      tarball="$(package_tarball "$(component_package "$component")")"
-    else
-      # PACKAGE_SPECS holds these same URLs, and tar cannot read a URL.
-      url="$(release_url "$component" "$(component_version "$component")" "$(component_asset "$component")")"
-      tarball="$work/$component.tgz"
-      say "downloading $url"
-      fetch "$url" "$tarball" || die "could not download the $component package from $url; nothing was installed"
-    fi
-    mkdir -p "$tree.new"
-    tar -xzf "$tarball" -C "$tree.new" --strip-components=1 --no-same-owner \
-      || die "could not unpack the $component package from $tarball; nothing was installed"
-  done
+  # Unpacked before npm runs, so a download that fails or an archive that will
+  # not unpack costs nothing but the fetch. --no-same-owner for the reason the
+  # runtime's unpack gives: an archive's owner is the machine it was packed on,
+  # and tar run as root would restore it.
+  if [ -n "${AGENTPLEX_PACKAGE:-}" ]; then
+    tarball="$CLI_SPEC"
+  else
+    tarball="$work/cli.tgz"
+    say "downloading $CLI_SPEC"
+    fetch "$CLI_SPEC" "$tarball" || die "could not download the cli package from $CLI_SPEC; nothing was installed"
+  fi
+  mkdir -p "$tree.new"
+  tar -xzf "$tarball" -C "$tree.new" --strip-components=1 --no-same-owner \
+    || die "could not unpack the cli package from $tarball; nothing was installed"
 
   # Every flag here was added by a probe, not by caution (AGX-322):
   #
@@ -1826,23 +1675,17 @@ install_package() {
   #
   # Run from `/`, like the question above: --prefix is where it installs, and
   # the directory this script was started in has no say.
-  for component in $INSTALL_COMPONENTS; do
-    tree="$(package_tree "$component")"
-    (cd / && "$npm" install --prefix "$tree.new" --globalconfig="$globalconfig" \
-      --omit=dev --ignore-scripts=false --package-lock=true --no-save \
-      --install-strategy=hoisted --no-audit --no-fund) \
-      || die "npm could not install the $component package ($(component_package "$component")) into $tree.new; every staged package was removed and the installed ones were left as they were"
-  done
+  (cd / && "$npm" install --prefix "$tree.new" --globalconfig="$globalconfig" \
+    --omit=dev --ignore-scripts=false --package-lock=true --no-save \
+    --install-strategy=hoisted --no-audit --no-fund) \
+    || die "npm could not install the cli package ($NPM_PACKAGE) into $tree.new; it was removed and the installed one was left as it was"
 
-  for component in $INSTALL_COMPONENTS; do
-    tree="$(package_tree "$component")"
-    rm -rf "$tree.old"
-    if [ -e "$tree" ]; then
-      mv "$tree" "$tree.old"
-    fi
-    mv "$tree.new" "$tree"
-    rm -rf "$tree.old"
-  done
+  rm -rf "$tree.old"
+  if [ -e "$tree" ]; then
+    mv "$tree" "$tree.old"
+  fi
+  mv "$tree.new" "$tree"
+  rm -rf "$tree.old"
 
   rm -rf "$work"
   trap - EXIT
@@ -1853,14 +1696,14 @@ install_package() {
   # -- the tarball packs the entry `-rw-r--r--`, and a link to it is
   # `Permission denied` (AGX-322, Q6).
   mkdir -p "$BIN_DIR"
-  chmod 0755 "$(package_tree cli)/$CLI_ENTRYPOINT"
+  chmod 0755 "$tree/$CLI_ENTRYPOINT"
   ln -sfn "$(command_link_target)" "$BIN_DIR/$PACKAGE_NAME"
 
-  [ -x "$BIN_DIR/$PACKAGE_NAME" ] || die "installed the packages and there is no $BIN_DIR/$PACKAGE_NAME to run"
+  [ -x "$BIN_DIR/$PACKAGE_NAME" ] || die "installed the package and there is no $BIN_DIR/$PACKAGE_NAME to run"
 }
 
 # Where one component's package lives under the prefix: npm's layout for a
-# global package, which the units and `uninstall_package` also name.
+# global package, which `agentplex install` and `uninstall_package` also name.
 package_tree() {
   printf '%s/lib/node_modules/%s' "$PREFIX" "$(component_package "$1")"
 }
@@ -1870,88 +1713,28 @@ command_link_target() {
   printf '../lib/node_modules/%s/%s' "$NPM_PACKAGE" "$CLI_ENTRYPOINT"
 }
 
-# Every `.new` this role stages, whether or not this run got as far as it.
-discard_staged_packages() {
-  local component
-  for component in $INSTALL_COMPONENTS; do
-    rm -rf "$(package_tree "$component").new"
-  done
-}
-
-# What a run killed partway left, put right before anything is staged.
+# What a run killed partway left of the command's tree, put right before
+# anything is staged.
 #
 # A `.new` is a staging nobody finished, and is discarded. A `.old` beside its
 # tree is a swap that got as far as the second rename, and is discarded too. A
 # `.old` with no tree beside it is the one that matters: the run was killed
-# between the two renames, and the machine's package is intact under a name
-# nothing starts. It goes back, so a failure below still leaves the machine with
-# the package it had. All four components, whatever the role: these are names
-# only this script writes.
+# between the two renames, and the machine's command is intact under a name
+# nothing starts. It goes back, so a failure below still leaves the machine
+# with the command it had. The command's tree only, because it is the one this
+# step stages: `agentplex install` puts back the others before it stages its
+# own set.
 recover_interrupted_swap() {
-  local component tree
-  for component in $COMPONENTS; do
-    tree="$(package_tree "$component")"
-    rm -rf "$tree.new"
-    [ -e "$tree.old" ] || continue
-    if [ -e "$tree" ]; then
-      rm -rf "$tree.old"
-    else
-      mv "$tree.old" "$tree"
-      say "restored $tree, which an interrupted install had set aside as $tree.old"
-    fi
-  done
-}
-
-# What the service account owns on a --system machine: its state and the trees
-# npm writes into, and not the interpreter it is started through.
-#
-# Something under the prefix has to be writable by that account. `agentplex
-# setup` installs providers with `npm install --global --prefix $PREFIX` as the
-# service account, so a wholly root-owned prefix would turn the first provider
-# install into a permission error nobody would connect to this script. The
-# question this answers is how much.
-#
-# `chown -R $PREFIX` was the old answer, and the blast radius was the whole
-# prefix. This account runs coding agents, which is the most exposed program on
-# the machine; owning the prefix meant owning $PREFIX/node/bin/node -- the
-# interpreter ExecStart resolves through -- so anything that got out of a
-# session could replace the runtime and be re-executed on every restart
-# thereafter, and could rewrite the settings file holding the client token.
-#
-# So: the two directories npm installs a global package into, $PREFIX/share
-# beside them, and the state directory. $PREFIX itself, $PREFIX/lib and
-# $PREFIX/node stay root's.
-#
-# $PREFIX/share is the one that is not obvious. npm links a package's man pages
-# into <prefix>/share/man and creates the directory on the way, so an account
-# that cannot write the prefix root ends a provider install with EACCES on
-# mkdir. Run rather than reasoned about: npm 11 installing a package with a
-# `man` field into a prefix whose root it did not own failed exactly there, and
-# succeeded once share/ existed and was its own.
-#
-# What this does not buy, and the comment must not be read as claiming: the
-# account still owns $PREFIX/lib/node_modules and $PREFIX/bin, so it can still
-# overwrite agentplex's own code and the link that is started. It cannot replace
-# the interpreter and it cannot rewrite its own settings. That is a reduction in
-# what one compromised session reaches, not isolation from it; isolating the
-# package tree as well means a second prefix for providers, which is not this.
-grant_service_account_ownership() {
-  [ "$UNIT_SCOPE" = 'system' ] || return 0
-
-  report 'ownership' "$SERVICE_USER owns $BIN_DIR, $PREFIX/lib/node_modules, $PREFIX/share and $STATE_DIR; root keeps $NODE_HOME and $ENV_FILE"
-  [ "$DRY_RUN" = 'no' ] || return 0
-
-  # Created rather than assumed to be there. `install_package` makes bin/ and
-  # lib/node_modules, but nothing makes share/ until npm installs a provider
-  # with man pages, and useradd made the state directory only if this run was
-  # the one that created the account -- so a chown on its own would die on a
-  # path that is simply not there yet. Recursive, so it reaches every tree the
-  # swap just moved into place, all of which root unpacked and npm filled.
-  local path
-  for path in "$BIN_DIR" "$PREFIX/lib/node_modules" "$PREFIX/share" "$STATE_DIR"; do
-    mkdir -p "$path"
-    chown -R "$SERVICE_USER:$SERVICE_USER" "$path"
-  done
+  local tree
+  tree="$(package_tree cli)"
+  rm -rf "$tree.new"
+  [ -e "$tree.old" ] || return 0
+  if [ -e "$tree" ]; then
+    rm -rf "$tree.old"
+  else
+    mv "$tree.old" "$tree"
+    say "restored $tree, which an interrupted install had set aside as $tree.old"
+  fi
 }
 
 # The npm that belongs to the Node this run settled on, taken from beside it.
@@ -1963,6 +1746,10 @@ grant_service_account_ownership() {
 # NODE_DIR is $PREFIX/node/bin rather than $PREFIX/bin. Beside-it is right for
 # an adopted Node too: whatever version manager put that node there put its npm
 # in the same directory.
+#
+# `resolveNpm` in `apps/cli/src/installation/package-install.ts` is the same
+# rule for the same reason, and bash keeps its own because this one runs before
+# there is a bin to ask.
 npm_command() {
   if [ -x "$NODE_DIR/npm" ]; then
     echo "$NODE_DIR/npm"
@@ -1974,133 +1761,11 @@ npm_command() {
 }
 
 # ---------------------------------------------------------------------------
-# Configuration and the unit
+# The units, which are the command's
 # ---------------------------------------------------------------------------
 
-# Written once, and never again.
-#
-# Everything in this file is a decision somebody made -- by hand, or through
-# `agentplex setup` -- and an installer that rewrote it on every upgrade would
-# undo them. So an existing file is left exactly as it is, and this says so
-# rather than silently doing nothing.
-write_environment_file() {
-  if [ -e "$ENV_FILE" ]; then
-    report 'settings' "$ENV_FILE (already there, left alone)"
-    return 0
-  fi
-
-  report 'settings' "$ENV_FILE (create)"
-  [ "$DRY_RUN" = 'no' ] || return 0
-
-  # The server's identity file, written out on the fleet tier only.
-  #
-  # On a per-user install the line stays commented, naming
-  # $STATE_DIR/server.json -- the prefix, on this tier -- because
-  # `agentplex setup` is what mints the file there, and setup replaces this
-  # line with the path it minted. That is what keeps a --prefix install to one
-  # identity: unset, the server keeps its identity at
-  # $HOME/.agentplex/server.json, which is this prefix only when the prefix is
-  # the default one, and a server that read the default under any other would
-  # mint a second identity with a token nobody was shown. A run with
-  # --no-setup mints nothing here, so the server's default is the only
-  # identity there is until setup runs.
-  #
-  # On --system the account's home is the state directory, and that default
-  # would be $STATE_DIR/.agentplex/server.json: a file nothing mints, under a
-  # directory nothing else uses. So the fleet tier names the file outright, in
-  # the state directory the account owns, and never leans on the default. Not
-  # in the prefix, which is root's there and the account may not write.
-  # Written whatever the role: this file is written once, and a hub that later
-  # runs a server beside it should not have to learn this line then.
-  local server_identity="#AGENTPLEX_SERVER_IDENTITY_FILE=$STATE_DIR/server.json"
-  if [ "$UNIT_SCOPE" = 'system' ]; then
-    server_identity="AGENTPLEX_SERVER_IDENTITY_FILE=$STATE_DIR/server.json"
-  fi
-
-  mkdir -p "$(dirname "$ENV_FILE")"
-  # 0600 before anything is written into it: the client token lives here, and a
-  # file that is briefly world-readable is world-readable. A --system run widens
-  # it below by exactly the group-read bit, after the write and never before it,
-  # so the file is never wider than the mode it ends up with.
-  ( umask 077 && cat >"$ENV_FILE" <<ENVIRONMENT
-# agentplex settings, read by the systemd units as an EnvironmentFile. Both
-# daemons read this one file, and each reads only the keys it needs.
-#
-# install.sh wrote this file once and will not touch it again. Three lines are
-# uncommented because they are the three facts the installer had: the role you
-# asked for, the prefix it created, and the bin path inside it -- and on a
-# --system install a fourth, the server's identity file. The rest is
-# commented out because guessing a database path or a store path is worse than
-# leaving one absent -- fill them in, or let \`$PACKAGE_NAME setup\` do it.
-#
-# Every setting here has a flag as well, and the flag wins. The whole table is
-# at $DOCS_URL
-
-AGENTPLEX_ROLE=$ROLE
-
-# The prefix this install created, recorded so that it can be given back. No
-# daemon reads this line: it is here for the person who runs
-# \`$PACKAGE_NAME setup --prefix=\$AGENTPLEX_PREFIX\` on this machine later, and
-# for whoever is reading the file to find out where everything went. A setup run
-# that is not told owns \$HOME/.agentplex instead, which on a machine installed
-# anywhere else is a second prefix nothing points at.
-AGENTPLEX_PREFIX=$PREFIX
-
-# Where agent binaries are looked for, ahead of the PATH this service inherits.
-# A systemd unit gets a minimal PATH with no version-manager shims in it, so a
-# \`claude\` that resolves in your shell does not resolve here; recording the
-# directory is what makes that stop mattering. Separate several with ':'.
-AGENTPLEX_BIN_PATH=$BIN_DIR
-
-# The hub's half. Both are required for role=hub and role=both.
-#AGENTPLEX_DATABASE_FILE=$STATE_DIR/hub.sqlite
-#AGENTPLEX_CLIENT_TOKEN=
-
-# The server beside the hub, for role=both: the hub pairs it at boot from the
-# token in that identity file, so nobody types one. \`$PACKAGE_NAME setup\`
-# fills these in.
-#AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=$STATE_DIR/server.json
-#AGENTPLEX_LOCAL_SERVER_PORT=8081
-
-# The server's half. The identity file holds this server's identity and the
-# pairing token; \`$PACKAGE_NAME setup\` records here the one it mints. Unset,
-# the server keeps it at \$HOME/.agentplex/server.json. Store paths are
-# absolute and ':'-separated.
-$server_identity
-#AGENTPLEX_STORE_PATH=
-
-# The directories a client may browse when somebody picks a project on this
-# machine. Absolute and ':'-separated, like the store paths. Anything under one
-# of these can be listed by a client of any hub this server is paired with, and
-# nothing else can. Unset means this server lists no directory at all, which is
-# the default: \`$PACKAGE_NAME setup\` asks before it writes one.
-#AGENTPLEX_BROWSE_ROOTS=
-
-#AGENTPLEX_HOST=127.0.0.1
-#AGENTPLEX_HUB_PORT=8080
-#AGENTPLEX_SERVER_PORT=8081
-#AGENTPLEX_LOG_LEVEL=info
-ENVIRONMENT
-  )
-
-  # Root's file, read by the daemon and writable by nothing the daemon runs.
-  #
-  # The account needs what is in here -- the client token, the paths -- so it
-  # gets group read and nothing else. A daemon that can rewrite its own settings
-  # is a session that can point this machine's server at another hub on the next
-  # restart, and the file is written once by an installer anyway: there is no
-  # step after this one that has any business writing it as the account.
-  #
-  # The owner and the mode are one decision and are set together. 0640 owned by
-  # the account is the account writing it again, and root:account at 0600 is a
-  # daemon that cannot read its own settings.
-  if [ "$UNIT_SCOPE" = 'system' ]; then
-    chown "root:$SERVICE_USER" "$ENV_FILE"
-    chmod 0640 "$ENV_FILE"
-  fi
-}
-
 # The unit file a daemon gets: agentplex-hub.service, agentplex-server.service.
+# `agentplex install` writes them; --uninstall and the summary look for them.
 unit_file() {
   echo "$UNIT_DIR/${PACKAGE_NAME}-$1.service"
 }
@@ -2111,11 +1776,9 @@ unit_file() {
 # The answer is a reason rather than a yes or a no, and the two reasons stay
 # apart because they send the operator to different places: macOS wants
 # launchd, and a Linux box without systemctl wants systemd installed or the
-# daemon started by hand.
-#
-# It answers and says nothing. A predicate that reports prints its line once
-# per caller, which is how a question two steps asked ended up in the plan
-# twice; the step that needs the answer reports it instead.
+# daemon started by hand. `agentplex install` asks the same question before it
+# writes a unit, in the same words; this is asked for the units --uninstall has
+# to stop and for what the summary says.
 resolve_unit_support() {
   if [ "$PLATFORM" != 'linux' ]; then
     UNIT_SKIP_REASON='macOS has no systemd, hand the process to launchd'
@@ -2124,243 +1787,22 @@ resolve_unit_support() {
   fi
 }
 
-# The units, written and never started. There is no client token, no database
-# file and no store path until setup or the operator has filled the settings
-# file in, so a unit this script started would be a service that fails on its
-# first line. The summary says what to run once the file is complete.
-write_units() {
-  if [ -n "$UNIT_SKIP_REASON" ]; then
-    report 'unit' "skipped: $UNIT_SKIP_REASON"
-    return 0
-  fi
-
-  local daemon file
-  for daemon in $DAEMONS; do
-    file="$(unit_file "$daemon")"
-    if [ -e "$file" ]; then
-      # Same argument as the settings file: a unit somebody edited is a decision,
-      # and `--print-unit` shows what this version would have written, so an
-      # operator can diff the two rather than have one silently replaced.
-      report 'unit' "$file (already there, left alone; --print-unit shows this version)"
-      continue
-    fi
-    report 'unit' "$file (write, not enabled)"
-    [ "$DRY_RUN" = 'no' ] || continue
-    mkdir -p "$UNIT_DIR"
-    render_unit "$daemon" >"$file"
-  done
-}
-
-# How a daemon is started, as one command line: the interpreter this install
-# settled on, and the daemon's compiled entry inside the package npm wrote.
+# `--print-unit`, which this script answers by asking the command.
 #
-# It used to be "$BIN_DIR/$PACKAGE_NAME $daemon", and that stopped being true
-# rather than stopped being tidy. A daemon is not a command: there is no
-# `agentplex hub` to type, no hub bin on anybody's PATH, and the one binary this
-# package installs answers `hub` by explaining what a hub is. So the unit has to
-# name the program it starts, and the only name a program has here is its file.
-#
-# Both halves are constants this script already carries, which is the whole
-# argument for the shape. $NODE_DIR is the runtime it adopted or unpacked --
-# already the thing it asserts is executable before it declares the runtime
-# ready. The package directory is npm's own layout, which `uninstall_package`
-# already bets on. Inside it the path is the workspace's, the same in a
-# checkout, in the image and in the tarball, because packaging keeps that layout
-# on purpose.
-#
-# The package is the daemon's own now, not the one package there used to be: a
-# hub machine has no `.../agentplex-server` directory to point at, and naming
-# the wrong one would be a unit that starts nothing on exactly the machine the
-# split was for.
-#
-# It is strictly better than what it replaces, and not only equivalent. The old
-# ExecStart named a script whose first line is #!/usr/bin/env node, so systemd
-# started a program that then went looking for its own interpreter on a PATH the
-# unit had to be careful to set -- a service that dies before `main` on a machine
-# where that lookup lands somewhere else, with an error about `node` and nothing
-# about agentplex. Naming the interpreter deletes that failure rather than
-# guarding against it: this unit starts this Node, and no search decides.
-daemon_command() {
-  printf '%s %s' "$NODE_DIR/node" \
-    "$PREFIX/lib/node_modules/$(daemon_package "$1")/apps/$1/dist/main.js"
-}
+# The units are rendered in one place now, `renderUnit` in the command, and the
+# command answers `--print-unit` for the same arguments. It asks nothing but
+# which interpreter the units name, so it still reaches no network. What it
+# needs is the command in the prefix and a Node to run it on; without them there
+# is nothing here to render with, and the run stops naming the command that
+# renders them rather than printing a unit out of a second copy of the template.
+print_units() {
+  local command
+  command="$BIN_DIR/$PACKAGE_NAME install --print-unit$(typed_arguments)"
 
-# The package that holds one daemon's compiled entry.
-#
-# Every daemon is a component, so this is `component_package` with the two
-# components that are not daemons refused: `cli` holds no daemon and `web` is
-# static files. Going through the one table rather than a second copy of it is
-# what keeps a machine's ExecStart from depending on the published names
-# happening to end in the daemon's word.
-daemon_package() {
-  case "$1" in
-    hub | server) component_package "$1" ;;
-    *) die "no package holds a $1 daemon" ;;
-  esac
-}
+  [ -f "$(cli_entry)" ] || die "the units are rendered by $command, and there is no $PACKAGE_NAME in $PREFIX to run it with. Install first -- this script without --print-unit -- or run that command on a machine where $PACKAGE_NAME is installed"
+  [ -x "$NODE_DIR/node" ] || die "the units are rendered by $command, and there is no Node of v${NODE_MAJOR} or better here to run it on. Install first -- this script without --print-unit -- and run it again"
 
-# One unit, as text, from the paths this run resolved. Both daemons read the
-# one settings file; each reads only the keys it needs, so a setting the other
-# owns is not an error. Order does not matter: the hub dials the server and
-# retries, so whichever comes up second is dialled when it is there.
-#
-# It is a here-doc and not a file beside this script on purpose: this script is
-# fetched on its own over HTTPS and run, so anything it cannot carry inside
-# itself is a second download and a second thing to get wrong.
-render_unit() {
-  local daemon="$1"
-  local install_target='default.target'
-  local identity=''
-  # network-online.target belongs to the system manager. A user manager has its
-  # own much smaller set of targets and no such unit, so naming it in a user
-  # unit orders against nothing at all -- a line that reads as a guarantee and
-  # is not one. Nothing replaces it: both daemons dial out and retry, so there
-  # is nothing here for an ordering to buy.
-  local network_ordering=''
-  # `systemctl reload agentplex-server` -> SIGHUP -> the server asks this
-  # machine again what its providers are, and tells the hubs if the answer
-  # moved. It is here for the operator who has just installed a coding agent or
-  # just logged one in on a box that is already running: without it the fleet
-  # goes on reporting what was true at boot until somebody restarts the
-  # service, which drops every session on the machine to publish a fact.
-  #
-  # The server only. The hub reads no providers, so there is nothing for it to
-  # re-read -- and a SIGHUP to a Node process with no listener for it is a
-  # process that exits, so a line that offered `reload` on the hub would be a
-  # verb that restarts it. A unit with no ExecReload refuses `reload` and says
-  # so, which is the honest answer for a daemon that has nothing to reload.
-  local reload=''
-  if [ "$daemon" = 'server' ]; then
-    # `/bin/sh` and its builtin, not `/bin/kill`. There is no kill binary to
-    # name on a minimal machine: debian:bookworm-slim ships none at any path,
-    # because `kill` belongs to procps and a slim image drops it, and a unit
-    # naming a program that is not there is one systemd refuses at `reload` --
-    # `systemd-analyze verify` says so in the bootstrap container. A shell is
-    # the one interpreter every Linux has, and `kill` is builtin to it, so this
-    # spawns nothing that has to have been installed.
-    #
-    # `\$MAINPID` stays a literal: systemd puts MAINPID in the environment of
-    # the reload process, so the shell reads it there at reload time. Expanding
-    # it here would write the installing shell's empty value instead.
-    reload="ExecReload=/bin/sh -c 'kill -HUP \$MAINPID'
-"
-  fi
-  # How a stop is delivered, the server only. systemd's default is
-  # control-group: SIGTERM to every process in the unit at once. A session's
-  # agent is in this unit's cgroup -- forkpty gives it its own session, not its
-  # own cgroup, and systemd kills by cgroup -- so the default would terminate
-  # every agent in the same millisecond the server starts draining for them.
-  # mixed signals the main process alone, and SIGKILLs whatever is left in the
-  # cgroup once it exits or at TimeoutStopSec, whichever comes first. The server
-  # closes its terminals itself before it exits, so anything that kill finds is
-  # something that already outlived its SIGHUP and its grace.
-  #
-  # The hub runs no children to spare, so it keeps the default.
-  local kill_mode=''
-  if [ "$daemon" = 'server' ]; then
-    kill_mode="KillMode=mixed
-"
-  fi
-  if [ "$UNIT_SCOPE" = 'system' ]; then
-    install_target='multi-user.target'
-    identity="User=$SERVICE_USER
-Group=$SERVICE_USER
-"
-    network_ordering="After=network-online.target
-Wants=network-online.target
-"
-  fi
-
-  cat <<UNIT
-[Unit]
-Description=agentplex $daemon
-Documentation=$DOCS_URL
-${network_ordering}
-[Service]
-Type=simple
-${identity}WorkingDirectory=$STATE_DIR
-EnvironmentFile=$ENV_FILE
-# The prefix goes first, and the directory holding the node this install
-# settled on comes with it when that is somewhere a service would never look --
-# $PREFIX/node/bin, or a version manager's shims.
-#
-# The reason is no longer ExecStart. That line names the interpreter and the
-# script outright, so it resolves nothing through this PATH and cannot be the
-# #!/usr/bin/env node failure it used to be. What is left is everything the
-# daemon starts afterwards, and it is reason enough on its own: a session is not
-# only the agent, it shells out to git, rg and whatever else the project needs,
-# and the coding agents agentplex setup installs into the prefix's bin are
-# themselves scripts whose first line is #!/usr/bin/env node, which finds
-# nothing unless the runtime's own directory is named here. In front of the rest
-# of the machine rather than instead of it.
-Environment=PATH=$(unit_search_path)
-ExecStart=$(daemon_command "$daemon")
-${reload}Restart=on-failure
-RestartSec=5s
-# Exit 2 is the daemon saying the configuration is wrong. Restarting will not
-# help and the operator has to act, so the unit stops instead of hiding the
-# message in a restart loop.
-RestartPreventExitStatus=2
-# SIGTERM is the default and the signal main.ts shuts down on. The server drains
-# first -- it waits for the turns it is holding to reach a boundary -- and that
-# wait is only worth anything because systemd signals the server alone: the
-# server's unit carries KillMode=mixed, so the agents it is waiting for are not
-# sent the same SIGTERM in the same millisecond, and whatever is left in the
-# cgroup is SIGKILLed once the server exits. The drain and TimeoutStopSec lines
-# are the one number that bounds both halves of the drain: the daemon stops
-# waiting with the margin still to go, and systemd's SIGKILL is what it is
-# racing. A second SIGTERM means the operator is done waiting and skips to the
-# kill -- sent with \`systemctl kill --kill-whom=main\`, because a bare
-# \`systemctl kill\` signals every process in the unit whatever KillMode says.
-# The hub ignores the drain setting; both daemons share this unit template.
-${kill_mode}Environment=AGENTPLEX_SERVER_DRAIN_SECONDS=$((STOP_TIMEOUT_SECONDS - STOP_KILL_MARGIN_SECONDS))
-TimeoutStopSec=${STOP_TIMEOUT_SECONDS}s
-
-# There is deliberately no sandboxing here -- no ProtectHome, no
-# ProtectSystem=strict, no NoNewPrivileges. This service's job is to run a
-# developer's own tooling as that developer, against their home directory and
-# their checkouts, and every one of those directives turns that job into a
-# failure that reads like a bug in the agent. The isolation that matters is the
-# account this runs as, and that is settled by where this unit lives: a user
-# unit runs as its user, and the system unit carries User=.
-
-[Install]
-WantedBy=$install_target
-UNIT
-}
-
-# What the unit's PATH is, in order.
-#
-# The prefix, then the Node directory when it is neither the prefix nor
-# somewhere a service already searches, then the machine.
-#
-# What this is for changed when ExecStart started naming the interpreter. It is
-# no longer what stops the unit dying on the `#!/usr/bin/env node` line of the
-# program it was pointed at -- nothing is pointed at any more, systemd starts a
-# node this script names in full -- and keeping the old sentence would be
-# defending a line with a reason it no longer has.
-#
-# It is still needed, for the processes the daemon starts rather than for the
-# daemon. $BIN_DIR is where `agentplex setup` installs the coding agents, and
-# every one of them is a script looking for `node`; a session then shells out to
-# git, rg and whatever else the project needs, which is what the machine's own
-# directories at the end are for. The Node directory is named for the agents and
-# not for us: it is $PREFIX/node/bin, or a version manager's shims under ~/.nvm
-# or ~/.local/share/fnm, and either way it is somewhere systemd would never look.
-# One mechanism for both, so that a Node in an unexpected place has only ever had
-# one answer.
-unit_search_path() {
-  local standard='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-  local path="$BIN_DIR"
-
-  if [ "$NODE_DIR" != "$BIN_DIR" ]; then
-    case ":$standard:" in
-      *":$NODE_DIR:"*) ;;
-      *) path="$path:$NODE_DIR" ;;
-    esac
-  fi
-
-  printf '%s:%s' "$path" "$standard"
+  run_cli install --print-unit ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}
 }
 
 # The dedicated account for the fleet case, where there is no human user to be.
@@ -2381,6 +1823,115 @@ ensure_service_account() {
   # nowhere to put one. No password is set, so nobody logs into it.
   useradd --system --create-home --home-dir "$STATE_DIR" --shell /bin/sh "$SERVICE_USER"
   install --directory --owner="$SERVICE_USER" --group="$SERVICE_USER" --mode=0755 "$STATE_DIR"
+}
+
+# ---------------------------------------------------------------------------
+# Handing over to agentplex install
+# ---------------------------------------------------------------------------
+
+# The command's entry in the prefix: the file the link in the prefix's bin
+# points at, and what the rest of the install runs as.
+cli_entry() {
+  printf '%s/%s' "$(package_tree cli)" "$CLI_ENTRYPOINT"
+}
+
+# The operator's own arguments, as typed, each after a space -- or nothing.
+typed_arguments() {
+  [ "${#INSTALL_ARGS[@]}" -eq 0 ] || printf ' %s' "${INSTALL_ARGS[@]}"
+}
+
+# The command, run through the interpreter this run settled on.
+#
+# Named outright rather than as $BIN_DIR/agentplex, whose first line is
+# `#!/usr/bin/env node` and would search a PATH for its interpreter -- the
+# search `ensure_node` has a captured note about, where a v20 shim ahead of
+# PATH answered it. The PATH is this run's, which `ensure_node` already put the
+# runtime at the front of, and every variable this run was started with goes
+# with it: AGENTPLEX_VERSIONS and AGENTPLEX_PACKAGE are the command's seams as
+# well as this script's, and it reads them for the rest of the install.
+#
+# stdin is /dev/null, for the reason `run_setup` gives at length: under
+# `curl | bash` this script is bash's stdin, and a child that read it would eat
+# the rest of the script.
+run_cli() {
+  "$NODE_DIR/node" "$(cli_entry)" "$@" </dev/null
+}
+
+# Whether the prefix already holds the command this run would install, runnable.
+#
+# The version is read out of the package's own manifest and parsed: a word off a
+# disk is a claim, and one that is not a version is a command this cannot say
+# anything about. Every way of not knowing answers no, which is the direction
+# that does not over-claim -- a dry run that could have asked and did not says
+# so, and one that asked a command at some other version would print the plan
+# of a different install.
+installed_cli_is() {
+  local wanted="$1" manifest version
+  [ -n "$wanted" ] || return 1
+  [ -x "$NODE_DIR/node" ] || return 1
+  [ -f "$(cli_entry)" ] || return 1
+  manifest="$(package_tree cli)/package.json"
+  [ -f "$manifest" ] || return 1
+  version="$(json_string "$(flatten_json "$(cat "$manifest")")" 'version')" || return 1
+  [[ "$version" =~ $RELEASE_VERSION ]] || return 1
+  [ "$version" = "$wanted" ]
+}
+
+# The rest of the install, which is `agentplex install`'s.
+#
+# The command resolves and installs the role's other packages, checks that they
+# agree on each protocol leg, gives the service account the directories it
+# writes into, and writes the settings file and a unit per daemon, never
+# started. It is handed exactly what the operator typed, so a word the two
+# grammars read differently cannot be an install that means one thing typed at
+# the script and another once the script hands over.
+#
+# **A dry run** installed nothing above, so on a first run there is no command
+# to ask. What it can say is which command would plan the rest, with the
+# arguments it would be given; running the command out of a tarball without
+# installing it would need its dependencies installed, and that is an install.
+# On a re-run the command is already here, and when it is the version this run
+# would leave, it is asked for its half of the plan.
+#
+# **A real run** has just put the command there. A pin can name a release older
+# than the handover, so the command is asked first whether it has `install`,
+# and a command that does not is named rather than run into a usage error the
+# operator did not know they were asking for.
+hand_over() {
+  local command
+  if [ "$DRY_RUN" = 'yes' ]; then
+    command="$BIN_DIR/$PACKAGE_NAME install --dry-run$(typed_arguments)"
+    if installed_cli_is "$CLI_VERSION"; then
+      report 'install' "$command"
+      say ''
+      run_cli install --dry-run ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}
+      say ''
+      return 0
+    fi
+
+    local why="$PREFIX holds no $PACKAGE_NAME $CLI_VERSION to run it with yet"
+    [ -n "$CLI_VERSION" ] || why='this dry run resolved no version of it to look for'
+    report 'install' "not run: $command plans the rest once $PACKAGE_NAME is installed -- the role's other packages, the settings file and the units -- and $why"
+    return 0
+  fi
+
+  local version="${CLI_VERSION:-from $CLI_SPEC}"
+  run_cli install --help >/dev/null 2>&1 || die "the $PACKAGE_NAME $version this installed has no \`install\` command, and everything after the runtime is that command's now. Pin --package-version to a release that has \`$PACKAGE_NAME install\`. $PACKAGE_NAME itself is at $BIN_DIR/$PACKAGE_NAME; nothing else was installed"
+
+  command="$BIN_DIR/$PACKAGE_NAME install$(typed_arguments)"
+  report 'install' "$command"
+  say ''
+
+  local status='0'
+  run_cli install ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"} || status="$?"
+  say ''
+
+  if [ "$status" != '0' ]; then
+    say "$PACKAGE_NAME install exited $status, and what it said is above. $PACKAGE_NAME itself is"
+    say "installed at $BIN_DIR/$PACKAGE_NAME, so this can be run again once that is dealt with,"
+    say "and \`$BIN_DIR/$PACKAGE_NAME doctor\` reads what is here."
+    exit "$status"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -2687,17 +2238,15 @@ summary() {
   if [ -n "$UNIT_SKIP_REASON" ]; then
     say ''
     say "No unit was written: $UNIT_SKIP_REASON."
-    say "Nothing will start ${PACKAGE_NAME} for you, so run a daemon yourself once"
-    say "$ENV_FILE is complete:"
-    for daemon in $DAEMONS; do
-      # The same line the unit would have carried, and long for the same reason:
-      # there is no command for a daemon, so there is nothing shorter to print
-      # that would start one. An operator handing this to launchd needs the
-      # literal argv anyway, and a short form they had to expand themselves is
-      # where a wrong interpreter gets chosen.
-      say "  $(daemon_command "$daemon")"
-    done
-    say 'What to hand it to instead -- launchd on macOS -- is in the documentation below.'
+    say "Nothing will start ${PACKAGE_NAME} for you, so run each daemon yourself once"
+    say "$ENV_FILE is complete. The command is each unit's ExecStart line, which"
+    # The units are the command's to render, on any machine, so this names the
+    # command that prints them rather than keeping a second copy of the line
+    # here. An operator handing a daemon to launchd needs the literal argv, and
+    # this is where it comes from: the interpreter and the daemon's own file,
+    # because there is no command for a daemon to type.
+    say "  $BIN_DIR/$PACKAGE_NAME install --print-unit$(typed_arguments)"
+    say 'prints. What to hand it to instead -- launchd on macOS -- is in the documentation below.'
   else
     for daemon in $DAEMONS; do
       [ -e "$(unit_file "$daemon")" ] && units="$units ${PACKAGE_NAME}-$daemon"
@@ -2712,9 +2261,9 @@ summary() {
       # The instructions were correct and they made the operator carry a fact
       # this machine already knows: whether their units belong to the user
       # manager or the system one, and therefore which systemctl reaches them.
-      # `agentplex start` reads that off the settings file written above -- the
-      # same file, the same branch that chose the unit directory -- and does
-      # both steps. `agentplex setup` runs it at the end of a successful run, so
+      # `agentplex start` reads that off the settings file `agentplex install`
+      # wrote -- the same file, the same branch that chose the unit directory --
+      # and does both steps. `agentplex setup` runs it at the end of a successful run, so
       # on the ordinary path nobody types this at all; it is here for the
       # machine that took --no-setup, and for the second time.
       say "  $BIN_DIR/$PACKAGE_NAME start"

@@ -29,13 +29,22 @@ import { CLI_PACKAGE, ENTRYPOINT, PACKAGES } from './assemble-package.js';
 
 /**
  * `install.sh`, exercised the two ways it can be exercised without a machine to
- * throw away: `--dry-run`, which resolves every decision and performs none, and
- * `--print-unit`, which renders the systemd unit from those decisions.
+ * throw away: `--dry-run`, which resolves every decision the script still makes
+ * and performs none, and `--print-unit`, which it answers by handing over.
+ *
+ * The script is the bootstrap now. It gets a runtime, a toolchain, a service
+ * account and the command's own package onto the machine, and then hands the
+ * rest to `agentplex install`: the role's other packages, the protocol check,
+ * ownership, the settings file and the units are that command's, and its own
+ * suites hold them. What is asserted here is the script's half, and the
+ * handover itself -- against a stand-in for the command that prints the
+ * arguments it was given, because the command's behaviour is not this suite's
+ * to assert.
  *
  * The rest -- downloading a runtime, installing a toolchain, creating a service
- * account -- is checked in the `bootstrap-check` Docker stage, on a stock
- * `debian:bookworm-slim`, because those steps are only true against a machine
- * that has none of them.
+ * account, and the real command taking over -- is checked in the
+ * `bootstrap-check` Docker stage, on a stock `debian:bookworm-slim`, because
+ * those steps are only true against a machine that has none of them.
  *
  * Every run here goes through `nobody` when the suite itself is root, which it
  * is in the check container. That is not tidiness: the first rule this script
@@ -366,38 +375,6 @@ function escaped(value: string): string {
 }
 
 /**
- * The compiled entry a unit's ExecStart names, for one daemon under one prefix.
- *
- * There is no `agentplex hub` any more, so a unit cannot start a daemon by
- * naming a command: it names the interpreter and this file. The path is the
- * workspace's inside the directory npm wrote, which is the same layout a
- * checkout, the image and the tarball all keep -- so this expression is the
- * whole of what packaging has to preserve for a unit to work.
- *
- * The directory is the daemon's *own* package. Each daemon is published
- * separately, so a hub machine has no server package to point into and a server
- * machine has no hub package -- naming the command's package here, as this did
- * while there was one, would be an ExecStart at a path that does not exist on
- * the machine the split was for.
- */
-function daemonEntry(prefix: string, daemon: string): string {
-  return `${prefix}/lib/node_modules/@softiesolutions/agentplex-${daemon}/apps/${daemon}/dist/main.js`;
-}
-
-/**
- * The components a role installs, in the order the script builds them.
- *
- * The command is in every row because `setup` and `doctor` belong on every
- * machine; the client is in every row a hub is in, because a hub without it
- * serves 503.
- */
-function roleComponents(role: string): readonly string[] {
-  if (role === 'hub') return ['cli', 'hub', 'web'];
-  if (role === 'server') return ['cli', 'server'];
-  return ['cli', 'hub', 'web', 'server'];
-}
-
-/**
  * One published tarball's URL.
  *
  * Written out here rather than read from the script, because this is the one
@@ -413,36 +390,13 @@ function releaseUrl(component: string, version: string): string {
   );
 }
 
-/** The URLs a role hands npm, in the order the script builds them. */
-function packageSpecs(role: string, versions: Readonly<Record<string, string>> = CURRENT): string {
-  return roleComponents(role)
-    .map((component) => releaseUrl(component, versions[component] ?? ''))
-    .join(' ');
-}
-
 /**
- * The ExecStart lines of a rendered unit, split into the interpreter and the
- * script.
- *
- * The interpreter is returned rather than asserted against a literal on
- * purpose. Which node the script settles on is the machine's answer -- one
- * already on PATH, or the one it unpacked into the prefix -- so writing a path
- * here would make these tests about the machine the suite runs on. What every
- * caller does assert is that it ends in `/node`: naming the interpreter rather
- * than leaving a `#!/usr/bin/env node` line to find one is the change, and an
- * ExecStart that had drifted back to a bare command word would fail this parse
- * rather than pass a weaker assertion.
+ * What the script's own `package` step hands npm: the command's tarball, and
+ * nothing else. Every other package a role needs is `agentplex install`'s to
+ * resolve and fetch.
  */
-function execStarts(unit: string): readonly { interpreter: string; script: string }[] {
-  return unit
-    .split('\n')
-    .filter((line) => line.startsWith('ExecStart='))
-    .map((line) => {
-      const match = /^ExecStart=(\S+) (\S+)$/.exec(line);
-      if (match === null) throw new Error(`not an interpreter and a script: ${line}`);
-      expect(match[1]).toMatch(/\/node$/);
-      return { interpreter: match[1] ?? '', script: match[2] ?? '' };
-    });
+function cliSpec(version = CURRENT['cli'] ?? ''): string {
+  return releaseUrl('cli', version);
 }
 
 /** Every line of the plan the unit step printed. */
@@ -482,7 +436,6 @@ interface Host {
 }
 
 const LINUX_WITH_SYSTEMD: Host = { kernel: 'Linux', architecture: 'x86_64', systemctl: true };
-const LINUX_WITHOUT_SYSTEMD: Host = { kernel: 'Linux', architecture: 'x86_64', systemctl: false };
 const MACOS: Host = { kernel: 'Darwin', architecture: 'arm64', systemctl: false };
 
 /**
@@ -613,45 +566,6 @@ function summaryWithUnits(role: string): { readonly home: string; readonly resul
   chmodSync(driver, 0o755);
 
   return { home, result: run(driver, home, []) };
-}
-
-/**
- * `write_environment_file` alone, with the file it wrote read back.
- *
- * A dry run reports the settings file it would create and creates none, and the
- * contents are the point here: the installer records what it decided so that a
- * setup run later can be given the same prefix instead of guessing the default.
- * Loading the script's functions and calling the one under test is the same
- * trick the summary uses, and for the same reason.
- */
-function environmentFileWritten(options: (home: string) => readonly string[]): {
-  readonly home: string;
-  readonly result: RunResult;
-  readonly contents: (path: string) => string;
-} {
-  const { script, home } = scratch();
-
-  const library = sourceableLibrary(script);
-
-  const driver = `${script}.settings`;
-  writeFileSync(
-    driver,
-    [
-      `source ${quote(library)}`,
-      `parse_arguments ${options(home).map(quote).join(' ')}`,
-      'resolve_layout',
-      `DRY_RUN='no'`,
-      'write_environment_file',
-      '',
-    ].join('\n'),
-  );
-  chmodSync(driver, 0o755);
-
-  return {
-    home,
-    result: run(driver, home, []),
-    contents: (path) => readFileSync(path, 'utf8'),
-  };
 }
 
 /** The directory every package of ours lands in, under one prefix. */
@@ -884,74 +798,70 @@ function installedMachine(
 }
 
 /**
- * An account to stand in for the one a `--system` install creates.
+ * A stand-in for the command, where the script looks for it: the entry under
+ * `<prefix>/lib/node_modules/@softiesolutions/agentplex`, beside the manifest
+ * whose version the script reads.
  *
- * A suite that made an `agentplex` account to chown to would be a suite that
- * left a service account behind on the machine that ran it, so it borrows one
- * that is already there. It has to be an account whose group is named after it,
- * because that is the shape `useradd --system` gives the real one and the shape
- * the chown under test is written in -- `nobody` is precisely the account that
- * is not that, since Debian puts it in `nogroup`. Undefined on a machine with
- * none of them, which skips the tests that need one rather than having them
- * assert something about `chown` argument parsing.
+ * It prints the arguments it was given and the one variable the handover has
+ * to pass through, and nothing else, because what is under test is what the
+ * script hands it. `install --help` answers with `help`, which is how a
+ * command too old to have `install` is stood in for, and every other call
+ * exits with `exit`. The script runs it through the Node this run settled on,
+ * which for the suite is the one on PATH -- plain CommonJS, so any Node of the
+ * right major runs it.
  */
-const standInAccount = ['daemon', 'bin', 'sys'].find((name) => {
-  const group = spawnSync('id', ['-gn', name], { encoding: 'utf8' });
-  return group.status === 0 && group.stdout.trim() === name;
-});
-
-function accountId(flag: '-u' | '-g'): number {
-  return Number(spawnSync('id', [flag, standInAccount ?? ''], { encoding: 'utf8' }).stdout.trim());
+function fakeCli(
+  prefix: string,
+  version: string,
+  options: { readonly help?: number; readonly exit?: number } = {},
+): void {
+  const tree = join(scopeDirectory(prefix), 'agentplex');
+  const entry = join(tree, ENTRYPOINT);
+  mkdirSync(dirname(entry), { recursive: true });
+  writeFileSync(join(tree, 'package.json'), JSON.stringify({ name: CLI_PACKAGE, version }));
+  writeFileSync(
+    entry,
+    [
+      'const argv = process.argv.slice(2);',
+      `if (argv[0] === 'install' && argv[1] === '--help') process.exit(${String(options.help ?? 0)});`,
+      "console.log(`fake-cli ${argv.join(' ')}`);",
+      "console.log(`fake-cli AGENTPLEX_VERSIONS=${process.env.AGENTPLEX_VERSIONS ?? ''}`);",
+      `process.exit(${String(options.exit ?? 0)});`,
+      '',
+    ].join('\n'),
+  );
+  openToEveryone(prefix);
 }
 
 /**
- * One step of a `--system` run, called against a prefix in a temporary
- * directory rather than against `/opt` and `/etc`.
- *
- * The layout is set by hand instead of through `resolve_layout`, which is the
- * only way to ask what the step does without writing to the paths a real fleet
- * install owns on the machine running the suite. Root-only, because the whole
- * of what these steps do is a chown and a chmod.
+ * `hand_over` alone, as a real run reaches it: after the command's package has
+ * landed, with the version it resolved. The same `source` trick the package
+ * step uses, because a whole run would download a runtime first.
  */
-function systemStep(
-  step: string,
-  layout: (root: string) => readonly string[],
-): { readonly root: string; readonly result: RunResult } {
-  const { script, home } = scratch();
-  const root = mkdtempSync(join(tmpdir(), 'agentplex-system-'));
-  temporaries.push(root);
+function handedOver(
+  args: readonly string[],
+  cli: { readonly version: string; readonly help?: number; readonly exit?: number },
+): { readonly home: string; readonly versions: string; readonly result: RunResult } {
+  const { script, home, versions } = scratch();
+  fakeCli(join(home, '.agentplex'), cli.version, cli);
 
   const library = sourceableLibrary(script);
-
-  const driver = `${script}.${step}`;
+  const driver = `${script}.handover`;
   writeFileSync(
     driver,
     [
       `source ${quote(library)}`,
-      `UNIT_SCOPE='system'`,
-      `SERVICE_USER=${quote(standInAccount ?? '')}`,
-      `ROLE='hub'`,
+      `parse_arguments ${args.map(quote).join(' ')}`,
+      'resolve_layout',
       `DRY_RUN='no'`,
-      ...layout(root),
-      step,
+      `CLI_VERSION=${quote(cli.version)}`,
+      'hand_over',
       '',
     ].join('\n'),
   );
   chmodSync(driver, 0o755);
 
-  return { root, result: run(driver, home, [], { asRoot: true }) };
-}
-
-/** The paths a `--system` step is pointed at, under one temporary directory. */
-function systemLayout(root: string): readonly string[] {
-  const prefix = join(root, 'prefix');
-  return [
-    `PREFIX=${quote(prefix)}`,
-    `BIN_DIR=${quote(join(prefix, 'bin'))}`,
-    `NODE_HOME=${quote(join(prefix, 'node'))}`,
-    `STATE_DIR=${quote(join(root, 'state'))}`,
-    `ENV_FILE=${quote(join(root, 'etc', 'agentplex.env'))}`,
-  ];
+  return { home, versions, result: run(driver, home, []) };
 }
 
 describe('the options', () => {
@@ -1069,61 +979,12 @@ describe('the machines it will and will not install on', () => {
 });
 
 describe('the plan a dry run prints', () => {
-  it('installs into the user prefix, for the user who ran it', () => {
+  it('installs the command into the user prefix, for the user who ran it', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--role=server']);
 
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(
-      `${packageSpecs('server')} into ${home}/.agentplex`,
-    );
-    expect(planned(result.stdout, 'settings')).toContain(`${home}/.agentplex/agentplex.env`);
-  });
-
-  /**
-   * The unit line used to be asserted against whatever machine the suite was
-   * running on, which made it a lottery: a Linux runner read one branch, a Mac
-   * read a third the branch did not have, and the suite was red on one platform
-   * and green on the other for the same commit. The machine is stated now, so
-   * all three answers are asserted everywhere.
-   *
-   * The three stay apart because they send the operator to different places:
-   * macOS wants launchd, a Linux box without systemctl wants systemd installed
-   * or the daemon started by hand, and a Linux box with it gets a file.
-   */
-  it('plans a user unit where there is systemd, and gives each machine without one its own reason', () => {
-    const { script, home } = scratch();
-    const unit = (host: Host): string | undefined =>
-      planned(runOn(script, home, host, ['--dry-run', '--role=server']).stdout, 'unit');
-
-    expect(unit(LINUX_WITH_SYSTEMD)).toBe(
-      `${home}/.config/systemd/user/agentplex-server.service (write, not enabled)`,
-    );
-    expect(unit(LINUX_WITHOUT_SYSTEMD)).toBe('skipped: no systemctl on this machine');
-    // Not the systemctl reason with a different machine behind it: telling a Mac
-    // user to install systemd would be wrong, and this is what says so.
-    expect(unit(MACOS)).toBe('skipped: macOS has no systemd, hand the process to launchd');
-  });
-
-  /**
-   * One line per step, which is the shape `report` exists to hold. The answer
-   * used to be reported by the predicate that gave it, so the line came out
-   * once per place that asked -- and a second place that asked was added, and
-   * the plan grew a duplicate nobody had written.
-   */
-  it('reports the unit step once, whichever answer the machine gives', () => {
-    const { script, home } = scratch();
-    const lines = (host: Host, role: string): readonly string[] =>
-      unitLines(runOn(script, home, host, ['--dry-run', `--role=${role}`]).stdout);
-
-    expect(lines(LINUX_WITH_SYSTEMD, 'server')).toHaveLength(1);
-    // A machine with systemd writes a file per daemon and names each file. A
-    // machine without one has a single answer to give, not one answer per
-    // daemon that will not be written -- and that holds for both of the machines
-    // that have no unit to write, for their two different reasons.
-    expect(lines(LINUX_WITH_SYSTEMD, 'both')).toHaveLength(2);
-    expect(lines(LINUX_WITHOUT_SYSTEMD, 'both')).toHaveLength(1);
-    expect(lines(MACOS, 'both')).toHaveLength(1);
+    expect(planned(result.stdout, 'package')).toBe(`${cliSpec()} into ${home}/.agentplex`);
   });
 
   it('changes nothing at all', () => {
@@ -1136,27 +997,25 @@ describe('the plan a dry run prints', () => {
    * `--package-version` is the command's pin and the command alone, which is
    * what it has always been: `setup` and `doctor` go on every machine whatever
    * it runs, so the one package every role installs is the one a flag with no
-   * component in its name can mean. The daemons are pinned through --role now.
+   * component in its name can mean. It is also the one pin this script still
+   * resolves, because the command is the one package it still installs.
    */
-  it('pins the command it was given a version for, and resolves the rest', () => {
+  it('pins the command it was given a version for', () => {
     const { script, home, versions } = scratch();
     writeHistory(versions, { cli: { '1.2.3': FIXTURE_PROTOCOL } });
 
     const result = run(script, home, ['--dry-run', '--role=hub', '--package-version=1.2.3']);
 
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(
-      `${packageSpecs('hub', { ...CURRENT, cli: '1.2.3' })} into ${home}/.agentplex`,
-    );
+    expect(planned(result.stdout, 'package')).toBe(`${cliSpec('1.2.3')} into ${home}/.agentplex`);
   });
 
   /**
    * The two halves of what used to be one constant, asserted together because
    * the failure this guards against is one of them moving without the other.
    * The unscoped `agentplex` on npm is somebody else's, so the registry entry
-   * is scoped; a `bin` key is not a package name, so the binary in the prefix,
-   * the stem of the unit file names and every word an operator reads stay
-   * `agentplex`.
+   * is scoped; a `bin` key is not a package name, so the binary in the prefix
+   * and every word an operator reads stay `agentplex`.
    */
   it('names the scoped package to npm and the plain command to the operator', () => {
     const { script, home } = scratch();
@@ -1165,86 +1024,40 @@ describe('the plan a dry run prints', () => {
     expect(planned(result.stdout, 'package')).toContain(
       `/cli-v${CURRENT['cli'] ?? ''}/agentplex.tgz`,
     );
-
-    const units = run(script, home, ['--print-unit', '--role=both']).stdout;
-    expect(execStarts(units).map((line) => line.script)).toEqual([
-      daemonEntry(`${home}/.agentplex`, 'hub'),
-      daemonEntry(`${home}/.agentplex`, 'server'),
-    ]);
-
-    // The scope reaches the unit, and only there, and only because npm put it
-    // in a directory name. There is no `agentplex hub` to run, so ExecStart
-    // names the daemon's file, and that file is inside the tree npm wrote at
-    // the name it was installed under. It is npm's spelling of where a package
-    // lives rather than a word this script chose -- so every word this script
-    // does choose is still unscoped: the binary, the unit file names, and
-    // every line an operator reads.
-    const scoped = units.split('\n').filter((line) => line.includes('softiesolutions'));
-    expect(scoped).toHaveLength(2);
-    expect(scoped.every((line) => line.startsWith('ExecStart='))).toBe(true);
-    // The two unscoped words in the same file, so this says what stayed as well
-    // as what moved.
-    expect(units).toContain('Description=agentplex hub');
-    expect(units).toContain('Description=agentplex server');
+    expect(planned(result.stdout, 'install')).toContain(
+      `${home}/.agentplex/bin/agentplex install --dry-run --role=both`,
+    );
+    // The scope reaches only npm's own directory names, never a word this
+    // script chose.
+    expect(planned(result.stdout, 'install')).not.toContain('softiesolutions');
   });
 
   /**
-   * The drain and the unit's stop timeout, which are one decision.
-   *
-   * The server waits for the turns it is holding to reach a boundary before it
-   * closes them, and systemd sends SIGKILL after `TimeoutStopSec` whatever the
-   * daemon is doing. A drain at or past that number is not a longer drain: it
-   * is the same kill with a wait in front of it, and every session mid-turn
-   * dies exactly where the drain was supposed to stop it dying. So the two
-   * numbers have to be read together, and this is the place they can be --
-   * `install.sh` renders both from one pair, and this is what says so.
+   * Whatever the role, the script's own package step is the command's. A
+   * hub's client, a server's native addon and every pin on them are what the
+   * command resolves and installs once it is here, so a role changes what the
+   * handover is told and nothing about what this step fetches.
    */
-  it('gives the drain less time than systemd gives the whole stop', () => {
-    const { script, home } = scratch();
-    const unit = run(script, home, ['--print-unit', '--role=server']).stdout;
+  it.each(['hub', 'server', 'both'])(
+    'installs the command alone for --role=%s, and leaves the rest to it',
+    (role) => {
+      const { script, home } = scratch();
+      const { source } = packagePlan(run(script, home, ['--dry-run', `--role=${role}`]).stdout);
 
-    const drain = /^Environment=AGENTPLEX_SERVER_DRAIN_SECONDS=(\d+)$/m.exec(unit);
-    const stop = /^TimeoutStopSec=(\d+)s$/m.exec(unit);
-
-    expect(drain?.[1], 'the unit sets no drain budget').toBeDefined();
-    expect(stop?.[1], 'the unit sets no stop timeout').toBeDefined();
-    expect(Number(drain?.[1])).toBeLessThan(Number(stop?.[1]));
-    // And the margin is a real one, not a rounding error: what is left is what
-    // the process has to kill the stragglers, close its sockets and exit.
-    expect(Number(stop?.[1]) - Number(drain?.[1])).toBeGreaterThanOrEqual(5);
-  });
-
-  /**
-   * The one role table, asserted as a table. `web` is not a role: it is part of
-   * being a hub, because the hub finds the client by resolving that package
-   * name and a hub without it serves 503. The command is in every row, because
-   * `setup` and `doctor` belong on every machine whatever it runs.
-   */
-  it.each([
-    ['hub', ['cli', 'hub', 'web'], ['server']],
-    ['server', ['cli', 'server'], ['hub', 'web']],
-    ['both', ['cli', 'hub', 'web', 'server'], []],
-  ])('installs the packages --role=%s runs, and no others', (role, wanted, unwanted) => {
-    const { script, home } = scratch();
-    const { source: line } = packagePlan(run(script, home, ['--dry-run', `--role=${role}`]).stdout);
-
-    for (const component of wanted) {
-      expect(line, component).toContain(releaseUrl(component, CURRENT[component] ?? ''));
-    }
-    for (const component of unwanted) expect(line, component).not.toContain(`/${component}-v`);
-  });
+      expect(source.trim()).toBe(cliSpec());
+      for (const component of ['hub', 'server', 'web']) {
+        expect(source, component).not.toContain(`/${component}-v`);
+      }
+    },
+  );
 
   /**
    * AGENTPLEX_PACKAGE is how the container check installs a build that has
-   * never been published, and with four packages it names a directory of packed
-   * tarballs rather than one spec.
-   *
-   * A directory rather than four variables, because four variables can be half
-   * set: a machine that pinned the hub and let the command fall through to a
-   * registry would report a green check of a build it had not installed. A
-   * directory either holds what the role needs or the run stops.
+   * never been published: a directory of packed tarballs rather than one spec.
+   * The script takes the command's out of it; the command, handed the same
+   * variable, takes the rest.
    */
-  it('installs the tarballs in the directory AGENTPLEX_PACKAGE names', () => {
+  it('installs the command tarball in the directory AGENTPLEX_PACKAGE names', () => {
     const { script, home } = scratch();
     const packages = join(home, 'package');
     mkdirSync(packages, { recursive: true });
@@ -1258,78 +1071,60 @@ describe('the plan a dry run prints', () => {
       }).stdout,
     );
 
-    // The hub's three, by file. The `[0-9]` in the script's pattern is what
-    // keeps the command's own tarball from also matching the hub, the server
-    // and the client: every one of those names starts with the command's.
-    expect(line).toContain(`${packages}/softiesolutions-agentplex-0.0.0.tgz`);
-    expect(line).toContain(`${packages}/softiesolutions-agentplex-hub-0.0.0.tgz`);
-    expect(line).toContain(`${packages}/softiesolutions-agentplex-web-0.0.0.tgz`);
-    expect(line).not.toContain('softiesolutions-agentplex-server-0.0.0.tgz');
-    // Nothing fell through to a release.
+    // The `[0-9]` in the script's pattern is what keeps the command's own
+    // tarball from also matching the hub, the server and the client: every one
+    // of those names starts with the command's.
+    expect(line.trim()).toBe(`${packages}/softiesolutions-agentplex-0.0.0.tgz`);
     expect(line).not.toContain('https://');
   });
 
   /**
-   * Half a directory is the failure this seam has to name rather than paper
-   * over: installing the rest and leaving one package to a registry would be a
-   * check reporting on a build it did not install.
+   * The command's tarball is the one this script cannot do without, so a
+   * directory missing it stops the run here. A directory missing the hub's is
+   * the command's to refuse, and it refuses it in the same sentence.
    */
-  it('stops when the directory does not hold a package the role needs', () => {
+  it("stops when the directory does not hold the command's tarball", () => {
     const { script, home } = scratch();
     const packages = join(home, 'package');
     mkdirSync(packages, { recursive: true });
-    writeFileSync(join(packages, 'softiesolutions-agentplex-0.0.0.tgz'), '');
+    writeFileSync(join(packages, 'softiesolutions-agentplex-hub-0.0.0.tgz'), '');
 
     const result = run(script, home, ['--dry-run', '--role=hub'], {
       environment: { AGENTPLEX_PACKAGE: packages },
     });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('softiesolutions-agentplex-hub');
+    expect(result.stderr).toContain('no softiesolutions-agentplex-<version>.tgz');
   });
 
   /**
-   * How the packages land, as a line of its own beside the `package` line
-   * rather than folded into it: that line is what npm used to be handed and
-   * what several tests read the specs out of, and the specs did not change.
-   *
-   * Each package is unpacked beside the tree it replaces and installed there
-   * against the shrinkwrap it carries -- the only way npm reads one -- and
-   * moved into place only once every package has staged.
+   * How the command lands, as a line of its own beside the `package` line: it
+   * is unpacked beside the tree it replaces and installed there against the
+   * shrinkwrap it carries -- the only way npm reads one -- then moved into
+   * place and linked.
    */
-  it.each([
-    ['hub', ['cli', 'hub', 'web'], ['server']],
-    ['server', ['cli', 'server'], ['hub', 'web']],
-  ])(
-    'plans --role=%s as staged, installed against its shrinkwrap, then moved',
-    (role, wanted, unwanted) => {
-      const { script, home } = scratch();
-      const prefix = `${home}/.agentplex`;
-      const result = run(script, home, ['--dry-run', `--role=${role}`]);
+  it('plans the command as staged, installed against its shrinkwrap, then moved', () => {
+    const { script, home } = scratch();
+    const prefix = `${home}/.agentplex`;
+    const result = run(script, home, ['--dry-run', '--role=server']);
 
-      expect(result.status).toBe(0);
-      const method = planned(result.stdout, 'method') ?? '';
-      for (const component of wanted) {
-        expect(method, component).toContain(
-          `${scopeDirectory(prefix)}/${PACKAGE_DIRECTORIES[component] ?? ''}.new`,
-        );
-      }
-      for (const component of unwanted) {
-        expect(method, component).not.toContain(`/${PACKAGE_DIRECTORIES[component] ?? ''}.new`);
-      }
+    expect(result.status).toBe(0);
+    const method = planned(result.stdout, 'method') ?? '';
+    expect(method).toContain(`unpack into ${scopeDirectory(prefix)}/agentplex.new;`);
+    for (const name of ['agentplex-hub', 'agentplex-server', 'agentplex-web']) {
+      expect(method, name).not.toContain(`/${name}.new`);
+    }
 
-      const install = method.indexOf('npm install --omit=dev');
-      const shrinkwrap = method.indexOf('npm-shrinkwrap.json');
-      const link = method.indexOf(
-        `link ${prefix}/bin/agentplex -> ../lib/node_modules/${CLI_PACKAGE}/${ENTRYPOINT}`,
-      );
-      expect(method.startsWith('unpack into ')).toBe(true);
-      expect(install).toBeGreaterThan(0);
-      expect(shrinkwrap).toBeGreaterThan(install);
-      expect(link).toBeGreaterThan(shrinkwrap);
-      expect(method).toContain('move each into place');
-    },
-  );
+    const install = method.indexOf('npm install --omit=dev');
+    const shrinkwrap = method.indexOf('npm-shrinkwrap.json');
+    const link = method.indexOf(
+      `link ${prefix}/bin/agentplex -> ../lib/node_modules/${CLI_PACKAGE}/${ENTRYPOINT}`,
+    );
+    expect(install).toBeGreaterThan(0);
+    expect(shrinkwrap).toBeGreaterThan(install);
+    expect(link).toBeGreaterThan(shrinkwrap);
+    expect(method).toContain('move it into place');
+  });
 
   it('would hand over to setup, with the role it was given', () => {
     const { script, home } = scratch();
@@ -1360,8 +1155,9 @@ describe('the plan a dry run prints', () => {
           `--prefix=${escaped(prefix)}|not run: no terminal)`,
       ),
     );
-    // The file that handover has to agree with, named in the same plan.
-    expect(planned(result.stdout, 'settings')).toContain(`${prefix}/agentplex.env`);
+    // The command that writes the settings file setup then reads is handed the
+    // same prefix, in the same plan.
+    expect(planned(result.stdout, 'install')).toContain(`--prefix=${prefix}`);
   });
 
   /**
@@ -1402,6 +1198,199 @@ describe('the plan a dry run prints', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--no-setup']);
     expect(planned(result.stdout, 'setup')).toBe('not run: --no-setup');
+  });
+});
+
+/**
+ * The handover, which is the new half of this script.
+ *
+ * Everything the script used to do after the runtime -- the role's other
+ * packages, the protocol check, ownership, the settings file and the units --
+ * is `agentplex install`'s now, run through the interpreter this run settled on
+ * with the operator's own arguments. What these assert is that it is handed the
+ * right words, that the variables reach it, and what a dry run says when there
+ * is no command yet to hand to.
+ */
+describe('handing over to agentplex install', () => {
+  /**
+   * A first dry run has no command to run: nothing has been installed, and a
+   * dry run installs nothing. So it plans its own steps -- the command's
+   * release, the toolchain, the runtime and the command's package -- and names
+   * the command that plans the rest, with the arguments it would be given, as
+   * what it would have run. It does not refuse a hub pin the manifest does not
+   * list: resolving that is the command's, and the command is what refuses it.
+   */
+  it('plans its own steps on an empty prefix, and names the command that plans the rest', () => {
+    const { script, home, versions } = scratch();
+    const prefix = join(home, 'custom');
+
+    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0', `--prefix=${prefix}`]);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'release')).toBe(`cli 1.4.0 (from ${versions}/versions.json)`);
+    expect(planned(result.stdout, 'toolchain')).toBeDefined();
+    expect(planned(result.stdout, 'node')).toBeDefined();
+    expect(planned(result.stdout, 'package')).toBe(`${cliSpec()} into ${prefix}`);
+    expect(planned(result.stdout, 'install')).toContain(
+      `${prefix}/bin/agentplex install --dry-run --role=hub@1.3.0 --prefix=${prefix}`,
+    );
+    expect(planned(result.stdout, 'install')).toContain('not run');
+    // The lines the command prints, and the script no longer does.
+    for (const label of ['client protocol', 'server protocol', 'ownership', 'settings', 'unit']) {
+      expect(planned(result.stdout, label), label).toBeUndefined();
+    }
+    expect(result.stdout).not.toContain('fake-cli');
+    expect(result.stdout).toContain('dry run: nothing above was done.');
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  /**
+   * As typed, and only the ones that are the command's: `--role`, each with its
+   * pin, `--package-version`, `--prefix` and `--system`. `--no-setup` is the
+   * script's, because handing over to setup is. The default role is the
+   * command's default too, so nothing is added for it.
+   */
+  it('passes the operator arguments through as typed, and keeps its own', () => {
+    const { script, home, versions } = scratch();
+    writeHistory(versions, { cli: { '1.2.3': FIXTURE_PROTOCOL } });
+
+    const pinned = run(script, home, [
+      '--dry-run',
+      '--no-setup',
+      '--role=hub',
+      '--role=server@1.5',
+      '--package-version=1.2.3',
+    ]);
+    expect(pinned.status).toBe(0);
+    expect(planned(pinned.stdout, 'install')).toContain(
+      'agentplex install --dry-run --role=hub --role=server@1.5 --package-version=1.2.3 ',
+    );
+    expect(planned(pinned.stdout, 'install')).not.toContain('--no-setup');
+
+    const bare = run(script, home, ['--dry-run']);
+    expect(planned(bare.stdout, 'install')).toContain('agentplex install --dry-run ');
+    expect(planned(bare.stdout, 'install')).not.toContain('--role');
+  });
+
+  /**
+   * A re-run: the command is already in the prefix, at the version this run
+   * would install, so there is something to ask. The dry run asks it for the
+   * rest of the plan, and the manifest seam reaches it, because the plan it
+   * prints is read out of the same file.
+   */
+  it('runs agentplex install --dry-run where the command is here at that version', () => {
+    const { script, home, versions } = scratch();
+    const prefix = join(home, '.agentplex');
+    fakeCli(prefix, CURRENT['cli'] ?? '');
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'install')).toBe(
+      `${prefix}/bin/agentplex install --dry-run --role=hub`,
+    );
+    expect(result.stdout).toContain('fake-cli install --dry-run --role=hub\n');
+    expect(result.stdout).toContain(`fake-cli AGENTPLEX_VERSIONS=${versions}\n`);
+    // Setup is still the script's, so its line still follows.
+    expect(planned(result.stdout, 'setup')).toBeDefined();
+  });
+
+  /**
+   * A command at another version is not the command this run would leave
+   * here, so its plan would be the plan of a different install. It is not
+   * asked, and the line says why.
+   */
+  it('does not ask a command at another version for the plan', () => {
+    const { script, home } = scratch();
+    fakeCli(join(home, '.agentplex'), '1.3.0');
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('fake-cli');
+    expect(planned(result.stdout, 'install')).toContain('not run');
+  });
+
+  /**
+   * `--print-unit` renders nothing in bash any more: the units are the
+   * command's, and so is the one renderer. With nothing installed there is no
+   * command to ask, so the run stops and names the one that renders them. It
+   * still reaches no network on the way.
+   */
+  it('stops --print-unit with nothing installed, naming agentplex install --print-unit', () => {
+    const { script, home } = scratch();
+
+    const result = run(script, home, ['--print-unit', '--role=both'], {
+      environment: { AGENTPLEX_VERSIONS: '' },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `${home}/.agentplex/bin/agentplex install --print-unit --role=both`,
+    );
+    expect(result.stdout).toBe('');
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  it('hands --print-unit to the command when it is here, with the arguments as typed', () => {
+    const { script, home } = scratch();
+    const prefix = join(home, 'custom');
+    fakeCli(prefix, '1.3.0');
+
+    const result = run(script, home, ['--print-unit', '--role=server', `--prefix=${prefix}`], {
+      environment: { AGENTPLEX_VERSIONS: '' },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      `fake-cli install --print-unit --role=server --prefix=${prefix}\n`,
+    );
+  });
+
+  /**
+   * A real run, from the point the command's package has landed: the command
+   * is asked whether it has `install`, then run with the operator's arguments
+   * and the environment the script was started with.
+   */
+  it('runs agentplex install with the arguments and the environment it was given', () => {
+    const { home, versions, result } = handedOver(['--role=server', '--no-setup'], {
+      version: '1.4.0',
+    });
+
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'install')).toBe(
+      `${home}/.agentplex/bin/agentplex install --role=server`,
+    );
+    expect(result.stdout).toContain('fake-cli install --role=server\n');
+    expect(result.stdout).toContain(`fake-cli AGENTPLEX_VERSIONS=${versions}\n`);
+  });
+
+  /**
+   * A pin can name a release older than the handover. That command has no
+   * `install`, and running it would be a usage error from a program the
+   * operator did not know they were asking; the script says what it installed
+   * and what to pin instead.
+   */
+  it('stops, naming the version, when the command it installed has no install', () => {
+    const { result } = handedOver(['--role=server', '--no-setup'], { version: '1.4.0', help: 2 });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('agentplex 1.4.0');
+    expect(result.stderr).toContain('agentplex install');
+    expect(result.stderr).toContain('--package-version');
+    expect(result.stdout).not.toContain('fake-cli install --role=server');
+  });
+
+  it('stops with the exit the command stopped with, and says the command is still here', () => {
+    const { home, result } = handedOver(['--role=server', '--no-setup'], {
+      version: '1.4.0',
+      exit: 1,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('fake-cli install --role=server\n');
+    expect(result.stdout).toContain(`${home}/.agentplex/bin/agentplex`);
   });
 });
 
@@ -1500,102 +1489,6 @@ describe('the toolchain, which only one role needs', () => {
   });
 });
 
-describe('the settings file it writes once', () => {
-  it('records the prefix it chose, uncommented, beside the role and the bin path', () => {
-    // The third fact the installer has, and the one a `agentplex setup` run by
-    // hand on this machine months later cannot otherwise know: without it that
-    // run owns `$HOME/.agentplex` while everything else on the machine points at
-    // the prefix this install created.
-    const { home, result, contents } = environmentFileWritten(() => ['--role=server']);
-    const prefix = `${home}/.agentplex`;
-
-    expect(result.status).toBe(0);
-    const lines = contents(`${prefix}/agentplex.env`).split('\n');
-    expect(lines).toContain(`AGENTPLEX_PREFIX=${prefix}`);
-    expect(lines).toContain('AGENTPLEX_ROLE=server');
-    expect(lines).toContain(`AGENTPLEX_BIN_PATH=${prefix}/bin`);
-  });
-
-  it('leaves the identity file for setup to record on a per-user install', () => {
-    // Setup mints the identity in the prefix and replaces this commented line
-    // with the path it minted. Nothing is minted until setup runs, so an
-    // uncommented line here would name a file that may never exist.
-    const { home, result, contents } = environmentFileWritten(() => ['--role=server']);
-
-    expect(result.status).toBe(0);
-    const lines = contents(`${home}/.agentplex/agentplex.env`).split('\n');
-    expect(lines.filter((line) => line.startsWith('AGENTPLEX_SERVER_IDENTITY_FILE='))).toEqual([]);
-    expect(lines).toContain(`#AGENTPLEX_SERVER_IDENTITY_FILE=${home}/.agentplex/server.json`);
-  });
-
-  it('records the identity file on a --system install, where the default would miss it', () => {
-    // The account's home is the state directory, so the server's default there
-    // is `<state>/.agentplex/server.json` -- a file nothing mints. The fleet
-    // tier says the path outright instead of leaning on a default that is
-    // right only by accident.
-    //
-    // Driven as a step, not a run: a --system run needs root and writes /etc.
-    // The ownership at the end of the step is root's to hand out and its own
-    // root-only case below asserts it, so it is stubbed here and this case is
-    // about the contents alone.
-    const { script, home } = scratch();
-    const library = sourceableLibrary(script);
-    const driver = `${script}.system-settings`;
-    writeFileSync(
-      driver,
-      [
-        `source ${quote(library)}`,
-        'chown() { :; }',
-        'chmod() { :; }',
-        `UNIT_SCOPE='system'`,
-        `SERVICE_USER='agentplex'`,
-        `ROLE='server'`,
-        `DRY_RUN='no'`,
-        ...systemLayout(home),
-        'write_environment_file',
-        '',
-      ].join('\n'),
-    );
-    chmodSync(driver, 0o755);
-
-    const result = run(driver, home, []);
-
-    expect(result.status).toBe(0);
-    const lines = readFileSync(join(home, 'etc', 'agentplex.env'), 'utf8').split('\n');
-    expect(lines).toContain(`AGENTPLEX_SERVER_IDENTITY_FILE=${join(home, 'state')}/server.json`);
-    expect(lines.filter((line) => line.includes('AGENTPLEX_SERVER_IDENTITY_FILE='))).toHaveLength(
-      1,
-    );
-  });
-
-  it('records the prefix it was given rather than the one it would have chosen', () => {
-    const { home, result, contents } = environmentFileWritten((where) => [
-      '--role=server',
-      `--prefix=${where}/custom`,
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(contents(`${home}/custom/agentplex.env`).split('\n')).toContain(
-      `AGENTPLEX_PREFIX=${home}/custom`,
-    );
-  });
-
-  it('offers the identity line in the prefix it was given, where setup mints the file', () => {
-    // The line setup replaces in place. Under a prefix that is not the default
-    // it is the only thing standing between the server and a second identity
-    // at $HOME/.agentplex/server.json, so it names the file setup will mint.
-    const { home, result, contents } = environmentFileWritten((where) => [
-      '--role=server',
-      `--prefix=${where}/custom`,
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(contents(`${home}/custom/agentplex.env`).split('\n')).toContain(
-      `#AGENTPLEX_SERVER_IDENTITY_FILE=${home}/custom/server.json`,
-    );
-  });
-});
-
 describe('being piped into bash, which is the documented happy path', () => {
   /**
    * The hazard this covers, captured rather than reasoned about: under
@@ -1640,18 +1533,19 @@ describe('installing as the wrong user', () => {
     expect(result.stderr).toContain('must run as root');
   });
 
-  it.skipIf(!suiteIsRoot)('creates the service account before anything is owned by it', () => {
+  it.skipIf(!suiteIsRoot)('creates the service account before it hands over', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--system'], { asRoot: true });
     const lines = result.stdout.split('\n');
 
     expect(planned(result.stdout, 'account')).toContain('create agentplex');
-    // Order, not just presence. The environment file is chowned to this
-    // account, and a chown to a user that does not exist yet ends the run after
-    // the package has landed -- half an install, and the confusing half.
+    // Order, not just presence. `agentplex install --system` gives this account
+    // the directories it writes into and checks it is there before it installs
+    // anything, so an account made after the handover is a handover that stops.
     expect(lines.findIndex((line) => line.startsWith('account '))).toBeLessThan(
-      lines.findIndex((line) => line.startsWith('settings ')),
+      lines.findIndex((line) => line.startsWith('install ')),
     );
+    expect(planned(result.stdout, 'install')).toContain('--system');
   });
 
   it.skipIf(!suiteIsRoot)(
@@ -1661,287 +1555,6 @@ describe('installing as the wrong user', () => {
       const result = run(script, home, ['--dry-run', '--system'], { asRoot: true });
       expect(result.status).toBe(0);
       expect(planned(result.stdout, 'setup')).toContain('take a plan');
-    },
-  );
-});
-
-/**
- * What a `--system` install hands to the service account.
- *
- * That account runs coding agents, which is the most exposed program on the
- * machine, so what it owns is the whole of what a compromised session can
- * rewrite. It used to own the prefix, which included the interpreter its own
- * unit is started through and the file holding the client token; it now owns
- * the directories npm writes into and the state directory, and nothing else.
- */
-describe('what a --system install hands to the service account', () => {
-  it.skipIf(!suiteIsRoot)('says in the plan what the account will own and what root keeps', () => {
-    const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--system'], { asRoot: true });
-
-    const ownership = planned(result.stdout, 'ownership');
-    expect(ownership).toContain('agentplex owns /opt/agentplex/bin');
-    expect(ownership).toContain('/opt/agentplex/lib/node_modules');
-    // Not obvious, and therefore worth saying out loud: npm links a package's
-    // man pages into `<prefix>/share/man`, so a provider install by this
-    // account creates that directory or fails at the end.
-    expect(ownership).toContain('/opt/agentplex/share');
-    expect(ownership).toContain('/var/lib/agentplex');
-    expect(ownership).toContain('root keeps /opt/agentplex/node and /etc/agentplex/agentplex.env');
-  });
-
-  it('hands nothing over on a user install, where the prefix is the account already', () => {
-    const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--role=server']);
-    expect(planned(result.stdout, 'ownership')).toBeUndefined();
-  });
-
-  it.skipIf(!suiteIsRoot || standInAccount === undefined)(
-    'owns the directories npm writes and leaves the runtime and the prefix to root',
-    () => {
-      const { root, result } = systemStep('grant_service_account_ownership', (where) => {
-        const prefix = join(where, 'prefix');
-        // What npm leaves behind by the time this step runs, and no more:
-        // `bin`, `share` and the state directory are deliberately absent, which
-        // is the case a chown alone would die on.
-        mkdirSync(join(prefix, 'lib', 'node_modules', '@softiesolutions', 'agentplex'), {
-          recursive: true,
-        });
-        nodeShim(join(prefix, 'node', 'bin'), 'v24.9.0');
-        return systemLayout(where);
-      });
-
-      expect(result.status).toBe(0);
-
-      const prefix = join(root, 'prefix');
-      const owner = (path: string): readonly [number, number] => {
-        const stats = statSync(path);
-        return [stats.uid, stats.gid];
-      };
-      const account = [accountId('-u'), accountId('-g')];
-
-      expect(owner(join(prefix, 'bin'))).toEqual(account);
-      expect(owner(join(prefix, 'lib', 'node_modules'))).toEqual(account);
-      // Recursive: the package tree npm already wrote is inside the tree setup
-      // has to be able to replace on an upgrade.
-      expect(owner(join(prefix, 'lib', 'node_modules', '@softiesolutions', 'agentplex'))).toEqual(
-        account,
-      );
-      expect(owner(join(prefix, 'share'))).toEqual(account);
-      expect(owner(join(root, 'state'))).toEqual(account);
-
-      // The point of the ticket. A session that gets out of the account it runs
-      // as cannot rewrite the interpreter its own service is started through,
-      // and cannot put anything new at the top of the prefix either.
-      expect(owner(join(prefix, 'node'))).toEqual([0, 0]);
-      expect(owner(join(prefix, 'node', 'bin', 'node'))).toEqual([0, 0]);
-      expect(owner(prefix)).toEqual([0, 0]);
-      expect(owner(join(prefix, 'lib'))).toEqual([0, 0]);
-    },
-  );
-
-  it.skipIf(!suiteIsRoot || standInAccount === undefined)(
-    'writes the settings file for the daemon to read and not to write',
-    () => {
-      const { root, result } = systemStep('write_environment_file', systemLayout);
-
-      expect(result.status).toBe(0);
-      const stats = statSync(join(root, 'etc', 'agentplex.env'));
-      // 0640 root:account, and each third of that is load-bearing: the token in
-      // this file is why nothing but root writes it, the daemon runs as the
-      // account and has to read it, and nobody else on the machine is either.
-      expect(stats.mode & 0o777).toBe(0o640);
-      expect(stats.uid).toBe(0);
-      expect(stats.gid).toBe(accountId('-g'));
-    },
-  );
-});
-
-describe('the systemd unit', () => {
-  it('writes one unit per daemon the role runs, and both for --role=both', () => {
-    const { script, home } = scratch();
-    const both = run(script, home, ['--print-unit', '--role=both']).stdout;
-
-    expect(execStarts(both).map((line) => line.script)).toEqual([
-      daemonEntry(`${home}/.agentplex`, 'hub'),
-      daemonEntry(`${home}/.agentplex`, 'server'),
-    ]);
-    expect(both).toContain('Description=agentplex hub');
-    expect(both).toContain('Description=agentplex server');
-  });
-
-  it('runs as the invoking user by living in their own unit directory', () => {
-    const { script, home } = scratch();
-    const unit = run(script, home, ['--print-unit', '--role=server']).stdout;
-
-    // No User= directive at all: a user unit runs as its user, and a line
-    // naming one would be a claim this scope cannot make.
-    expect(unit.split('\n').filter((line) => line.startsWith('User='))).toEqual([]);
-    expect(execStarts(unit).map((line) => line.script)).toEqual([
-      daemonEntry(`${home}/.agentplex`, 'server'),
-    ]);
-    expect(unit).not.toContain('apps/hub');
-    expect(unit).toContain(`EnvironmentFile=${home}/.agentplex/agentplex.env`);
-    expect(unit).toContain('WantedBy=default.target');
-  });
-
-  it('orders against no network-online.target in user scope, where that target does not exist', () => {
-    const { script, home } = scratch();
-    const unit = run(script, home, ['--print-unit']).stdout;
-
-    // network-online.target is a unit of the system manager. The user
-    // manager's search paths hold no such file, so these two lines in a user
-    // unit name a unit that cannot be loaded: systemd orders against nothing
-    // and the reader is told a guarantee that is not one.
-    expect(unit).not.toContain('network-online.target');
-    expect(unit.split('\n').filter((line) => line.startsWith('After='))).toEqual([]);
-    expect(unit.split('\n').filter((line) => line.startsWith('Wants='))).toEqual([]);
-  });
-
-  it('puts the prefix in front of the PATH the unit gets', () => {
-    const { script, home } = scratch();
-    const unit = run(script, home, ['--print-unit']).stdout;
-    // The spec's opening problem: a systemd PATH has no version-manager shims
-    // in it, so the runtime and the agents have to be named rather than
-    // inherited -- and in front of the machine rather than instead of it,
-    // because a session also shells out to git and rg.
-    expect(unit).toContain(`Environment=PATH=${home}/.agentplex/bin:`);
-    expect(unit).toMatch(/^Environment=PATH=.*:\/usr\/local\/sbin:.*:\/bin$/m);
-  });
-
-  it('names the directory an adopted node came from, when nothing else would find it', () => {
-    const { script, home } = scratch();
-    const shims = join(home, 'shims');
-    mkdirSync(shims);
-    // A version manager's shim directory, which is where a developer's node
-    // usually is and is somewhere a systemd unit has never heard of. Without
-    // this line the service dies on the `#!/usr/bin/env node` of the program it
-    // was pointed at.
-    writeFileSync(join(shims, 'node'), '#!/bin/sh\necho v24.9.0\n');
-    chmodSync(join(shims, 'node'), 0o755);
-    chmodSync(shims, 0o777);
-
-    const unit = run(script, home, ['--print-unit'], {
-      environment: { PATH: `${shims}:/usr/bin:/bin` },
-    }).stdout;
-
-    expect(unit).toContain(`Environment=PATH=${home}/.agentplex/bin:${shims}:/usr/local/sbin`);
-  });
-
-  it('does not repeat a directory the unit already searches', () => {
-    const { script, home } = scratch();
-    // /usr/bin and /bin are already in the unit's PATH, so a node found in one
-    // adds nothing: the same directory twice is a longer line saying the same
-    // thing.
-    const unit = run(script, home, ['--print-unit'], {
-      environment: { PATH: '/usr/bin:/bin' },
-    }).stdout;
-    const searchPath = /^Environment=PATH=(.*)$/m.exec(unit)?.[1] ?? '';
-    const directories = searchPath.split(':');
-    expect(new Set(directories).size).toBe(directories.length);
-  });
-
-  it('stops rather than restarting when the configuration is what is wrong', () => {
-    const { script, home } = scratch();
-    const unit = run(script, home, ['--print-unit']).stdout;
-    // Exit 2 is main.ts's EXIT_BAD_CONFIGURATION: restarting will not help.
-    expect(unit).toContain('RestartPreventExitStatus=2');
-    expect(unit).toContain('Restart=on-failure');
-  });
-
-  it('gives the server a reload that re-reads its providers, and the hub none', () => {
-    const { script, home } = scratch();
-    const units = run(script, home, ['--print-unit', '--role=both']).stdout;
-    const [hub = '', server = ''] = units.split('[Unit]').slice(1);
-
-    // The operator who has just installed a coding agent, or just logged one
-    // in, on a machine that is already serving. Without this the fleet reports
-    // what was true at boot until somebody restarts the service, which drops
-    // every session on the box to publish a fact about a binary.
-    expect(server).toContain('Description=agentplex server');
-    // `/bin/sh` with its builtin, because a minimal machine has no kill binary
-    // at any path -- see install.sh for why naming one is a reload systemd
-    // refuses.
-    expect(server).toContain(`ExecReload=/bin/sh -c 'kill -HUP $MAINPID'`);
-
-    // Not on the hub. It reads no providers, so it has nothing to re-read --
-    // and Node exits on a SIGHUP nothing is listening for, so offering `reload`
-    // there would be a verb that restarts it.
-    expect(hub).toContain('Description=agentplex hub');
-    expect(hub).not.toContain('ExecReload=');
-  });
-
-  it('signals the server alone on stop, so its agents wait for the drain', () => {
-    const { script, home } = scratch();
-    const unit = run(script, home, ['--print-unit', '--role=server']).stdout;
-    // systemd's default, control-group, sends SIGTERM to every process in the
-    // unit at once: the agents a session runs are in that cgroup, so they die
-    // in the same millisecond the server starts draining for them. mixed sends
-    // SIGTERM to the main process alone and SIGKILLs whatever is left once it
-    // has exited, which is what makes the drain a drain.
-    expect(unit.split('\n').filter((line) => line === 'KillMode=mixed')).toHaveLength(1);
-  });
-
-  it('gives the hub no KillMode, because it runs no children to spare', () => {
-    const { script, home } = scratch();
-    const unit = run(script, home, ['--print-unit', '--role=hub']).stdout;
-    expect(unit.split('\n').filter((line) => line.startsWith('KillMode='))).toEqual([]);
-  });
-
-  it('puts the one KillMode of a --role=both install in the server unit', () => {
-    const { script, home } = scratch();
-    const units = run(script, home, ['--print-unit', '--role=both']).stdout;
-    const [hub = '', server = ''] = units.split('[Unit]').slice(1);
-
-    expect(units.split('\n').filter((line) => line === 'KillMode=mixed')).toHaveLength(1);
-    expect(server).toContain('Description=agentplex server');
-    expect(server.split('\n').filter((line) => line === 'KillMode=mixed')).toHaveLength(1);
-    expect(hub).toContain('Description=agentplex hub');
-    expect(hub.split('\n').filter((line) => line.startsWith('KillMode='))).toEqual([]);
-  });
-
-  it.skipIf(!suiteIsRoot)('signals the server alone on stop in system scope too', () => {
-    const { script, home } = scratch();
-    const unit = run(script, home, ['--print-unit', '--system', '--role=server'], {
-      asRoot: true,
-    }).stdout;
-    expect(unit.split('\n').filter((line) => line === 'KillMode=mixed')).toHaveLength(1);
-  });
-
-  it('carries no sandboxing, because the service exists to reach the operator files', () => {
-    const { script, home } = scratch();
-    const unit = run(script, home, ['--print-unit']).stdout;
-    for (const directive of ['ProtectHome=', 'ProtectSystem=', 'NoNewPrivileges=', 'PrivateTmp=']) {
-      expect(unit.split('\n').filter((line) => line.startsWith(directive))).toEqual([]);
-    }
-  });
-
-  it.skipIf(!suiteIsRoot)('names the service account when it is a system unit', () => {
-    const { script, home } = scratch();
-    const unit = run(script, home, ['--print-unit', '--system', '--role=both'], {
-      asRoot: true,
-    }).stdout;
-    expect(unit).toContain('User=agentplex');
-    expect(unit).toContain('Group=agentplex');
-    expect(execStarts(unit).map((line) => line.script)).toEqual([
-      daemonEntry('/opt/agentplex', 'hub'),
-      daemonEntry('/opt/agentplex', 'server'),
-    ]);
-    expect(unit).toContain('EnvironmentFile=/etc/agentplex/agentplex.env');
-    expect(unit).toContain('WantedBy=multi-user.target');
-  });
-
-  it.skipIf(!suiteIsRoot)(
-    'waits for the network in system scope, where that target is real',
-    () => {
-      const { script, home } = scratch();
-      const unit = run(script, home, ['--print-unit', '--system', '--role=both'], {
-        asRoot: true,
-      }).stdout;
-      // The system manager has network-online.target, so here the ordering is
-      // one systemd can actually honour.
-      expect(unit).toContain('After=network-online.target');
-      expect(unit).toContain('Wants=network-online.target');
     },
   );
 });
@@ -1986,17 +1599,21 @@ describe('the summary on a machine that can hold no unit', () => {
    * file existed, and on a machine with no systemd none does -- so the one
    * operator with nothing supervising the install was the one told nothing at
    * all about how to start it.
+   *
+   * What to run is each unit's ExecStart line, and the units are the command's
+   * to render now, on any machine -- so the summary names the command that
+   * prints them, with the arguments this run was given, rather than keeping a
+   * second copy of the line in bash.
    */
-  it('says no unit was written, why, and what to run instead', () => {
+  it('says no unit was written, why, and what prints the command to run instead', () => {
     const { home, result } = summaryWithNoUnitWritten('no systemctl on this machine');
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('No unit was written: no systemctl on this machine.');
-    // The same command line the unit would have carried. There is no shorter
-    // thing to tell this operator to type: a daemon is not a command, so what
-    // they get is the interpreter and the file, which is also exactly what
-    // launchd wants from them.
-    expect(result.stdout).toContain(daemonEntry(`${home}/.agentplex`, 'server'));
+    expect(result.stdout).toContain(
+      `${home}/.agentplex/bin/agentplex install --print-unit --role=server`,
+    );
+    expect(result.stdout).toContain('ExecStart');
     // The systemd instructions belong to the machine that got a unit, and this
     // one did not.
     expect(result.stdout).not.toContain('systemctl --user enable --now');
@@ -2138,35 +1755,9 @@ describe('where the runtime goes', () => {
 
     expect(result.status).toBe(0);
     expect(planned(result.stdout, 'node')).toContain(`into ${home}/.agentplex/node`);
-    // The prefix is still where npm links globals, because that is where the
-    // binary and any provider the wizard installs appear, and it is what
-    // AGENTPLEX_BIN_PATH and the unit's PATH already name.
-    expect(planned(result.stdout, 'package')).toBe(
-      `${packageSpecs('server')} into ${home}/.agentplex`,
-    );
-  });
-
-  it('gives the unit the bin directory and the Node directory, once each', () => {
-    const { script, home } = scratch();
-    const shims = join(home, 'shims');
-    nodeShim(shims, 'v20.11.0');
-
-    const unit = run(script, home, ['--print-unit'], {
-      environment: { PATH: `${shims}:/usr/bin:/bin` },
-    }).stdout;
-
-    const searchPath = /^Environment=PATH=(.*)$/m.exec(unit)?.[1] ?? '';
-    // Both directories, and not for ExecStart: that line names the interpreter
-    // outright and resolves nothing through this. It is for what the daemon
-    // starts -- the coding agents setup installs into the prefix's bin, every
-    // one of them a script looking for a `node` that lives somewhere systemd
-    // would never search.
-    expect(searchPath).toBe(
-      `${home}/.agentplex/bin:${home}/.agentplex/node/bin:` +
-        '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-    );
-    const directories = searchPath.split(':');
-    expect(new Set(directories).size).toBe(directories.length);
+    // The prefix is still where the command's package goes, because that is
+    // where the binary and any provider the wizard installs appear.
+    expect(planned(result.stdout, 'package')).toBe(`${cliSpec()} into ${home}/.agentplex`);
   });
 });
 
@@ -2212,21 +1803,22 @@ describe('refreshing a Node this script installed', () => {
   });
 });
 
-describe('installing the packages against the shrinkwrap each one carries', () => {
+describe("installing the command's package against the shrinkwrap it carries", () => {
   /**
-   * The mechanism, end to end on a disk: every tarball unpacked into
-   * `<tree>.new`, npm pointed at that directory, the trees swapped in, and the
-   * command linked by hand.
+   * The mechanism, end to end on a disk: the command's tarball unpacked into
+   * `<tree>.new`, npm pointed at that directory, the tree swapped in, and the
+   * command linked by hand. The same step `agentplex install` then runs for
+   * every other package a role needs, as a set of its own.
    *
    * `npm install --global <tarball>` is what this replaced, and it is asserted
    * absent by argument rather than by grepping the script: the script's
    * comments still say those words about how `setup` installs a provider,
    * which is true and not this.
    */
-  it('stages every package, installs each against its shrinkwrap, and swaps them in', () => {
+  it('stages the command, installs it against its shrinkwrap, and swaps it in', () => {
     const { prefix, result, npmCalls, globalconfig } = packagesInstalled({
       role: 'hub',
-      before: (where) => oldTree(where, 'agentplex-hub'),
+      before: (where) => oldTree(where, 'agentplex'),
     });
 
     expect(result.stderr).toBe('');
@@ -2234,19 +1826,16 @@ describe('installing the packages against the shrinkwrap each one carries', () =
     const scope = scopeDirectory(prefix);
     expect(npmCalls).toEqual([
       'config get globalconfig',
-      ...['agentplex', 'agentplex-hub', 'agentplex-web'].map(
-        (name) => `install --prefix ${scope}/${name}.new ${npmInstallFlags(globalconfig)}`,
-      ),
+      `install --prefix ${scope}/agentplex.new ${npmInstallFlags(globalconfig)}`,
     ]);
     expect(npmCalls.flatMap((call) => call.split(' '))).not.toContain('--global');
 
-    // Swapped, with nothing left staged or set aside.
-    expect(readdirSync(scope).sort()).toEqual(['agentplex', 'agentplex-hub', 'agentplex-web']);
-    for (const name of ['agentplex', 'agentplex-hub', 'agentplex-web']) {
-      expect(existsSync(join(scope, name, 'node_modules', '.installed')), name).toBe(true);
-      expect(existsSync(join(scope, name, 'npm-shrinkwrap.json')), name).toBe(true);
-    }
-    expect(existsSync(join(scope, 'agentplex-hub', 'old-marker'))).toBe(false);
+    // Swapped, with nothing left staged or set aside, and nothing of the
+    // role's other packages: those are the command's to install.
+    expect(readdirSync(scope)).toEqual(['agentplex']);
+    expect(existsSync(join(scope, 'agentplex', 'node_modules', '.installed'))).toBe(true);
+    expect(existsSync(join(scope, 'agentplex', 'npm-shrinkwrap.json'))).toBe(true);
+    expect(existsSync(join(scope, 'agentplex', 'old-marker'))).toBe(false);
 
     // The link npm used to make, made the way npm makes it: relative, and to a
     // target with its executable bit back, because the tarball packs it 0644.
@@ -2256,19 +1845,16 @@ describe('installing the packages against the shrinkwrap each one carries', () =
   });
 
   /**
-   * All or nothing. The last package this role stages fails, after the first
-   * two staged cleanly -- so what is asserted is that those two were taken back
-   * as well, and that the trees and the link the machine was running on were
-   * not touched at all.
+   * When npm will not install it, the tree and the link the machine was
+   * running on are not touched, and nothing staged is left beside them.
    */
-  it('leaves every installed tree and the link alone when one package fails', () => {
+  it('leaves the installed tree and the link alone when the install fails', () => {
     let linkTarget = '';
     const { prefix, result } = packagesInstalled({
       role: 'hub',
-      failing: 'agentplex-web',
+      failing: 'agentplex',
       before: (where) => {
         const cli = oldTree(where, 'agentplex');
-        oldTree(where, 'agentplex-hub');
         const entry = join(cli, 'main.js');
         writeFileSync(entry, '');
         mkdirSync(join(where, 'bin'), { recursive: true });
@@ -2278,35 +1864,34 @@ describe('installing the packages against the shrinkwrap each one carries', () =
     });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('agentplex-web');
+    expect(result.stderr).toContain('@softiesolutions/agentplex');
     const scope = scopeDirectory(prefix);
-    expect(readdirSync(scope).sort()).toEqual(['agentplex', 'agentplex-hub']);
+    expect(readdirSync(scope)).toEqual(['agentplex']);
     expect(existsSync(join(scope, 'agentplex', 'old-marker'))).toBe(true);
-    expect(existsSync(join(scope, 'agentplex-hub', 'old-marker'))).toBe(true);
     expect(readlinkSync(join(prefix, 'bin', 'agentplex'))).toBe(linkTarget);
   });
 
   /**
-   * A run killed between the two renames of one swap leaves `<tree>.old` and
-   * no `<tree>`: the machine's package is intact, under a name nothing starts.
+   * A run killed between the two renames of the swap leaves `<tree>.old` and
+   * no `<tree>`: the machine's command is intact, under a name nothing starts.
    * The next run puts it back before it stages anything, so that run failing
-   * too still leaves the machine with the package it had -- and a `.new` a
+   * too still leaves the machine with the command it had -- and a `.new` a
    * killed run left is discarded rather than taken for this run's.
    */
   it('puts back a tree an interrupted swap set aside, and discards a stale staging', () => {
     const { prefix, result } = packagesInstalled({
       role: 'hub',
-      failing: 'agentplex-web',
+      failing: 'agentplex',
       before: (where) => {
-        oldTree(where, 'agentplex-hub.old');
+        oldTree(where, 'agentplex.old');
         oldTree(where, 'agentplex.new');
       },
     });
 
     expect(result.status).not.toBe(0);
     const scope = scopeDirectory(prefix);
-    expect(readdirSync(scope)).toEqual(['agentplex-hub']);
-    expect(existsSync(join(scope, 'agentplex-hub', 'old-marker'))).toBe(true);
+    expect(readdirSync(scope)).toEqual(['agentplex']);
+    expect(existsSync(join(scope, 'agentplex', 'old-marker'))).toBe(true);
   });
 });
 
@@ -2479,51 +2064,18 @@ describe('undoing an install', () => {
 
 describe('the --role grammar, which is repeatable and takes a pin', () => {
   /**
-   * Every accepted form, read as the plan it produces rather than as an exit
-   * code: the thing that can go wrong here is a pin landing on the wrong
-   * component, and an exit code cannot see that.
+   * The grammar is the script's to refuse and the command's to resolve. Every
+   * refusal below stops the run before anything is fetched, and a pin it
+   * accepts is handed over exactly as it was typed -- which component it lands
+   * on is `agentplex install`'s question, asserted in its own suite.
    */
-  it('installs hub and server at what is current for --role=both', () => {
+  it('hands each pin over as it was typed', () => {
     const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--role=both']);
+    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0', '--role=server@1.4']);
 
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(
-      `${packageSpecs('both')} into ${home}/.agentplex`,
-    );
-  });
-
-  it('pins each component independently when both are named', () => {
-    const { script, home, versions } = scratch();
-    writeHistory(versions, {
-      hub: { '1.3.0': FIXTURE_PROTOCOL },
-      server: { '1.4.0': FIXTURE_PROTOCOL },
-    });
-
-    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0', '--role=server@1.4.0']);
-
-    expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(
-      `${packageSpecs('both', { ...CURRENT, hub: '1.3.0', server: '1.4.0' })} ` +
-        `into ${home}/.agentplex`,
-    );
-  });
-
-  /**
-   * A hub pinned alone still takes the client, and the client is still resolved
-   * rather than pinned with it. They are separate release trains: a version of
-   * the hub says nothing about which build of the client is current, which is
-   * the whole reason the protocol is checked across the set below.
-   */
-  it('pins one component and resolves the rest around it', () => {
-    const { script, home, versions } = scratch();
-    writeHistory(versions, { hub: { '1.3.0': FIXTURE_PROTOCOL } });
-
-    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
-
-    expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(
-      `${packageSpecs('hub', { ...CURRENT, hub: '1.3.0' })} into ${home}/.agentplex`,
+    expect(planned(result.stdout, 'install')).toContain(
+      'agentplex install --dry-run --role=hub@1.3.0 --role=server@1.4 ',
     );
   });
 
@@ -2624,70 +2176,33 @@ describe('the --role grammar, which is repeatable and takes a pin', () => {
     expect(result.stderr).toContain('is not a version this can install');
   });
 
-  /**
-   * The role is a property of the machine and the pins are a choice made at
-   * install time, so the settings file keeps recording the one and never the
-   * other. A machine reinstalled from this file has to come back as the same
-   * machine, not at the versions somebody happened to pin two years ago.
-   */
-  it('records the role in the settings file and never the pins', () => {
-    const { home, result, contents } = environmentFileWritten(() => [
-      '--role=hub@1.3.0',
-      '--role=server@1.4.0',
-    ]);
-
-    expect(result.status).toBe(0);
-    const written = contents(join(home, '.agentplex', 'agentplex.env'));
-    expect(written).toContain('AGENTPLEX_ROLE=both');
-    expect(written).not.toContain('1.3.0');
-    expect(written).not.toContain('1.4.0');
-  });
-
   /** Two components named one at a time is the same machine as `both`. */
-  it('records both when hub and server were named separately', () => {
+  it('hands setup both when hub and server were named separately', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--role=hub', '--role=server']);
 
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(
-      `${packageSpecs('both')} into ${home}/.agentplex`,
+    expect(planned(result.stdout, 'install')).toContain(
+      'agentplex install --dry-run --role=hub --role=server ',
     );
     expect(result.stdout).toMatch(/setup\s+(would run .*--role=both|not run: no terminal)/);
   });
 });
 
 describe('the versions manifest, which is read off the network and parsed', () => {
-  it('names every component it resolved, its versions, and where they came from', () => {
+  /**
+   * The command's entry, and only the command's: it is the one package this
+   * script installs, and the command reads the rest of the same file for
+   * itself once it is here.
+   */
+  it("names the command's release and where it came from", () => {
     const { script, home, versions } = scratch();
     const result = run(script, home, ['--dry-run', '--role=hub']);
 
-    expect(planned(result.stdout, 'release')).toBe(
-      `cli 1.4.0, hub 1.2.0, web 1.1.0 (from ${versions}/versions.json)`,
-    );
-    expect(planned(result.stdout, 'client protocol')).toBe(
-      `${FIXTURE_PROTOCOL}, which hub and web agree on`,
-    );
-    expect(planned(result.stdout, 'server protocol')).toBe(
-      `${FIXTURE_PROTOCOL}, which hub and web agree on`,
-    );
-  });
-
-  /**
-   * A leg nothing on this machine records is not a leg anything here could
-   * disagree about, and the plan says so rather than printing a number that
-   * came from nowhere.
-   */
-  it('says when nothing this machine installs speaks a leg', () => {
-    const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--role=server']);
-
-    expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'client protocol')).toBe(
-      'not spoken by anything this machine installs',
-    );
-    expect(planned(result.stdout, 'server protocol')).toBe(
-      `${FIXTURE_PROTOCOL}, which server agrees on`,
-    );
+    expect(planned(result.stdout, 'release')).toBe(`cli 1.4.0 (from ${versions}/versions.json)`);
+    // The command records no protocol leg, so there is nothing here to check.
+    expect(planned(result.stdout, 'client protocol')).toBeUndefined();
+    expect(planned(result.stdout, 'server protocol')).toBeUndefined();
   });
 
   it('refuses something that is not a JSON object at all', () => {
@@ -2701,20 +2216,23 @@ describe('the versions manifest, which is read off the network and parsed', () =
   });
 
   /**
-   * A missing entry is a release that did not finish, and the machine that
-   * carried on would install three quarters of a set. `web` is the one to ask
-   * about: it is not a role, so nobody typed it, and it is exactly the entry a
-   * reader would be tempted to treat as optional.
+   * A missing entry is a release that did not finish. The command's is the one
+   * this script cannot do without; the client's is the command's to refuse,
+   * and it refuses it with the same sentence, so the script does not ask.
    */
-  it('refuses a manifest missing a component this machine installs', () => {
+  it("refuses a manifest missing the command's entry, and leaves the rest to it", () => {
     const { script, home, versions } = scratch();
-    const { web: _web, ...withoutWeb } = CURRENT;
-    writeVersions(versions, withoutWeb);
+    const { cli: _cli, ...withoutCli } = CURRENT;
+    writeVersions(versions, withoutCli);
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('names no web');
+    expect(result.stderr).toContain('names no cli');
+
+    const { web: _web, ...withoutWeb } = CURRENT;
+    writeVersions(versions, withoutWeb);
+    expect(run(script, home, ['--dry-run', '--role=hub']).status).toBe(0);
   });
 
   /**
@@ -2727,11 +2245,7 @@ describe('the versions manifest, which is read off the network and parsed', () =
     const { script, home, versions } = scratch();
     writeFile(
       join(versions, 'versions.json'),
-      JSON.stringify({
-        cli: { current: 'latest', releases: { latest: {} } },
-        hub: { current: '1.2.0', releases: { '1.2.0': legsOf('hub', FIXTURE_PROTOCOL) } },
-        web: { current: '1.1.0', releases: { '1.1.0': legsOf('web', FIXTURE_PROTOCOL) } },
-      }),
+      JSON.stringify({ cli: { current: 'latest', releases: { latest: {} } } }),
     );
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
@@ -2742,25 +2256,21 @@ describe('the versions manifest, which is read off the network and parsed', () =
 
   /**
    * The invariant that makes the file answerable in one read: what is current
-   * has to be one of the releases listed beside it, because that is where its
-   * protocol is. A manifest where the two disagree is a `v1` branch somebody
-   * hand-edited, and every installing machine reads it.
+   * has to be one of the releases listed beside it. A manifest where the two
+   * disagree is a `v1` branch somebody hand-edited, and every installing
+   * machine reads it.
    */
   it('refuses an entry whose current version is not one of its releases', () => {
     const { script, home, versions } = scratch();
     writeFile(
       join(versions, 'versions.json'),
-      JSON.stringify({
-        cli: { current: '1.4.0', releases: { '1.3.0': {} } },
-        hub: { current: '1.2.0', releases: { '1.2.0': legsOf('hub', FIXTURE_PROTOCOL) } },
-        web: { current: '1.1.0', releases: { '1.1.0': legsOf('web', FIXTURE_PROTOCOL) } },
-      }),
+      JSON.stringify({ cli: { current: '1.4.0', releases: { '1.3.0': {} } } }),
     );
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('lists no protocol beside it');
+    expect(result.stderr).toContain('calls 1.4.0 the current cli and lists no such release');
   });
 
   /**
@@ -2773,11 +2283,7 @@ describe('the versions manifest, which is read off the network and parsed', () =
     const { script, home, versions } = scratch();
     writeFile(
       join(versions, 'versions.json'),
-      JSON.stringify({
-        cli: { version: '1.4.0', protocol: FIXTURE_PROTOCOL },
-        hub: { version: '1.2.0', protocol: FIXTURE_PROTOCOL },
-        web: { version: '1.1.0', protocol: FIXTURE_PROTOCOL },
-      }),
+      JSON.stringify({ cli: { version: '1.4.0', protocol: FIXTURE_PROTOCOL } }),
     );
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
@@ -2796,11 +2302,7 @@ describe('the versions manifest, which is read off the network and parsed', () =
     const { script, home, versions } = scratch();
     writeFile(
       join(versions, 'versions.json'),
-      JSON.stringify({
-        cli: { current: '1.4.0', releases: { '1.4.0': FIXTURE_PROTOCOL } },
-        hub: { current: '1.2.0', releases: { '1.2.0': legsOf('hub', FIXTURE_PROTOCOL) } },
-        web: { current: '1.1.0', releases: { '1.1.0': legsOf('web', FIXTURE_PROTOCOL) } },
-      }),
+      JSON.stringify({ cli: { current: '1.4.0', releases: { '1.4.0': FIXTURE_PROTOCOL } } }),
     );
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
@@ -2811,9 +2313,11 @@ describe('the versions manifest, which is read off the network and parsed', () =
   });
 
   /**
-   * Each of these is a leg the grammar does not read as a leg. A quoted number
-   * is the one worth naming: a reader that skipped what it could not parse
-   * would call that release one that speaks no client leg, and check nothing.
+   * The command's history is read against the whole grammar, legs included,
+   * although the command records none: a file that is wrong anywhere in the
+   * entry this reads is refused rather than being right about the one release
+   * somebody asked for. A quoted number is the one worth naming: a reader that
+   * skipped what it could not parse would check nothing and say it had.
    */
   it.each([
     ['a leg that is a string', { client: '3', server: 3 }],
@@ -2825,18 +2329,14 @@ describe('the versions manifest, which is read off the network and parsed', () =
     const { script, home, versions } = scratch();
     writeFile(
       join(versions, 'versions.json'),
-      JSON.stringify({
-        cli: { current: '1.4.0', releases: { '1.4.0': {} } },
-        hub: { current: '1.2.0', releases: { '1.2.0': legs } },
-        web: { current: '1.1.0', releases: { '1.1.0': legsOf('web', FIXTURE_PROTOCOL) } },
-      }),
+      JSON.stringify({ cli: { current: '1.4.0', releases: { '1.4.0': {}, '1.3.0': legs } } }),
     );
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`${versions}/versions.json`);
-    expect(result.stderr).toContain('hub release 1.2.0');
+    expect(result.stderr).toContain('cli release 1.3.0');
   });
 
   /**
@@ -2849,104 +2349,14 @@ describe('the versions manifest, which is read off the network and parsed', () =
     writeFile(
       join(versions, 'versions.json'),
       JSON.stringify({
-        cli: { current: '1.4.0', releases: { '1.4.0': {} } },
-        hub: { current: '1.2.0', releases: { '1.2.0': { server: 5, client: 4 } } },
-        web: { current: '1.1.0', releases: { '1.1.0': { client: 4, server: 5 } } },
+        cli: { current: '1.4.0', releases: { '1.4.0': {}, '1.3.0': { server: 5, client: 4 } } },
       }),
     );
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
 
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'client protocol')).toBe('4, which hub and web agree on');
-    expect(planned(result.stdout, 'server protocol')).toBe('5, which hub and web agree on');
-  });
-
-  /**
-   * The tripwire, and the reason it is a tripwire rather than a resolver. A
-   * change to a leg releases every component that records it together, so the
-   * entries always agree on it; a set that does not is a release process that
-   * broke, and working out "the newest set that happens to agree" would paper
-   * over exactly the mistake this is here to report.
-   */
-  it('refuses a hub whose client leg differs from the client it serves, naming both', () => {
-    const { script, home, versions } = scratch();
-    writeVersions(versions, CURRENT, {
-      protocols: { hub: { client: FIXTURE_PROTOCOL + 1, server: FIXTURE_PROTOCOL } },
-    });
-
-    const result = run(script, home, ['--dry-run', '--role=hub']);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`hub speaking client protocol ${FIXTURE_PROTOCOL + 1}`);
-    expect(result.stderr).toContain(`web speaking client protocol ${FIXTURE_PROTOCOL}`);
-    expect(result.stderr).toContain('nothing has been installed');
-  });
-
-  /** The server leg is checked the same way, between the two daemons. */
-  it('refuses a hub and a server that disagree on the server leg, on --role=both', () => {
-    const { script, home, versions } = scratch();
-    const moved = { client: FIXTURE_PROTOCOL, server: FIXTURE_PROTOCOL + 1 };
-    writeVersions(versions, CURRENT, { protocols: { hub: moved, web: moved } });
-
-    const result = run(script, home, ['--dry-run', '--role=both']);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`hub speaking server protocol ${FIXTURE_PROTOCOL + 1}`);
-    expect(result.stderr).toContain(`server speaking server protocol ${FIXTURE_PROTOCOL}`);
-  });
-
-  /**
-   * The same release set, on a machine that installs no server: nothing here
-   * speaks the server leg to anything else here, so there is nothing to refuse.
-   * A server elsewhere at the old number is refused at its own handshake.
-   */
-  it('lets a hub install whose server leg differs from the server release it does not take', () => {
-    const { script, home, versions } = scratch();
-    const moved = { client: FIXTURE_PROTOCOL, server: FIXTURE_PROTOCOL + 1 };
-    writeVersions(versions, CURRENT, { protocols: { hub: moved, web: moved } });
-
-    const result = run(script, home, ['--dry-run', '--role=hub']);
-
-    expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'server protocol')).toBe(
-      `${FIXTURE_PROTOCOL + 1}, which hub and web agree on`,
-    );
-  });
-
-  /**
-   * Numbers on different legs are never compared. A client-only change leaves
-   * the hub at client 4 and server 3 beside a server at 3, and that is the set
-   * the split exists to allow.
-   */
-  it('accepts legs that differ from each other, when each leg agrees', () => {
-    const { script, home, versions } = scratch();
-    const clientMoved = { client: FIXTURE_PROTOCOL + 1, server: FIXTURE_PROTOCOL };
-    writeVersions(versions, CURRENT, { protocols: { hub: clientMoved, web: clientMoved } });
-
-    const result = run(script, home, ['--dry-run', '--role=both']);
-
-    expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'client protocol')).toBe(
-      `${FIXTURE_PROTOCOL + 1}, which hub and web agree on`,
-    );
-    expect(planned(result.stdout, 'server protocol')).toBe(
-      `${FIXTURE_PROTOCOL}, which hub, web and server agree on`,
-    );
-  });
-
-  /**
-   * Asked of what this machine installs and not of the whole manifest. A hub
-   * install refused because the `server` entry disagrees would be refusing over
-   * a package this machine will never download.
-   */
-  it('ignores a disagreement in a component this machine does not install', () => {
-    const { script, home, versions } = scratch();
-    writeVersions(versions, CURRENT, { protocols: { server: FIXTURE_PROTOCOL + 1 } });
-
-    const result = run(script, home, ['--dry-run', '--role=hub']);
-
-    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'release')).toContain('cli 1.4.0');
   });
 
   /**
@@ -2962,15 +2372,13 @@ describe('the versions manifest, which is read off the network and parsed', () =
 
     expect(result.status).toBe(0);
     expect(planned(result.stdout, 'release')).toContain('a dry run downloads nothing');
-    expect(planned(result.stdout, 'client protocol')).toContain('not checked');
-    expect(planned(result.stdout, 'server protocol')).toContain('not checked');
     // No URL was built for a version this run never learned: the download root
     // is named, and no tag inside it is. Asked of what npm is handed, because
     // the rest of the line is a prefix this suite chose and nothing the script
     // decided.
     const { source } = packagePlan(result.stdout);
     expect(source).not.toContain('-v');
-    expect(source).toContain('cli hub web from');
+    expect(source).toContain('cli from');
   });
 
   /**
@@ -2999,17 +2407,13 @@ describe('the versions manifest, which is read off the network and parsed', () =
   });
 
   /**
-   * Read even when nothing was left to resolve, which is the change history
-   * made. The manifest lists every release of every component, so a pinned run
-   * needs it too -- to find out what the release it was pinned to speaks, and
-   * to refuse a pin naming a release nobody published.
+   * Read even when the command is pinned exactly, which is the change history
+   * made: the manifest lists every release, so a pinned run needs it too -- to
+   * refuse a pin naming a release nobody published.
    */
-  it('is read even when every component this machine installs is pinned', () => {
+  it('is read even when the command is pinned', () => {
     const { script, home, versions } = scratch();
-    writeHistory(versions, {
-      cli: { '1.2.3': FIXTURE_PROTOCOL },
-      server: { '1.4.0': FIXTURE_PROTOCOL },
-    });
+    writeHistory(versions, { cli: { '1.2.3': FIXTURE_PROTOCOL } });
 
     const result = run(script, home, [
       '--dry-run',
@@ -3019,76 +2423,38 @@ describe('the versions manifest, which is read off the network and parsed', () =
 
     expect(result.status).toBe(0);
     expect(planned(result.stdout, 'release')).toContain(join(versions, 'versions.json'));
-    expect(planned(result.stdout, 'server protocol')).toBe(
-      `${FIXTURE_PROTOCOL}, which server agrees on`,
-    );
-    expect(planned(result.stdout, 'package')).toBe(
-      `${packageSpecs('server', { cli: '1.2.3', server: '1.4.0' })} into ${home}/.agentplex`,
-    );
+    expect(planned(result.stdout, 'package')).toBe(`${cliSpec('1.2.3')} into ${home}/.agentplex`);
   });
 
   /**
    * And a run with no manifest at all now stops, where pinning everything used
    * to be the way around it. The trade is deliberate: one fetch of a file this
-   * script already fetches, in exchange for a protocol pre-check that covers
-   * pinned components and a partial pin that can be resolved at all.
+   * script already fetches, in exchange for a pin that can be checked at all.
    */
   it('names the mirror seam when it cannot be read', () => {
     const { script, home, versions } = scratch();
     rmSync(join(versions, 'versions.json'));
 
-    const result = run(script, home, ['--dry-run', '--role=server@1.4.0']);
+    const result = run(script, home, ['--dry-run', '--package-version=1.4.0']);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('holds no versions.json');
-  });
-});
-
-describe('the protocol a pinned release speaks, checked before anything is installed', () => {
-  /**
-   * The judgement call in this grammar, and it is answered out of the manifest
-   * now rather than out of a second artifact published at each tag. Installing
-   * first and checking after ends at the machine this is trying to prevent: a
-   * hub and a server that are installed, running and unable to pair.
-   */
-  it('refuses a pinned component that speaks a different protocol', () => {
-    const { script, home, versions } = scratch();
-    writeHistory(versions, { hub: { '1.3.0': FIXTURE_PROTOCOL + 1 } });
-
-    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`hub speaking client protocol ${FIXTURE_PROTOCOL + 1}`);
-    expect(result.stderr).toContain(`web speaking client protocol ${FIXTURE_PROTOCOL}`);
   });
 
   /**
    * A pin the manifest does not offer is the other thing this catches, and it
    * catches it before the first tarball rather than at a 404 partway through an
-   * npm install.
+   * npm install. And it says what the file is rather than what exists: `v1`
+   * advertises the 1.x train, so a 2.x tag can be real and absent from it.
    */
-  it('stops when the manifest offers no such release', () => {
+  it('stops when the manifest offers no such release of the command', () => {
     const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--role=hub@9.9.9']);
+    const result = run(script, home, ['--dry-run', '--package-version=2.0.0']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('offers no hub release at 9.9.9');
-    expect(result.stderr).toContain('hub-v9.9.9');
-  });
-
-  /**
-   * And it says what the file is rather than what exists. `v1` advertises the
-   * 1.x train, so a 2.x tag can be real and absent from it at the same time --
-   * as can any release a mirror was not given. A refusal that said the tag did
-   * not exist would be a sentence this script has no way to know is true.
-   */
-  it('refuses a release it does not offer without claiming the tag is unpublished', () => {
-    const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--role=hub@2.0.0']);
-
-    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('offers no cli release at 2.0.0');
+    expect(result.stderr).toContain('cli-v2.0.0');
     expect(result.stderr).toContain('the set of releases it advertises');
-    expect(result.stderr).not.toMatch(/there is no hub-v2\.0\.0 release/);
   });
 });
 
@@ -3099,70 +2465,74 @@ describe('a pin that names a series rather than a tag', () => {
    * TypeScript cannot classify a word differently without one of the two
    * suites going red -- see `pin-cases.ts`.
    *
-   * Each kind is read by what the script does with it rather than by an exit
-   * code alone. An exact word is planned as its own tag, against a history
-   * that lists it. A series word is resolved and comes up empty, against a hub
-   * whose one release sits under the next major -- so the only sentence that
-   * can explain the refusal is the resolver's. A refused word never reaches
-   * the manifest at all.
+   * Through `--package-version`, because the command is the one component
+   * whose pin this script still resolves. An exact word is planned as its own
+   * tag, against a history that lists it. A series word is resolved and comes
+   * up empty, against a command whose one release sits under the next major --
+   * so the only sentence that can explain the refusal is the resolver's. A
+   * refused word never reaches the manifest at all, and it is refused through
+   * `--role` as well: the grammar is one grammar whatever flag carries it.
    */
   it.each(PIN_GRAMMAR_CASES)('reads $word as $kind', ({ word, kind }) => {
     const { script, home, versions } = scratch();
-    if (kind === 'exact') writeHistory(versions, { hub: { [word]: FIXTURE_PROTOCOL } });
+    if (kind === 'exact') writeHistory(versions, { cli: { [word]: FIXTURE_PROTOCOL } });
     if (kind === 'series') {
       const major = Number(word.split('.')[0]);
-      writeVersions(versions, { ...CURRENT, hub: `${String(major + 1)}.0.0` });
+      writeVersions(versions, { ...CURRENT, cli: `${String(major + 1)}.0.0` });
     }
 
-    const result = run(script, home, ['--dry-run', `--role=hub@${word}`]);
+    const result = run(script, home, ['--dry-run', `--package-version=${word}`]);
 
     switch (kind) {
       case 'exact':
         expect(result.status).toBe(0);
-        expect(packagePlan(result.stdout).source).toContain(`/hub-v${word}/`);
+        expect(packagePlan(result.stdout).source).toContain(`/cli-v${word}/`);
         break;
       case 'series':
         expect(result.status).toBe(1);
-        expect(result.stderr).toContain(`offers no hub release under ${word}`);
+        expect(result.stderr).toContain(`offers no cli release under ${word}`);
         break;
-      case 'refused':
+      case 'refused': {
         expect(result.status).toBe(1);
         expect(result.stderr).toMatch(/not a version this can install|nothing after it/);
+        const role = run(script, home, ['--dry-run', `--role=hub@${word}`]);
+        expect(role.status).toBe(1);
+        expect(role.stderr).toMatch(/not a version this can install|nothing after it/);
         break;
+      }
     }
   });
 
   /**
    * Every resolution in the table, through the script's `newest_in_series`,
-   * against a manifest holding exactly the case's releases in the order a
-   * release job would have published them. The same rows run against
-   * `newestInSeries` in `packages/release`.
+   * against a manifest holding exactly the case's releases of the command in
+   * the order a release job would have published them. The same rows run
+   * against `newestInSeries` in `packages/release`.
    */
   it.each(SERIES_RESOLUTION_CASES)('$name', ({ releases, series, expect: expected }) => {
     const { script, home, versions } = scratch();
     const last = releases.at(-1) ?? '';
     writeVersions(
       versions,
-      { ...CURRENT, hub: last },
+      { ...CURRENT, cli: last },
       {
         history: {
-          hub: Object.fromEntries(releases.slice(0, -1).map((one) => [one, FIXTURE_PROTOCOL])),
+          cli: Object.fromEntries(releases.slice(0, -1).map((one) => [one, FIXTURE_PROTOCOL])),
         },
       },
     );
 
-    const result = run(script, home, ['--dry-run', `--role=hub@${series}`]);
+    const result = run(script, home, ['--dry-run', `--package-version=${series}`]);
 
     if (expected === null) {
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain(`offers no hub release under ${series}`);
+      expect(result.stderr).toContain(`offers no cli release under ${series}`);
     } else {
       expect(result.status).toBe(0);
-      expect(packagePlan(result.stdout).source).toContain(`/hub-v${expected}/`);
+      expect(packagePlan(result.stdout).source).toContain(`/cli-v${expected}/`);
     }
   });
 
-  /** The command takes the same pins, through its own flag. */
   it('resolves a series given to --package-version', () => {
     const { script, home, versions } = scratch();
     writeHistory(versions, { cli: { '1.4.7': FIXTURE_PROTOCOL } });
@@ -3180,29 +2550,37 @@ describe('a pin that names a series rather than a tag', () => {
    */
   it('resolves nothing without a manifest, and says so', () => {
     const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--role=server@1.4'], {
+    const series = run(script, home, ['--dry-run', '--package-version=1.4'], {
       environment: { AGENTPLEX_VERSIONS: '' },
     });
 
-    expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'release')).toContain('server (not resolved)');
-    expect(packagePlan(result.stdout).source).not.toContain('-v');
+    expect(series.status).toBe(0);
+    expect(planned(series.stdout, 'release')).toContain('cli (not resolved)');
+    expect(packagePlan(series.stdout).source).not.toContain('-v');
+
+    const exact = run(script, home, ['--dry-run', '--package-version=1.4.0'], {
+      environment: { AGENTPLEX_VERSIONS: '' },
+    });
+    expect(exact.status).toBe(0);
+    expect(packagePlan(exact.stdout).source.trim()).toBe(cliSpec('1.4.0'));
   });
 });
 
-describe('the release assets, which two directories have to agree about', () => {
+describe('the release asset, which two directories have to agree about', () => {
   /**
-   * The script builds a download URL out of a component and an asset name, and
-   * the assembler decides what that asset is called. Neither can read the
-   * other, so the tie is a test: a rename in `assemble-package.ts` fails here
-   * rather than at a 404 on somebody's machine.
+   * The script builds the command's download URL out of a version and an
+   * asset name, and the assembler decides what that asset is called. Neither
+   * can read the other, so the tie is a test: a rename in `assemble-package.ts`
+   * fails here rather than at a 404 on somebody's machine.
    */
-  it.each(PACKAGES.map((target) => [target.component, target.asset] as const))(
-    'builds the %s URL against the asset the assembler names',
-    (component, asset) => {
-      expect(releaseUrl(component, '1.0.0')).toContain(`/${component}-v1.0.0/${asset}`);
-    },
-  );
+  it('builds the command URL against the asset the assembler names', () => {
+    const declared = /^readonly CLI_ASSET='([^']+)'$/m.exec(readFileSync(scriptPath, 'utf8'))?.[1];
+    const cli = PACKAGES.find((target) => target.component === 'cli');
+
+    expect(declared).toBeDefined();
+    expect(declared).toBe(cli?.asset);
+    expect(cliSpec('1.0.0')).toContain(`/cli-v1.0.0/${declared ?? ''}`);
+  });
 });
 
 describe('the shape a prefix has to have, because --uninstall takes one', () => {
@@ -3240,7 +2618,7 @@ describe('the shape a prefix has to have, because --uninstall takes one', () => 
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--role=server', `--prefix=${home}/custom/`]);
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(`${packageSpecs('server')} into ${home}/custom`);
+    expect(planned(result.stdout, 'package')).toBe(`${cliSpec()} into ${home}/custom`);
   });
 });
 

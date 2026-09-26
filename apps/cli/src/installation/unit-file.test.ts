@@ -3,19 +3,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { systemLayout, userLayout, type Layout } from './layout.js';
 import { declared } from './test-install-script.js';
-import {
-  DOCS_URL,
-  STOP_KILL_MARGIN_SECONDS,
-  STOP_TIMEOUT_SECONDS,
-  renderUnit,
-  unitFileName,
-  unitSearchPath,
-  type Daemon,
-} from './unit-file.js';
+import { DOCS_URL, renderUnit, unitFileName, unitSearchPath, type Daemon } from './unit-file.js';
 
 /**
  * The renderer, held byte for byte against what `install.sh --print-unit`
- * printed for the same role, scope and prefix.
+ * printed for the same role, scope and prefix while the script still rendered
+ * units itself.
  *
  * The fixtures are the script's own output, captured in a container as
  * `fixtures/units/CAPTURE.txt` records, so nothing here is a unit somebody
@@ -24,9 +17,12 @@ import {
  * `resolve_node_directory` settled on -- `<prefix>/node/bin` where the image
  * had no node, `/usr/local/bin` where it adopted the image's own.
  *
- * A later change to `render_unit` re-captures, and this is what fails until it
- * has: the renderer and the script cannot drift without one of these files
- * changing.
+ * The script renders no unit now, so these are what every machine installed
+ * before the handover carries, and a unit this writes has to match them. A
+ * deliberate change to the unit re-captures them, and this is what fails until
+ * it has. The cases after the fixtures state the decisions inside the text
+ * outright, so a re-capture that lost one fails for that reason and not only
+ * as a changed byte.
  */
 
 function fixture(name: string): string {
@@ -131,6 +127,78 @@ describe('renderUnit', () => {
     }
   });
 
+  it('gives the drain less time than systemd gives the whole stop, with a real margin', () => {
+    const unit = renderUnit('server', USER, '/usr/local/bin');
+    const drain = /^Environment=AGENTPLEX_SERVER_DRAIN_SECONDS=(\d+)$/m.exec(unit)?.[1];
+    const stop = /^TimeoutStopSec=(\d+)s$/m.exec(unit)?.[1];
+
+    expect(drain, 'the unit sets no drain budget').toBeDefined();
+    expect(stop, 'the unit sets no stop timeout').toBeDefined();
+    expect(Number(drain)).toBeLessThan(Number(stop));
+    // What is left is what the process has to kill the stragglers, close its
+    // sockets and exit.
+    expect(Number(stop) - Number(drain)).toBeGreaterThanOrEqual(5);
+  });
+
+  it('runs a user unit as its user, and a system unit as the service account', () => {
+    const user = renderUnit('server', USER, '/usr/local/bin').split('\n');
+    const system = renderUnit('server', SYSTEM, '/usr/local/bin').split('\n');
+
+    // A user unit runs as its user, and a line naming one would be a claim
+    // this scope cannot make.
+    expect(user.filter((line) => /^(User|Group)=/.test(line))).toEqual([]);
+    expect(user).toContain('WantedBy=default.target');
+    expect(system).toContain('User=agentplex');
+    expect(system).toContain('Group=agentplex');
+    expect(system).toContain('WantedBy=multi-user.target');
+  });
+
+  it('orders against network-online.target in system scope only, where it exists', () => {
+    // A unit of the system manager: the user manager's search paths hold no
+    // such file, so these lines in a user unit would order against nothing and
+    // tell the reader a guarantee that is not one.
+    const user = renderUnit('hub', USER, '/usr/local/bin');
+    const system = renderUnit('hub', SYSTEM, '/usr/local/bin');
+
+    expect(user).not.toContain('network-online.target');
+    expect(system).toContain('\nAfter=network-online.target\nWants=network-online.target\n');
+  });
+
+  it('stops rather than restarting when the configuration is what is wrong', () => {
+    // Exit 2 is the daemon saying its configuration is wrong: restarting will
+    // not help.
+    const unit = renderUnit('hub', USER, '/usr/local/bin');
+    expect(unit).toContain('\nRestart=on-failure\n');
+    expect(unit).toContain('\nRestartPreventExitStatus=2\n');
+  });
+
+  it('carries no sandboxing, because the service exists to reach the operator files', () => {
+    for (const layout of [USER, SYSTEM]) {
+      const lines = renderUnit('server', layout, '/usr/local/bin').split('\n');
+      for (const directive of [
+        'ProtectHome=',
+        'ProtectSystem=',
+        'NoNewPrivileges=',
+        'PrivateTmp=',
+      ]) {
+        expect(lines.filter((line) => line.startsWith(directive))).toEqual([]);
+      }
+    }
+  });
+
+  it('starts each daemon by naming the interpreter and its own package entry', () => {
+    const lines = ['hub', 'server'].map(
+      (daemon) =>
+        renderUnit(daemon as Daemon, USER, '/home/alice/.agentplex/node/bin')
+          .split('\n')
+          .find((line) => line.startsWith('ExecStart=')) ?? '',
+    );
+    expect(lines).toEqual([
+      'ExecStart=/home/alice/.agentplex/node/bin/node /home/alice/.agentplex/lib/node_modules/@softiesolutions/agentplex-hub/apps/hub/dist/main.js',
+      'ExecStart=/home/alice/.agentplex/node/bin/node /home/alice/.agentplex/lib/node_modules/@softiesolutions/agentplex-server/apps/server/dist/main.js',
+    ]);
+  });
+
   it('names the unit file as the script does, one per daemon', () => {
     expect(unitFileName('hub')).toBe('agentplex-hub.service');
     expect(unitFileName('server')).toBe('agentplex-server.service');
@@ -151,10 +219,8 @@ describe('unitSearchPath', () => {
   });
 });
 
-describe('the constants the unit is rendered from', () => {
-  it('are the ones install.sh declares', () => {
-    expect(String(STOP_TIMEOUT_SECONDS)).toBe(declared('STOP_TIMEOUT_SECONDS'));
-    expect(String(STOP_KILL_MARGIN_SECONDS)).toBe(declared('STOP_KILL_MARGIN_SECONDS'));
+describe('the documentation every unit names', () => {
+  it('is the one install.sh prints', () => {
     expect(DOCS_URL).toBe(declared('DOCS_URL'));
   });
 });

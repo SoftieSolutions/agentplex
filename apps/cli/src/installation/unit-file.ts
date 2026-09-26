@@ -9,22 +9,21 @@ import {
 } from './layout.js';
 
 /**
- * A daemon's systemd unit, as text: `install.sh`'s `render_unit`, restated in
- * the program that will write units once the installer hands over to it.
+ * A daemon's systemd unit, as text.
  *
- * This is the one renderer. `agentplex install --print-unit` prints through it
- * now, and whatever later writes a unit -- the install itself, `setup` -- writes
- * through it too, so the text a machine ends up with cannot depend on which
- * program happened to write it.
+ * This is the one renderer. `install.sh` renders no unit since it hands the
+ * install over to `agentplex install`: the install writes through this,
+ * `agentplex install --print-unit` prints through it, and `install.sh
+ * --print-unit` asks that command -- so the text a machine ends up with cannot
+ * depend on which program happened to write it.
  *
- * Restated rather than shared, because the installer is a shell script fetched
- * over HTTPS onto a machine with nothing on it and has nothing to import. What
- * holds the two together is `unit-file.test.ts`, which compares this output
- * byte for byte with units `install.sh --print-unit` printed, captured under
- * `fixtures/units/`. A change to `render_unit` re-captures those, and this is
- * what fails until the same change lands here. Every comment inside the unit is
- * the script's, word for word, for the same reason: an operator diffing a unit
- * one wrote against the other's `--print-unit` should see no difference.
+ * It was the script's `render_unit` first, and the machines installed before
+ * the handover carry that text. `unit-file.test.ts` holds this output byte for
+ * byte against units the script printed, captured under `fixtures/units/`, so
+ * a unit this writes is the unit an older install wrote and an operator diffing
+ * one against `--print-unit` sees no difference. A deliberate change to the
+ * unit changes those fixtures with it, re-captured from `agentplex install
+ * --print-unit`.
  */
 
 /** The two daemons, which are the two components that get a unit. */
@@ -35,10 +34,24 @@ export const DOCS_URL =
   'https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md';
 
 /**
- * How long a stop may take, and how much of that is left after the server
- * stops draining: `STOP_TIMEOUT_SECONDS` and `STOP_KILL_MARGIN_SECONDS`. One
- * decision written as two numbers, because systemd needs one and the daemon
- * the other, and the unit renders both from here so they cannot drift.
+ * How long a stop may take, and how much of that the server may spend waiting.
+ *
+ * One decision written as two numbers, because systemd needs one of them and
+ * the daemon needs the other, and the unit renders both from here so they
+ * cannot drift. The server drains on SIGTERM: no new sessions, and the agents
+ * already running are given until the drain budget to reach a turn boundary,
+ * because killing one mid-tool is how a half-applied edit gets left on disk.
+ * That is only a drain because the server unit says `KillMode=mixed`: systemd's
+ * default signals every process in the unit's cgroup at once, and the agents are
+ * in it, so they would get the same SIGTERM in the same millisecond the server
+ * started waiting for them. With mixed the server alone gets it. systemd sends
+ * SIGKILL after `TimeoutStopSec` whatever the daemon is doing, so a drain that
+ * outlasted it would not be a drain -- it would be a hang followed by the same
+ * kill. The margin is what the process has left after it stops waiting: kill
+ * the stragglers, close the sockets, exit.
+ *
+ * The daemon's own default is the same fifteen seconds, for a checkout or an
+ * image that has no unit to read this from.
  */
 export const STOP_TIMEOUT_SECONDS = 20;
 export const STOP_KILL_MARGIN_SECONDS = 5;
