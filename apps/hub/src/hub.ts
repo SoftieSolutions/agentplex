@@ -195,7 +195,114 @@ export interface Hub {
   stop(): Promise<void>;
 }
 
+/**
+ * Everything the hub starts that has to be stopped, in the one order it is
+ * stopped in. The same order whether the hub is being shut down or failed
+ * halfway through starting: a start that got as far as the listener and then
+ * failed has the same parts running as a hub that came up, and stopping them
+ * in a different order on that path would be a second shutdown nobody reads.
+ */
+const STOP_ORDER = [
+  // Push first, and before anything that publishes a state change. Every step
+  // below does publish one -- every server dropping is a change the edge
+  // detector sees -- and a fan-out begun during the shutdown would still be
+  // running when `boot.ts` closes the database the moment this returns. It
+  // waits for nothing: what makes that safe is that the feature reads its own
+  // stop immediately before each statement.
+  'push',
+  // Clients next. Every server dropping in turn is a real sequence of changes,
+  // and a client still attached through the shutdown would be sent each one --
+  // a screen that reports the fleet collapsing when what is actually happening
+  // is that the hub is going away.
+  'clients',
+  // Then the runs. A walk in flight is cancelled and the feature writes and
+  // publishes nothing more: `boot.ts` closes the database the moment this
+  // returns, and a step ending after that would otherwise write its record
+  // through a closed handle. The row is left `running` for the next boot's
+  // sweep, which is the truth of what happened to it.
+  'graphRuns',
+  // Then the ear. Nobody is left to be told what the network says, and a
+  // beacon arriving mid-shutdown would otherwise bump a state whose readers
+  // have all been closed.
+  'beacons',
+  // Then the sockets those clients were served on. An upgraded connection is
+  // not an HTTP request, so closing the listener below does not reach it, and
+  // a live websocket would hold the process open after everything it could ask
+  // about had stopped.
+  'sockets',
+  // Then whatever an agent was in the middle of asking. An MCP request has a
+  // server and a transport behind it that closing the listener does not reach,
+  // and a tool still running would be one reading a fleet state whose parts
+  // are being stopped underneath it.
+  'mcp',
+  // Then outbound. The dials are what hold sockets open and what would
+  // otherwise still be retrying while the listener is closing.
+  'servers',
+  'listener',
+] as const;
+
+type StopStep = (typeof STOP_ORDER)[number];
+
+/**
+ * What has been started so far, and the one walk that stops it.
+ *
+ * A map filled as each feature comes up rather than one closure naming them
+ * all, because a closure over a `const` that has not been reached yet throws
+ * when it runs -- and on a failed start, some of them have not been.
+ */
+interface StartedFeatures {
+  started(what: StopStep, stop: () => void | Promise<void>): void;
+  /**
+   * Stops everything recorded, in `STOP_ORDER`, and answers what failed. A
+   * failing step is logged and the walk carries on: one feature that would not
+   * stop is no reason to leave the ones after it running.
+   */
+  stopAll(): Promise<readonly unknown[]>;
+}
+
+function trackStartedFeatures(logger: Logger): StartedFeatures {
+  const stops = new Map<StopStep, () => void | Promise<void>>();
+  return {
+    started(what, stop) {
+      stops.set(what, stop);
+    },
+    async stopAll() {
+      const failures: unknown[] = [];
+      for (const what of STOP_ORDER) {
+        const stop = stops.get(what);
+        if (stop === undefined) continue;
+        try {
+          await stop();
+        } catch (error) {
+          failures.push(error);
+          logger.error('shutdown step failed', { what, error: String(error) });
+        }
+      }
+      return failures;
+    },
+  };
+}
+
 export async function startHub(dependencies: HubDependencies): Promise<Hub> {
+  const logger = dependencies.logger.child({ role: 'hub' });
+  const features = trackStartedFeatures(logger);
+  try {
+    return await composeHub(dependencies, logger, features);
+  } catch (error) {
+    // Stopped here rather than left for `boot.ts`, which has no hub to call
+    // `stop` on: a start that failed after the ear was listening and the
+    // servers were dialled would otherwise leave a socket and a redial behind
+    // a process that is reporting it never came up.
+    await features.stopAll();
+    throw error;
+  }
+}
+
+async function composeHub(
+  dependencies: HubDependencies,
+  logger: Logger,
+  features: StartedFeatures,
+): Promise<Hub> {
   const {
     database,
     ids,
@@ -214,7 +321,6 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     files,
     push: pushSeams,
   } = dependencies;
-  const logger = dependencies.logger.child({ role: 'hub' });
 
   // Migrating before listening is the point of doing it here: a hub that serves
   // from a schema it has not reconciled has already told a client something.
@@ -248,6 +354,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // honest state, because a claim read back off a disk is a claim nobody made
   // today.
   const beacons = createDiscovery({ source: discovery, clock, timers, logger });
+  features.started('beacons', () => beacons.stop());
   beacons.subscribe((candidates) => void state.applyCandidates(candidates));
 
   // The tree, read from the database per request rather than held in memory
@@ -429,6 +536,10 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       settled: (registrationId, frame) => approvals.settled(registrationId, frame),
     },
   });
+  // Recorded now rather than after `sync`, so that a sync that dialled some
+  // servers and then failed still has its dials stopped. Stopping before any
+  // sync is safe: there is nothing to stop and nothing will be dialled after.
+  features.started('servers', () => servers.stop());
 
   // Named in the closures above before it is built, which is the shape of the
   // one knot in this file: the relay puts frames to servers and the servers
@@ -571,6 +682,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // client is told it may subscribe against, and a browser that asked before
   // the pair was read would be told this hub has no push when it has one.
   const push = pushSeams === null ? null : createPush({ database, clock, logger, ...pushSeams });
+  if (push !== null) features.started('push', () => push.stop());
   await push?.load();
 
   if (push !== null) {
@@ -649,6 +761,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     // client can ask for one, so the closure never runs before it exists.
     onState: (run) => clients.runStateChanged(run),
   });
+  features.started('graphRuns', () => graphRuns.stop());
 
   // Before the first client is served: a run left running by the previous
   // process is ended failed with a reason naming the restart. Nothing resumes
@@ -700,6 +813,9 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     // can never send to.
     push,
   });
+  // It subscribes to the state and schedules its flushes as it is built, so it
+  // is running from here whether or not a client ever attaches.
+  features.started('clients', () => clients.stop());
 
   // Not awaited past its first read of the pairing table, and started before
   // the port is opened. A server that is switched off must not delay the hub
@@ -731,6 +847,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       clients.attach(socket);
     },
   });
+  features.started('sockets', () => sockets.close());
 
   // Behind the same token the exchange above checks, on the same port, and
   // built here rather than inside the route chain for the reason every other
@@ -767,6 +884,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     timers,
     logger,
   });
+  features.started('mcp', () => mcp.close());
 
   const web = createWeb({ files: webAssets, logger });
 
@@ -788,6 +906,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     // socket is not an exception to it.
     sockets.onUpgrade,
   );
+  features.started('listener', () => listener.close());
 
   logger.info('hub listening', {
     port: listener.port,
@@ -802,42 +921,13 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     state,
     clients,
     async stop() {
-      // Push first, and before anything that publishes a state change. Every
-      // step below does publish one -- every server dropping is a change the
-      // edge detector sees -- and a fan-out begun during the shutdown would
-      // still be running when `boot.ts` closes the database the moment this
-      // returns. It waits for nothing: what makes that safe is that the
-      // feature reads its own stop immediately before each statement.
-      push?.stop();
-      // Clients next. Every server dropping in turn is a real sequence of
-      // changes, and a client still attached through the shutdown would be sent
-      // each one -- a screen that reports the fleet collapsing when what is
-      // actually happening is that the hub is going away.
-      clients.stop();
-      // Then the runs. A walk in flight is cancelled and the feature writes
-      // and publishes nothing more: `boot.ts` closes the database the moment
-      // this returns, and a step ending after that would otherwise write its
-      // record through a closed handle. The row is left `running` for the
-      // next boot's sweep, which is the truth of what happened to it.
-      graphRuns.stop();
-      // Then the ear. Nobody is left to be told what the network says, and a
-      // beacon arriving mid-shutdown would otherwise bump a state whose
-      // readers have all been closed.
-      beacons.stop();
-      // Then the sockets those clients were served on. An upgraded connection
-      // is not an HTTP request, so closing the listener below does not reach
-      // it, and a live websocket would hold the process open after everything
-      // it could ask about had stopped.
-      sockets.close();
-      // Then whatever an agent was in the middle of asking. An MCP request has
-      // a server and a transport behind it that closing the listener does not
-      // reach, and a tool still running would be one reading a fleet state
-      // whose parts are being stopped underneath it.
-      await mcp.close();
-      // Then outbound. The dials are what hold sockets open and what would
-      // otherwise still be retrying while the listener is closing.
-      await servers.stop();
-      await listener.close();
+      // The same walk a failed start takes, so the two cannot drift apart.
+      // Every step is attempted whatever the one before it did, and a failure
+      // is still a failure to `boot.ts`, which reports how the shutdown went.
+      const failures = await features.stopAll();
+      if (failures.length > 0) {
+        throw new AggregateError(failures, 'the hub did not stop cleanly');
+      }
       logger.info('hub stopped');
     },
   };
