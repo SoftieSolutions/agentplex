@@ -2,14 +2,15 @@
 
 Watch and drive coding-agent sessions across machines, from a phone or a laptop.
 
-agentplex runs your coding-agent sessions (Claude Code today; the provider seam
-is first class) wherever they belong — a homelab box, a mac mini, an EC2
-instance — and gives you one installable web app that sees all of them, tells
-you which ones are waiting on you, and lets you answer from wherever you are.
+agentplex runs your coding-agent sessions (Claude Code and Codex, through a
+provider seam that is first class) wherever they belong — a homelab box, a mac
+mini, an EC2 instance — and gives you one installable web app that sees all of
+them, tells you which ones are waiting on you, and lets you answer from wherever
+you are.
 
-> Status: early. Milestone 1 of the v2 design — the scaffold, protocol
-> package, service skeleton and database — is what exists so far. It does not
-> yet run sessions.
+> Status: early. The hub, the server and the PWA run sessions across paired
+> machines today, with graph runs, MCP tools for agents and web push on top of
+> them.
 
 ## How it fits together
 
@@ -29,22 +30,22 @@ MCP agent  ─┘                │             SERVER ────────
   `agentplex-store.json` at its root. A session's identity is its store and its
   id within it, never the machine it happens to be running on.
 
-One bin, `agentplex`. Its subcommands are `setup`, the wizard, and `doctor`,
-the read-only check. `hub` and `server` are daemons rather than subcommands, and
-nobody types either: `install.sh` writes a systemd unit per daemon the machine's
-role runs, and `pnpm -C apps/hub start` is the same thing in a checkout. A
-machine that runs both daemons starts one of each.
+One bin, `agentplex`. Its subcommands are what `agentplex help` lists. `hub` and
+`server` are daemons rather than subcommands, and nobody types either:
+`install.sh` writes a systemd unit per daemon the machine's role runs, and
+`pnpm -C apps/hub start` is the same thing in a checkout. A machine that runs
+both daemons starts one of each.
 
 ## What gets published
 
 Four packages, one per app, so that a machine installs only what it runs.
 
-| package                             | what it is                         | installed by                   |
-| ----------------------------------- | ---------------------------------- | ------------------------------ |
-| `@softiesolutions/agentplex`        | the bin: `setup`, `doctor`, `help` | every role                     |
-| `@softiesolutions/agentplex-hub`    | the hub daemon and its migrations  | `--role=hub`, `--role=both`    |
-| `@softiesolutions/agentplex-web`    | the built web app the hub serves   | with the hub                   |
-| `@softiesolutions/agentplex-server` | the server daemon                  | `--role=server`, `--role=both` |
+| package                             | what it is                        | installed by                   |
+| ----------------------------------- | --------------------------------- | ------------------------------ |
+| `@softiesolutions/agentplex`        | the bin and its subcommands       | every role                     |
+| `@softiesolutions/agentplex-hub`    | the hub daemon and its migrations | `--role=hub`, `--role=both`    |
+| `@softiesolutions/agentplex-web`    | the built web app the hub serves  | with the hub                   |
+| `@softiesolutions/agentplex-server` | the server daemon                 | `--role=server`, `--role=both` |
 
 `web` is not a role: it is part of being a hub, and the hub finds it by
 resolving that package name rather than by a path inside its own tree. A hub
@@ -65,12 +66,13 @@ reporting success and never opening a session.
 ```
 apps/hub/              the hub: database, migrations, pairing, discovery, the PWA's bytes
 apps/server/           the server: terminals, session control, identity, beacon, the hub connection
-apps/cli/              the agentplex bin, and the setup and doctor commands inside it
+apps/cli/              the agentplex bin, and every subcommand inside it
 apps/web/              the PWA
 packages/protocol/     frame types and parsers, shared by the service and the PWA
 packages/node-shared/  clock, ids, logger, sockets: what the hub and the server share
 packages/providers/    the provider seam, the process runner it needs, store identity
 packages/pty/          the pty seam, its supervisor, and node-pty
+packages/release/      the versions.json schema, shared by the release job and `agentplex update`
 scripts/               install.sh and the package assembler: this repository's own tooling
 tests/hub-server/      the hub driven against the real server end, both in one process
 ```
@@ -89,13 +91,14 @@ docker compose up -d   # the hub, and Caddy in front of it
 curl -k https://localhost/health
 ```
 
-One image serves both roles; the role is a runtime choice, by environment
-variable or flag. Caddy is there only to terminate TLS with a certificate that
-renews itself, because web push is HTTPS-only — if TLS is already handled,
-`docker compose up -d hub` starts the hub and nothing else.
+One image carries both daemons, and the command it is started with picks one:
+the image runs the hub unless told otherwise, and a compose service that names
+`apps/server/dist/main.js` runs the server. Caddy is there only to terminate TLS
+with a certificate that renews itself, because web push is HTTPS-only — if TLS
+is already handled, `docker compose up -d hub` starts the hub and nothing else.
 
 The hub's database is a SQLite file, so a container is packaging rather than a
-dependency you could not otherwise satisfy: one machine can run `--role=both`
+dependency you could not otherwise satisfy: one machine can run both daemons
 natively and never build an image.
 
 Running the server role bare metal — `node` on a mac mini or a laptop, no
@@ -107,22 +110,34 @@ For working on the code, Node 24 and pnpm 11:
 ```sh
 pnpm install
 pnpm build
-pnpm check          # lint, typecheck, test
+pnpm check          # build, lint, typecheck, test
 pnpm docker:check   # the same, in a container
 ```
 
 ## Configuration
 
-Every setting has one flag and one environment variable; the flag wins.
+Every setting has one flag and one environment variable; the flag wins. Each
+daemon takes only its own table below, and `--host` and `--log-level` are in
+both.
+
+The hub:
+
+| Flag                           | Environment                            | Default        | Meaning                                                                                  |
+| ------------------------------ | -------------------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
+| `--host`                       | `AGENTPLEX_HOST`                       | `0.0.0.0`      | Interface to bind                                                                        |
+| `--hub-port`                   | `AGENTPLEX_HUB_PORT`                   | `8080`         | Port the hub serves on                                                                   |
+| `--database-file`              | `AGENTPLEX_DATABASE_FILE`              | none, required | SQLite file, absolute                                                                    |
+| `--client-token`               | `AGENTPLEX_CLIENT_TOKEN`               | none, required | Client credential, 32+ chars                                                             |
+| `--local-server-identity-file` | `AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE` | none           | Identity file of the server on this machine, absolute; the hub pairs that server at boot |
+| `--local-server-port`          | `AGENTPLEX_LOCAL_SERVER_PORT`          | `8081`         | Port that local server binds; refused without `--local-server-identity-file`             |
+| `--log-level`                  | `AGENTPLEX_LOG_LEVEL`                  | `info`         | `debug`, `info`, `warn`, `error`                                                         |
+
+The server:
 
 | Flag                     | Environment                      | Default                        | Meaning                                                                                    |
 | ------------------------ | -------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------ |
-| `--role`                 | `AGENTPLEX_ROLE`                 | none, required                 | `hub`, `server` or `both`                                                                  |
 | `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`                      | Interface to bind                                                                          |
-| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`                         | Port the hub serves on                                                                     |
-| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`                         | Port the hub dials                                                                         |
-| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none                           | SQLite file, absolute; required for `hub` and `both`                                       |
-| `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none                           | Client credential, 32+ chars; required for `hub`, `both`                                   |
+| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`                         | Port the server serves on, which the hub dials                                             |
 | `--store-path`           | `AGENTPLEX_STORE_PATH`           | none                           | Store root; repeatable, absolute                                                           |
 | `--browse-root`          | `AGENTPLEX_BROWSE_ROOTS`         | none                           | Directory a client may browse under; repeatable, absolute. None means browsing is refused  |
 | `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | `$HOME/.agentplex/server.json` | Absolute; setup records the file it mints. `--system` installs write it out                |
@@ -132,21 +147,35 @@ Every setting has one flag and one environment variable; the flag wins.
 | `--tz`                   | `AGENTPLEX_TZ`                   | inherited                      | Zone a spawned session reports times in; IANA name                                         |
 | `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`                            | Terminals held at once; at least 1                                                         |
 | `--drain-seconds`        | `AGENTPLEX_SERVER_DRAIN_SECONDS` | `15`                           | Seconds shutdown waits for turns to end                                                    |
+| `--announce`             | `AGENTPLEX_ANNOUNCE`             | `false`                        | `true` or `false`; broadcast a beacon so discovery on the LAN pre-fills its address        |
 | `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`                         | `debug`, `info`, `warn`, `error`                                                           |
+
+`agentplex doctor` takes every flag in both tables, and one of its own:
+
+| Flag     | Environment      | Default        | Meaning                                                                                                 |
+| -------- | ---------------- | -------------- | ------------------------------------------------------------------------------------------------------- |
+| `--role` | `AGENTPLEX_ROLE` | none, required | `hub`, `server` or `both`; which half the doctor inspects. The installer records it; no daemon reads it |
 
 ### Checking a machine
 
-`agentplex doctor`, with the settings the daemons would take, reports what
-that machine can actually start: for a hub, a database file it may write, a
-client token, a port nothing else holds and the client package it serves; for a
-server, per provider the version, the directory it resolved from and whether it
-is logged in, and per store path whether it is there. It writes nothing -- the
-one thing it opens is the hub's port, bound and released, because nothing else
-answers whether something already has it -- and exits `1` when anything it
-looked at is unusable. The
-same check runs at server startup and its result travels in the handshake, so a
-provider that is missing or logged out is a named fact on the settings screen
-and a refused start, rather than a session that appears and vanishes.
+`agentplex doctor` reports what a machine can actually start. It reads the
+settings an install wrote, when it finds that file, then the environment over
+it and its flags over both, which is the daemons' own order; a file it may not
+read is reported rather than refused. The role decides which half it inspects.
+For a hub: a database file it may write, a client token, a port nothing else
+holds, the client package it serves (a warning when missing, never a failure),
+and, when the settings name a local server, that server's identity file. For a
+server: per provider the version, the directory it resolved from and whether it
+is logged in; per store path and per browse root whether it is there; whether
+node-pty loads; whether the data root can be created or written in; and which
+identity file the server will read, and on a `both` machine whether the hub
+pairs from the same one. It writes nothing -- the one thing it opens is the
+hub's port, bound and released, because nothing else answers whether something
+already has it -- and exits `1` when anything it looked at is unusable. The
+provider check also runs at server startup and its result travels in the
+handshake, so a provider that is missing or logged out is a named fact on the
+settings screen and a refused start, rather than a session that appears and
+vanishes.
 
 ### Pairing a server with the hub
 
@@ -170,8 +199,8 @@ an operator revokes, and revoking one leaves every other hub connected.
 The token in the identity file is grant zero. Nothing about a fresh install
 changes, no hub needs migrating, and on the first start of an upgraded server
 the grants file appears holding that one record. Revoking grant zero is allowed
-and does what it says: on a `--role=both` machine, the hub beside the server
-stops connecting until you re-mint the identity file.
+and does what it says: on a machine installed with `install.sh --role=both`, the
+hub beside the server stops connecting until you re-mint the identity file.
 
 Three things are worth knowing about how it behaves.
 

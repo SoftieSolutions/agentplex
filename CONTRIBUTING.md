@@ -222,8 +222,9 @@ rather than something each caller has to remember.
 
 ## Workspace boundaries
 
-Both apps may depend on `@agentplex/protocol`. Nothing else crosses a package
-line, and neither app may import the other. `pnpm lint` enforces this.
+An app or package imports only the workspace packages its manifest declares, and
+no app imports another. `pnpm lint` refuses an import of one app from another,
+and holds each package under `packages/` to its dependency list.
 
 `packages/protocol` is shared by a Node service and a browser bundle, so it may
 use neither Node builtins nor another workspace package.
@@ -293,9 +294,9 @@ second answer to what a document write means.
 **3. A package, once the second consumer actually exists.** `AGENTS.md` states
 the rule -- `packages/` holds seams with at least two consumers, and one
 consumer is a folder -- and the cost is why the rule has a number in it: a
-manifest, a tsconfig, a build, a block in `eslint.config.js` naming what the
-package may import, and a place in the packaging step. `release` is the clean
-case: the bin and `scripts/` both imported it the day it landed.
+manifest naming what the package may import, a tsconfig, a build, and a place in
+the packaging step. `release` is the clean case: the bin and `scripts/` both
+imported it the day it landed.
 
 `node-shared` and `providers` are the exception the rule allows, and it is
 narrower than it looks. Both were carved out of `apps/agentplexd` while `apps/`
@@ -306,8 +307,8 @@ exist it has four consumers", in the future tense. What makes that defensible is
 that the split was not a hope: it was the epic being executed, written down in a
 design document, with the tickets that create the second consumer already filed.
 A second consumer somebody intends to write is not one, and cutting a package
-ahead of a split that is merely likely buys a manifest, a build and a lint block
-in exchange for nothing.
+ahead of a split that is merely likely buys a manifest, a build and a place in
+the packaging step in exchange for nothing.
 
 Placement on this rung can carry more than the rule. AGX-174 put the adapter
 list in `packages/providers` rather than in `apps/cli`, which holds two of its
