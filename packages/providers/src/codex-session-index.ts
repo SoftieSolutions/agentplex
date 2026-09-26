@@ -1,3 +1,4 @@
+import { boundedSessionText, SESSION_TITLE_MAX_CHARS } from '@agentplex/protocol';
 import { z } from 'zod';
 
 /**
@@ -60,7 +61,13 @@ export function parseCodexSessionIndex(contents: string): ReadonlyMap<string, st
     }
 
     const parsed = entrySchema.safeParse(entry);
-    if (parsed.success) names.set(parsed.data.id, parsed.data.thread_name);
+    if (!parsed.success) continue;
+    // Clipped to what the descriptor carries, so a long name costs its tail
+    // and not the store report. A name that draws as nothing is no name, and
+    // it still replaces an older one: that is the name codex gave last.
+    const name = boundedSessionText(parsed.data.thread_name, SESSION_TITLE_MAX_CHARS);
+    if (name === null) names.delete(parsed.data.id);
+    else names.set(parsed.data.id, name);
   }
 
   return names;

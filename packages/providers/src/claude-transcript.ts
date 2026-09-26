@@ -1,4 +1,12 @@
-import { activitySchema, type Activity, type SessionUsage } from '@agentplex/protocol';
+import {
+  activitySchema,
+  boundedSessionText,
+  SESSION_CWD_MAX_CHARS,
+  SESSION_MODEL_MAX_CHARS,
+  SESSION_TITLE_MAX_CHARS,
+  type Activity,
+  type SessionUsage,
+} from '@agentplex/protocol';
 import { z } from 'zod';
 import type { SessionTranscript, TranscriptSignal } from './provider-adapter.js';
 
@@ -229,7 +237,10 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
 
     const named = titleSchema.safeParse(entry);
     if (named.success) {
-      title = named.data.aiTitle;
+      // Clipped to what the descriptor carries rather than refused: the title
+      // is a model's prose, and one too long for the wire costs the title's
+      // tail, not the session and not the store report beside it.
+      title = boundedSessionText(named.data.aiTitle, SESSION_TITLE_MAX_CHARS);
       continue;
     }
 
@@ -253,7 +264,11 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
     // rest on the order Claude Code appended its lines in.
     createdAt = Math.min(createdAt, at);
     updatedAt = Math.max(updatedAt, at);
-    if (turn.data.cwd !== undefined) cwd = turn.data.cwd;
+    // A cwd past the longest path a system call takes is not a directory
+    // anybody was in, and a prefix of it is a different one: no cwd at all.
+    if (turn.data.cwd !== undefined) {
+      cwd = turn.data.cwd.length <= SESSION_CWD_MAX_CHARS ? turn.data.cwd : null;
+    }
     // Last wins, like the cwd above it, and for the same reason: `/model`
     // mid-session is ordinary and the question is what this session is running
     // now, not what it started on. Below the sidechain filter deliberately --
@@ -262,7 +277,9 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
     // Read off every turn rather than off the last one, because the last turn
     // of a busy session is a user turn, which names no model and would blank
     // the field on exactly the sessions somebody is watching.
-    if (turn.data.message?.model !== undefined) model = turn.data.message.model;
+    if (turn.data.message?.model !== undefined) {
+      model = boundedSessionText(turn.data.message.model, SESSION_MODEL_MAX_CHARS);
+    }
     trackToolUse(turn.data, pendingToolUse);
   }
 

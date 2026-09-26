@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import {
+  SESSION_CWD_MAX_CHARS,
+  SESSION_MODEL_MAX_CHARS,
+  SESSION_TITLE_MAX_CHARS,
+} from '@agentplex/protocol';
 import { claudeTranscriptActivities, parseClaudeTranscript } from './claude-transcript.js';
 
 /**
@@ -147,6 +152,56 @@ describe('parseClaudeTranscript', () => {
 
     expect(parsed.ok && parsed.transcript.turns).toBeGreaterThan(0);
     expect(parsed.ok && parsed.transcript.model).toBeNull();
+  });
+
+  it('clips a title longer than the descriptor carries, and keeps the session', () => {
+    // An `ai-title` is written by a model, so its length is the model's to
+    // choose. Past the bound it would fail the store report that carries every
+    // session beside this one; clipped, it is still a fair name for the
+    // session, and the session is still listed.
+    const long = `${'Docker compose without hub '.repeat(20)}`;
+    const parsed = parseClaudeTranscript(
+      COMPLETED_TURN.replace('"aiTitle":"Docker compose without hub"', `"aiTitle":"${long}"`),
+    );
+
+    expect(parsed.ok).toBe(true);
+    const title = parsed.ok ? parsed.transcript.title : null;
+    expect(title?.length).toBeLessThanOrEqual(SESSION_TITLE_MAX_CHARS);
+    expect(title).toBe(title?.trim());
+    expect(long.startsWith(title ?? '-')).toBe(true);
+  });
+
+  it('reports no title for one that is nothing but characters that cannot be drawn', () => {
+    const parsed = parseClaudeTranscript(
+      COMPLETED_TURN.replace(
+        '"aiTitle":"Docker compose without hub"',
+        '"aiTitle":"\\u202e\\u2066\\u200f"',
+      ),
+    );
+
+    expect(parsed.ok && parsed.transcript.turns).toBeGreaterThan(0);
+    expect(parsed.ok && parsed.transcript.title).toBeNull();
+  });
+
+  it('clips a model name longer than the descriptor carries', () => {
+    const long = `claude-${'x'.repeat(SESSION_MODEL_MAX_CHARS * 2)}`;
+    const parsed = parseClaudeTranscript(
+      COMPLETED_TURN.replaceAll('"model":"claude-opus-5"', `"model":"${long}"`),
+    );
+
+    expect(parsed.ok && parsed.transcript.model).toBe(long.slice(0, SESSION_MODEL_MAX_CHARS));
+  });
+
+  it('reports no cwd rather than a prefix of one past the longest path there is', () => {
+    // Not clipped, because a cwd is resumed in and read by git as well as
+    // drawn, and a prefix of a path is a different directory.
+    const long = `/${'d'.repeat(SESSION_CWD_MAX_CHARS)}`;
+    const parsed = parseClaudeTranscript(
+      COMPLETED_TURN.replaceAll('"cwd":"/Users/dev/Code/agentplex"', `"cwd":"${long}"`),
+    );
+
+    expect(parsed.ok && parsed.transcript.turns).toBeGreaterThan(0);
+    expect(parsed.ok && parsed.transcript.cwd).toBeNull();
   });
 
   it('dates a session by its last turn, never by its last line', () => {
