@@ -1,11 +1,10 @@
 # REPOSITORY DESCRIPTION
 
 agentplex watches and drives coding-agent sessions across machines. One bin,
-`agentplex`, whose subcommands are `setup` (the wizard), `doctor` (the
-read-only check) and `help`. `hub` and `server` are daemons and not commands:
-nobody types either, systemd starts them from their units and `pnpm start` does
-in development, so the bin reaches no app's build output. `web` is a React PWA
-the hub serves.
+`agentplex`, whose subcommands are what `agentplex help` lists. `hub` and
+`server` are daemons and not commands: nobody types either, systemd starts them
+from their units and `pnpm start` does in development, so the bin reaches no
+app's build output. `web` is a React PWA the hub serves.
 
 Four published packages, one per app: `@softiesolutions/agentplex` (the bin),
 `-hub`, `-server`, `-web`. `install.sh --role=hub|server|both` decides which a
@@ -39,9 +38,9 @@ session's identity is `{ storeId, sessionId }`, never the machine.
   by import. Nothing ships from it, and it is a workspace member because
   `pnpm test` is `pnpm -r test`: a suite outside a member runs nowhere.
 - `packages/` holds seams with at least two consumers: `protocol`,
-  `node-shared`, `providers`, `pty`. A package's dependency list is its
-  allowed import set. One consumer means a folder, not a package. `pnpm lint`
-  enforces both rules.
+  `node-shared`, `providers`, `pty`, `release`. A package's dependency list is
+  its allowed import set, and `pnpm lint` holds each package to it. One
+  consumer means a folder, not a package.
 - `packages/protocol` is bundled into a browser as well as loaded by a service,
   so it may use neither Node builtins nor another workspace package.
 - `tests/hub-server` is the one place both apps load into one process: the hub
