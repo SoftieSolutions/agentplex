@@ -62,8 +62,16 @@ export interface SetupMachine {
    */
   readFile(path: string): Promise<FileRead>;
   /**
-   * Writes a file whole, creating it readable by this user alone if it is not
-   * there.
+   * Replaces a file whole or not at all, creating it readable by this user
+   * alone if it is not there, and keeping the owner, group and mode of one that
+   * is.
+   *
+   * Whole or not at all because the file is written beside the target and
+   * renamed over it: a wizard that fails or is killed partway leaves the old
+   * settings file, not a truncated one. That costs two things a write in place
+   * did not. It needs write permission on the directory, not only on the file.
+   * And a symlink at the path is replaced by a regular file rather than written
+   * through; `install.sh` never makes the settings file a link.
    *
    * The second thing on this seam that writes, and the one the store filesystem
    * cannot do: `createFile` there refuses a file that exists, and the settings

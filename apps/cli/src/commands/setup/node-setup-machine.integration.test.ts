@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, chown, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -16,6 +16,11 @@ import { findProgram } from './setup-machine.js';
  */
 
 let root: string;
+
+// docker:test runs as root, for whom a directory's missing write bit is no
+// refusal at all; a case that needs the kernel to say no to this user, or one
+// that needs to give a file away, runs only where it can mean something.
+const suiteIsRoot = process.getuid?.() === 0;
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'agentplex-setup-machine-'));
@@ -101,6 +106,91 @@ describe('the real setup machine and the settings file', () => {
 
     expect(await machine.readFile(path)).toEqual({ kind: 'read', contents: 'A=2\n' });
     expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(suiteIsRoot)(
+    'leaves the old file whole when no new one can be made beside it',
+    async () => {
+      // The directory is not writable, so the temporary file cannot be created
+      // beside the target. A write in place would have gone through, because the
+      // file itself is writable; this one needs the directory and never touches
+      // the file. Root is refused nothing here, hence the skip.
+      const machine = createNodeSetupMachine({ home: root, path: undefined });
+      const directory = join(root, 'read-only');
+      const path = join(directory, 'agentplex.env');
+      await mkdir(directory, { recursive: true });
+      expect(await machine.writeFile(path, 'A=1\n')).toEqual({ ok: true });
+
+      await chmod(directory, 0o500);
+      try {
+        const written = await machine.writeFile(path, 'A=2\n');
+
+        expect(written.ok).toBe(false);
+        expect(await machine.readFile(path)).toEqual({ kind: 'read', contents: 'A=1\n' });
+        expect((await readdir(directory)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+      } finally {
+        await chmod(directory, 0o700);
+      }
+    },
+  );
+
+  it('cleans up after a rename that fails, even for root', async () => {
+    // A directory where the file should be: the temporary file is written, the
+    // rename over the directory is refused whoever is asking. Which errno that
+    // is differs by platform, so only the refusal is pinned.
+    const machine = createNodeSetupMachine({ home: root, path: undefined });
+    const directory = join(root, 'occupied');
+    const path = join(directory, 'agentplex.env');
+    await mkdir(join(path, 'inside'), { recursive: true });
+
+    const written = await machine.writeFile(path, 'A=1\n');
+
+    expect(written.ok).toBe(false);
+    expect((await stat(path)).isDirectory()).toBe(true);
+    expect(await readdir(path)).toEqual(['inside']);
+    expect(await readdir(directory)).toEqual(['agentplex.env']);
+  });
+
+  it('keeps the mode a file already had, and makes a fresh one 0600', async () => {
+    // A --system settings file is 0640 so the service user's group can read
+    // it; the rename puts a new inode in its place, and that inode has to be
+    // given the old one's mode or the daemons lose the file on the next boot.
+    const machine = createNodeSetupMachine({ home: root, path: undefined });
+    const directory = join(root, 'modes');
+    const existing = join(directory, 'existing.env');
+    const fresh = join(directory, 'fresh.env');
+    await mkdir(directory, { recursive: true });
+    await writeFile(existing, 'A=1\n', 'utf8');
+    // chmod rather than a writeFile mode, which the umask could narrow.
+    await chmod(existing, 0o640);
+
+    expect(await machine.writeFile(existing, 'A=2\n')).toEqual({ ok: true });
+    expect(await machine.writeFile(fresh, 'A=1\n')).toEqual({ ok: true });
+
+    expect(await machine.readFile(existing)).toEqual({ kind: 'read', contents: 'A=2\n' });
+    expect((await stat(existing)).mode & 0o7777).toBe(0o640);
+    expect((await stat(fresh)).mode & 0o7777).toBe(0o600);
+  });
+
+  it.skipIf(!suiteIsRoot)('keeps the owner and group a file already had', async () => {
+    // install.sh makes a --system settings file root:agentplex. Root runs
+    // setup there, and a file root creates is root's, so without the chown
+    // the service user would find its settings file belonging to nobody it is.
+    const machine = createNodeSetupMachine({ home: root, path: undefined });
+    const directory = join(root, 'owners');
+    const path = join(directory, 'agentplex.env');
+    await mkdir(directory, { recursive: true });
+    await writeFile(path, 'A=1\n', 'utf8');
+    await chown(path, 65534, 65534);
+    await chmod(path, 0o640);
+
+    expect(await machine.writeFile(path, 'A=2\n')).toEqual({ ok: true });
+
+    const after = await stat(path);
+    expect(await machine.readFile(path)).toEqual({ kind: 'read', contents: 'A=2\n' });
+    expect(after.uid).toBe(65534);
+    expect(after.gid).toBe(65534);
+    expect(after.mode & 0o7777).toBe(0o640);
   });
 
   it('reports a file it cannot write rather than throwing out of the wizard', async () => {
