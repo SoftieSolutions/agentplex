@@ -26,29 +26,32 @@ import { VERSIONS_URL } from '../../versions/version-check.js';
 import type { InstallRequest } from './install-flags.js';
 
 /**
- * What an install would do, after the runtime: `install.sh`'s dry run for
- * everything the bin is to take over.
+ * What an install would do, after the runtime: the half of `install.sh
+ * --dry-run` that the script hands to this command, and prints after its own.
  *
  * Pure. Every fact about the machine -- the manifest, the tarball directory's
  * listing, which files are already there, whether there is a systemd -- is
  * read by the command and handed in as a value, so each case below is a
  * literal in a test.
  *
- * The labels and the sentences are the script's `report` and `die` lines,
- * copied rather than improved. The handover that moves the install onto this
- * command moves `install.sh.integration.test.ts`'s `planned()` assertions over
- * with it, and a reworded line would be an assertion rewritten rather than
- * moved. The labels that outgrow `report`'s pad -- `client protocol`, `server
- * protocol` -- overflow it here exactly as `printf '%-10s %s'` lets them.
+ * The labels and the sentences are the ones the script printed and refused with
+ * before it handed this over, copied rather than improved, so that a dry run
+ * reads the same whichever half printed a line. The assertions that held them
+ * in `install.sh.integration.test.ts` moved to this command's suites with the
+ * handover. The labels that outgrow `report`'s pad -- `client protocol`,
+ * `server protocol` -- overflow it here exactly as `printf '%-10s %s'` lets
+ * them.
  *
  * The manifest rules are the script's too, and not `update`'s: a dry run reads
  * the manifest only from a local file, an exact pin answers without one and a
  * series does not, and `AGENTPLEX_PACKAGE` means local tarballs with no version
  * resolved and no protocol checked.
  *
- * The `package` line is master's `install_package` line. AGX-324 rewrites that
- * function and adds a `method` line after it; AGX-329, which hands the install
- * over, reconciles the two.
+ * The `package` line is the script's, and there is no `method` line after it.
+ * The script prints one for the command's own package, the one it installs;
+ * how this command's packages land is said by the install step itself, line by
+ * line as it stages and moves each set, which is more than one plan line could
+ * say and nothing a dry run has done.
  */
 
 /** Where the packages come from, as the command found it. */
@@ -273,7 +276,8 @@ function resolveComponent(
 }
 
 /**
- * `check_protocol_agreement`, through the one rule `status` and `update` use.
+ * The protocol check the script made before it handed this over, through the
+ * one rule `status` and `update` use.
  * The first leg that disagrees stops the run, naming the first component that
  * recorded it and the first that recorded something else, as the script does.
  */
@@ -372,7 +376,7 @@ function packageTarball(
   return { path: `${directory}/${found}`, version: isReleaseVersion(version) ? version : null };
 }
 
-/** `grant_service_account_ownership`'s line, under `--system` only. */
+/** What the service account will own, under `--system` only. */
 function ownershipLines({ layout }: InstallPlanInput): readonly PlanLine[] {
   if (layout.scope !== 'system') return [];
   const prefix = layout.prefix;
@@ -387,7 +391,7 @@ function ownershipLines({ layout }: InstallPlanInput): readonly PlanLine[] {
   ];
 }
 
-/** `write_environment_file`'s line: written once, and never again. */
+/** The settings file's line: written once, and never again. */
 function settingsLine({ layout, settingsPresent }: InstallPlanInput): PlanLine {
   return {
     label: 'settings',
@@ -395,7 +399,7 @@ function settingsLine({ layout, settingsPresent }: InstallPlanInput): PlanLine {
   };
 }
 
-/** `write_units`' lines: one per daemon, or one saying why there are none. */
+/** The units' lines: one per daemon, or one saying why there are none. */
 function unitLines({
   request,
   layout,

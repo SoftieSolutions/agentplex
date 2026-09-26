@@ -7,12 +7,12 @@ import { join } from 'node:path';
  * This is not a second opinion about the layout. `install.sh`'s `resolve_layout`
  * has exactly two branches and each sets four things together -- the prefix, the
  * settings file, the unit directory and the scope -- and the two functions below
- * are those two branches, restated in the one other program that has to find the
- * same files. Restated rather than imported, because the installer is a shell
- * script fetched over HTTPS and run on a machine with nothing on it: there is
- * nothing to import, and a second download would be a second thing to get wrong.
- * `installation.test.ts` holds these constants against the script's own, so a
- * change to one side fails here rather than at a path that is not there.
+ * are those two branches, in the one other program that has to find the same
+ * files. The script keeps its own because it is fetched over HTTPS and run on a
+ * machine with nothing on it: there is nothing for it to import, and a second
+ * download would be a second thing to get wrong. `layout.test.ts` holds these
+ * constants against the script's `readonly` lines, so a change to one side fails
+ * there rather than at a path that is not there.
  *
  * What matters about the pairing is that the scope is not guessed separately.
  * `uninstall_units` picks its `systemctl` off `UNIT_SCOPE`, which came out of the

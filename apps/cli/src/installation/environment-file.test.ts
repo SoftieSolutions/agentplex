@@ -13,7 +13,7 @@ import { readEnvironmentFile } from './environment-file.js';
  */
 describe('the settings file', () => {
   it('reads the two lines the installer writes bare', () => {
-    // Verbatim from `write_environment_file`, comments and all.
+    // Verbatim from the settings file an install writes, comments and all.
     const written = [
       '# agentplex settings, read by the systemd units as an EnvironmentFile.',
       '',

@@ -13,8 +13,8 @@ import type { FileOutcome, WriteMachine } from './write-machine.js';
 /**
  * What the service account owns on a `--system` machine: its state and the
  * trees npm writes into, and not the interpreter it is started through.
- * `install.sh`'s `grant_service_account_ownership`, and its argument, carried
- * here with it.
+ * This was `install.sh`'s step, and its argument came here with it when the
+ * script handed the install over; the script only creates the account.
  *
  * Something under the prefix has to be writable by that account. `agentplex
  * setup` installs providers with `npm install --global --prefix $PREFIX` as the

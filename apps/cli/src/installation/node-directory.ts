@@ -12,11 +12,15 @@ import { nodeBinary, type Layout } from './layout.js';
 /**
  * Which directory's `node` a unit's ExecStart names.
  *
- * `resolve_node_directory` in `install.sh`, restated: the prefix's own runtime
- * when it is there and of a recent major; otherwise the `node` a PATH lookup
- * finds, when that one is recent; otherwise the prefix's runtime directory,
- * which is where the installer unpacks one. The unit names whatever this
- * decides, so the two programs have to decide it the same way.
+ * The rule `resolve_node_directory` in `install.sh` applies: the prefix's own
+ * runtime when it is there and of a recent major; otherwise the `node` a PATH
+ * lookup finds, when that one is recent; otherwise the prefix's runtime
+ * directory, which is where the installer unpacks one. The script keeps its own
+ * because it decides before there is a Node to run this on, and the unit names
+ * whatever this decides, so the two have to decide it the same way:
+ * `node-directory.test.ts` holds this to the script's `NODE_MAJOR`, and the
+ * unit fixtures `unit-file.test.ts` reads were captured from the script's
+ * answer on machines with and without a Node.
  *
  * Never `process.execPath`. That is the interpreter this command happens to run
  * under, and it is the resolved real path: a Homebrew or version-manager node

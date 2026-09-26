@@ -24,13 +24,19 @@ import {
 import type { Downloader, WriteMachine } from './write-machine.js';
 
 /**
- * How a released package is put into the prefix, which is `install.sh`'s
- * `install_package` restated -- and the point of restating it rather than doing
- * something simpler is that a package installed by `agentplex update` or
- * `agentplex install` has to be indistinguishable from one installed by the
- * installer, or the next install is the one that discovers the difference.
- * Both commands call this one step; it lives here, beside the layout it
- * writes into, so neither owns it.
+ * How a released package is put into the prefix. `agentplex install` and
+ * `agentplex update` both call this one step; it lives here, beside the layout
+ * it writes into, so neither owns it.
+ *
+ * `install.sh`'s `install_package` follows the same rule for the one package
+ * the script installs, the command's own, and keeps its own copy of it in bash
+ * because it runs before there is a bin to run this: it is what puts the bin
+ * there. What the two must not differ on is the result -- a package this
+ * installs has to be indistinguishable from one the script installed, or the
+ * next install is the one that discovers the difference -- so each side's
+ * suite asserts the npm invocation it makes, flag for flag:
+ * `install.sh.integration.test.ts` the script's, and `install-command.test.ts`
+ * and `update-command.test.ts` this one's.
  *
  * ## Unpacked, then installed against its own shrinkwrap
  *
@@ -645,7 +651,8 @@ function componentsOf(install: PackageInstall): string {
 }
 
 /**
- * Which npm to run, which is `npm_command` in the installer restated.
+ * Which npm to run: the rule `npm_command` in the installer follows, which
+ * keeps its own copy because it picks the npm that installs this program.
  *
  * The prefix's own first, and that ordering is the whole point rather than a
  * preference: a runtime this install owns is on nobody's PATH, so an npm

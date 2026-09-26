@@ -161,7 +161,7 @@ export function unitSearchPath(layout: Layout, nodeDirectory: string): string {
 }
 
 /**
- * `daemon_command`: the interpreter by its full path, and the daemon's
+ * How a daemon is started: the interpreter by its full path, and the daemon's
  * compiled entry inside the package npm wrote. No search decides either half.
  */
 function daemonCommand(daemon: Daemon, layout: Layout, nodeDirectory: string): string {

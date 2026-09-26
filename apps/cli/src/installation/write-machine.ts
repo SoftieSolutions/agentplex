@@ -9,7 +9,7 @@
  * should have to think about -- and a seam is worth exactly as much as the
  * commands that cannot reach past it. So this is a second, wider seam held by
  * the commands that have a reason to write, and it extends the narrow one
- * rather than restating it: they read a prefix the same way `status` does,
+ * rather than copying it: they read a prefix the same way `status` does,
  * and there is one answer to "what is a file read".
  *
  * What is on it is what the runtime swap, the package swap and the files an
@@ -97,10 +97,10 @@ export interface WriteMachine extends InstallationFiles {
    *
    * `mode` is the permission bits a file this write *creates* is created with,
    * before a byte is in it -- the settings file holds the client token, and a
-   * file that is briefly world-readable is world-readable. It is `umask 077`
-   * in `write_environment_file`, said per file rather than per process. A file
-   * that already exists keeps its own bits; nothing that passes one writes
-   * over a file that is there.
+   * file that is briefly world-readable is world-readable. It is the `umask
+   * 077` the script wrote the settings file under, said per file rather than
+   * per process. A file that already exists keeps its own bits; nothing that
+   * passes one writes over a file that is there.
    */
   writeFile(path: string, contents: string, options?: WriteFileOptions): Promise<FileOutcome>;
   /** The SHA-256 of a file, as lowercase hex, or `null` if it could not be read. */
