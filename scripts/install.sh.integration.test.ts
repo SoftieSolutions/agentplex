@@ -2019,7 +2019,7 @@ describe('the summary on a machine that can hold no unit', () => {
 
 describe('where the script says it is served from', () => {
   /**
-   * The one constant, read out of the script rather than restated here: a copy
+   * The one constant, read out of the script rather than copied here: a copy
    * of the URL in this file would pass whatever the script said.
    */
   function declaredUrl(): string {

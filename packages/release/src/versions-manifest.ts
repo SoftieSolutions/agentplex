@@ -143,7 +143,7 @@ const versionSchema = z.string().regex(SEMVER);
  * version is indistinguishable from a missing one in anything that tests it
  * before comparing.
  *
- * The leg names are restated here rather than imported from the protocol
+ * The leg names are written out here rather than imported from the protocol
  * package, for the reason the whole package imports nothing: the release job
  * that advances `v1` builds this package alone.
  */
