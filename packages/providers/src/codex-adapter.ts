@@ -9,6 +9,7 @@ import {
 } from './codex-rollout.js';
 import { CODEX_SESSION_INDEX_FILE, parseCodexSessionIndex } from './codex-session-index.js';
 import {
+  statusFromObservation,
   TRANSCRIPT_TAIL_MAX_BYTES,
   type DiscoveredSession,
   type DiscoveryProblem,
@@ -137,8 +138,20 @@ export function createCodexAdapter({ files }: CodexAdapterDependencies): Provide
       return planCodexLaunch(request.store, request.cwd, ['resume', request.session.sessionId]);
     },
 
+    /**
+     * The shared mapping, reached for a different reason than Claude's. Claude
+     * Code can reach `working` from a store alone because its registry names a
+     * live process; codex cannot, so `running` here is whatever the caller knew
+     * about the sessions it started itself.
+     *
+     * `awaiting-permission` never arrives here for codex, because nothing in a
+     * rollout can produce it -- see `signalOf` in `codex-rollout.ts`. It is
+     * handled anyway rather than special-cased away: the mapping reduces the
+     * shared vocabulary, not which members of it one provider happens to be
+     * able to reach today.
+     */
     status(observation: StatusObservation): SessionStatus {
-      return codexStatus(observation);
+      return statusFromObservation(observation);
     },
 
     async transcript(request: TranscriptRequest): Promise<TranscriptRead> {
@@ -381,28 +394,4 @@ async function findRollout(
   }
 
   return null;
-}
-
-/**
- * codex's vocabulary, reduced to the one every provider shares.
- *
- * The same shape as the Claude one, and it arrives there for a different
- * reason. Claude Code can reach `working` from a store alone because its
- * registry names a live process; codex cannot, so `running` here is whatever
- * the caller knew about the sessions it started itself. What both refuse to do
- * is turn elapsed time into a status: a recent write proves something wrote
- * recently, not that anything is running now, and the choice would be between
- * under-claiming `idle` and putting a spinner on sessions that died hours ago.
- *
- * `awaiting-permission` never arrives here for codex, because nothing in a
- * rollout can produce it — see `signalOf` in `codex-rollout.ts`. It is handled
- * anyway rather than special-cased away: this function's job is to reduce the
- * shared vocabulary, not to encode which members of it one provider happens to
- * be able to reach today.
- */
-function codexStatus({ signal, running }: StatusObservation): SessionStatus {
-  if (signal === 'awaiting-permission' || signal === 'awaiting-input') return signal;
-  if (running) return 'working';
-  if (signal === 'unknown') return 'unknown';
-  return 'idle';
 }

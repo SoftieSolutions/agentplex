@@ -19,6 +19,7 @@ import {
   type ClaudeTranscriptParse,
 } from './claude-transcript.js';
 import {
+  statusFromObservation,
   TRANSCRIPT_TAIL_MAX_BYTES,
   type DiscoveredSession,
   type DiscoveryProblem,
@@ -135,8 +136,16 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
       );
     },
 
+    /**
+     * The shared mapping, and for Claude Code `running` is reachable without
+     * the PTY supervisor: Claude Code's own registry names the process, and
+     * discovery has verified it is alive and is the process the entry meant. A
+     * session with no such entry keeps the quiet answer, which is the honest
+     * one. For this provider a verified process is a better answer than a
+     * stopwatch.
+     */
     status(observation: StatusObservation): SessionStatus {
-      return claudeStatus(observation);
+      return statusFromObservation(observation);
     },
 
     async transcript(request: TranscriptRequest): Promise<TranscriptRead> {
@@ -328,27 +337,4 @@ async function readSessionTranscript(
   }
 
   return { ok: false, problem: 'this store holds no claude transcript for that session' };
-}
-
-/**
- * Claude's vocabulary, reduced to the one every provider shares.
- *
- * `progressing` still does not become `working` on elapsed time alone. A recent
- * write proves something wrote recently, not that anything is running now, so
- * the choice would be between under-claiming `idle` and putting a spinner on
- * sessions that died hours ago. What changed is that `running` is now reachable
- * without the PTY supervisor: Claude Code's own registry names the process, and
- * discovery has verified it is alive and is the process the entry meant. A
- * session with no such entry keeps the quiet answer, which is the honest one.
- *
- * Note what is *not* here: no elapsed-time rule reads `now` behind the caller's
- * back, and the two arguments that could tempt one — `updatedAt` and `now` —
- * are supplied rather than read. Claude Code needs no such rule, because for
- * this provider a verified process is a better answer than a stopwatch.
- */
-function claudeStatus({ signal, running }: StatusObservation): SessionStatus {
-  if (signal === 'awaiting-permission' || signal === 'awaiting-input') return signal;
-  if (running) return 'working';
-  if (signal === 'unknown') return 'unknown';
-  return 'idle';
 }
