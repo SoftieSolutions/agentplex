@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { relativeLuminance } from './contrast.js';
 import { colorForRole, hues, shadows } from './tokens.js';
-import { SECTION_LABEL, cssVariablesResolver, theme } from './theme.js';
+import { SECTION_LABEL, cssVariablesResolver, phoneTypeRule, theme } from './theme.js';
 
 /** A theme size in rem back to the pixels the mock writes. */
 function pixels(value: string | undefined): number {
@@ -63,6 +63,19 @@ describe('the type scale', () => {
     expect(theme.lineHeights?.md).toBe('normal');
   });
 
+  it('gives a paragraph of prose the 1.5 the mock sets its one paragraph in (7c TASK)', () => {
+    expect(theme.lineHeights?.prose).toBe('1.5');
+  });
+
+  it('sets the phone body at 14px, as 6c and 7e draw every phone screen, by a rule on :root', () => {
+    const rule = phoneTypeRule();
+    const match = /--mantine-font-size-md:\s*([\d.]+rem)/.exec(rule);
+    expect(pixels(match?.[1])).toBe(14);
+    // On :root, so a popover portalled to the end of <body> takes it too, and
+    // doubled so it outranks the :root block Mantine writes the scale in.
+    expect(rule.startsWith(':root:root')).toBe(true);
+  });
+
   it('sizes the headings h1 20, h2 18, h3 16, h4 14', () => {
     const headings = theme.headings?.sizes;
     expect(pixels(headings?.h1?.fontSize)).toBe(20);
@@ -106,5 +119,50 @@ describe('cssVariablesResolver', () => {
   it('gives the light scheme the paper background, not stock white', () => {
     expect(resolved.light['--mantine-color-body']).toBe(hues.parchment);
     expect(resolved.light['--mantine-color-body']).not.toBe(hues.paper);
+  });
+});
+
+/**
+ * A component's theme `vars` resolver, called the way Mantine calls it. The
+ * resolvers here read nothing from the theme, only the props.
+ */
+function controlVars(
+  component: 'Button' | 'Input' | 'SegmentedControl',
+  props: Record<string, unknown> = {},
+): Record<string, Record<string, string | undefined>> {
+  const extension = theme.components?.[component] as
+    | { vars?: (theme: never, props: never) => Record<string, Record<string, string | undefined>> }
+    | undefined;
+  if (extension?.vars === undefined) throw new Error(`${component} has no vars resolver`);
+  return extension.vars({} as never, props as never);
+}
+
+describe('control sizes', () => {
+  // Measured with getBoundingClientRect off the mocks: the header and toolbar
+  // buttons (Pause, Publish, Simulate, Copy) are 29px, the card's Allow and
+  // Deny, the filter field and the selects 31px, onboarding's Skip and Adopt
+  // 36px. Mantine's own are 30, 36 and 42.
+  it('sets the buttons xs 29, sm 31, md 36 high, with the padding the mock draws', () => {
+    const root = controlVars('Button').root ?? {};
+    expect(pixels(root['--button-height-xs'])).toBe(29);
+    expect(pixels(root['--button-height-sm'])).toBe(31);
+    expect(pixels(root['--button-height-md'])).toBe(36);
+    expect(pixels(root['--button-padding-x-xs'])).toBe(10);
+    expect(pixels(root['--button-padding-x-sm'])).toBe(12);
+    expect(pixels(root['--button-padding-x-md'])).toBe(16);
+  });
+
+  it('sets the inputs to the same heights, so a field and the button beside it line up', () => {
+    const wrapper = controlVars('Input').wrapper ?? {};
+    expect(pixels(wrapper['--input-height-xs'])).toBe(29);
+    expect(pixels(wrapper['--input-height-sm'])).toBe(31);
+    expect(pixels(wrapper['--input-height-md'])).toBe(36);
+  });
+
+  it('draws a segment 25px high inside a 3px track, as the Projects/Sessions switch is', () => {
+    const root = controlVars('SegmentedControl').root ?? {};
+    // 12px Manrope at its own line height is 16.4px; 4px above and below.
+    expect(root['--sc-padding-xs']).toBe('4px 8px');
+    expect(root['--sc-padding-sm']).toBe('4px 10px');
   });
 });

@@ -112,7 +112,42 @@ const fontSizes = {
  * Manrope and different for Fira Code. A number would be right for one of
  * the two and put every monospace line off the mock by a pixel or two.
  */
-const lineHeights = { xs: '1.2', sm: '1.35', md: 'normal', lg: '1.5', xl: '1.65' };
+const lineHeights = {
+  xs: '1.2',
+  sm: '1.35',
+  md: 'normal',
+  lg: '1.5',
+  xl: '1.65',
+  /**
+   * A paragraph somebody reads rather than scans: an explanation in Settings,
+   * a step of onboarding, the task a session was given. The mock has one
+   * paragraph of prose, the TASK block in 7c, and sets it at 1.5; its one-
+   * and two-line helper copy (7f's step captions) stays at the font's own.
+   * Named apart from `lg` although the number is the same, so a paragraph
+   * says what it is and the transcript can move without moving it.
+   */
+  prose: '1.5',
+};
+
+/**
+ * The phone's body size. Every phone mock (6c, 7e) is set at 14px where the
+ * desk mocks are 13: the same scale one step up at arm's length, for a
+ * thumb and a smaller, closer screen. Only the body moves; the metadata,
+ * labels and controls keep their sizes, as the mocks draw them.
+ */
+const PHONE_BODY = rem(14);
+
+/**
+ * The rule that moves the body to the phone size, rendered by the root while
+ * the shell is in its phone form (see App.tsx). A rule on `:root` rather than
+ * a wrapper's style, so what Mantine portals to the end of <body> -- menus,
+ * drawers, the palette -- is set at the same size as the page under it. The
+ * selector is doubled to outrank the `:root` block Mantine writes the scale
+ * in without depending on which of the two style elements came first.
+ */
+export function phoneTypeRule(): string {
+  return `:root:root { --mantine-font-size-md: ${PHONE_BODY}; }`;
+}
 
 /**
  * The small capitals over a group of rows: NEEDS YOU, EARLIER, the context
@@ -137,6 +172,20 @@ export const SECTION_LABEL: CSSProperties = {
 function controlFontSize(size: string | undefined): string | undefined {
   return size === 'xs' || size === 'compact-xs' ? 'var(--mantine-font-size-sm)' : undefined;
 }
+
+/**
+ * The control heights, measured with getBoundingClientRect off the mocks.
+ * The toolbar and header buttons (Pause, Hand off, Publish, Simulate, Copy)
+ * are 29px, the card's Allow and Deny, the filter field and the selects 31px,
+ * and onboarding's Skip and Adopt 36px: xs, the default sm, and md. Mantine's
+ * own are 30, 36 and 42, which put every default control a third taller than
+ * the mock. A button and a field share one scale, so a field and the button
+ * beside it line up.
+ */
+const CONTROL_HEIGHT = { xs: rem(29), sm: rem(31), md: rem(36) };
+
+/** The inline padding the mock gives a button's word at each height. */
+const BUTTON_PADDING_X = { xs: rem(10), sm: rem(12), md: rem(16) };
 
 export const theme: MantineThemeOverride = createTheme({
   fontFamily:
@@ -181,13 +230,41 @@ export const theme: MantineThemeOverride = createTheme({
   radius: { xs: '0.3125rem', sm: '0.375rem', md: '0.4375rem', lg: '0.625rem', xl: '0.875rem' },
   components: {
     Button: Button.extend({
-      vars: (_theme, props) => ({ root: { '--button-fz': controlFontSize(props.size) } }),
+      vars: (_theme, props) => ({
+        root: {
+          '--button-fz': controlFontSize(props.size),
+          '--button-height-xs': CONTROL_HEIGHT.xs,
+          '--button-height-sm': CONTROL_HEIGHT.sm,
+          '--button-height-md': CONTROL_HEIGHT.md,
+          '--button-padding-x-xs': BUTTON_PADDING_X.xs,
+          '--button-padding-x-sm': BUTTON_PADDING_X.sm,
+          '--button-padding-x-md': BUTTON_PADDING_X.md,
+        },
+      }),
     }),
     Input: Input.extend({
-      vars: (_theme, props) => ({ wrapper: { '--input-fz': controlFontSize(props.size) } }),
+      vars: (_theme, props) => ({
+        wrapper: {
+          '--input-fz': controlFontSize(props.size),
+          '--input-height-xs': CONTROL_HEIGHT.xs,
+          '--input-height-sm': CONTROL_HEIGHT.sm,
+          '--input-height-md': CONTROL_HEIGHT.md,
+        },
+      }),
     }),
+    // The Projects/Sessions switch (7a, 6b): a 3px track around 25px
+    // segments, 12px words with 4px above and below. Mantine's track is 4px
+    // and its segment padding 3px, which draws the same control two pixels
+    // shorter and a pixel further in.
     SegmentedControl: SegmentedControl.extend({
-      vars: (_theme, props) => ({ root: { '--sc-font-size': controlFontSize(props.size) } }),
+      vars: (_theme, props) => ({
+        root: {
+          '--sc-font-size': controlFontSize(props.size),
+          '--sc-padding-xs': '4px 8px',
+          '--sc-padding-sm': '4px 10px',
+        },
+      }),
+      styles: { root: { padding: 3 } },
     }),
     Combobox: Combobox.extend({
       vars: (_theme, props) => ({
