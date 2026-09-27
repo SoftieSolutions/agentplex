@@ -36,6 +36,7 @@ const A_SERVER = {
   lastConnectedAt: 1_000,
   staleReason: null,
   draining: null,
+  roundTrip: null,
   problem: null,
 };
 
@@ -209,6 +210,61 @@ describe('serverViewSchema', () => {
     const { draining: _dropped, ...withoutDraining } = A_SERVER;
 
     expect(serverViewSchema.safeParse(withoutDraining).success).toBe(false);
+  });
+
+  it('accepts a measured round trip, with the load the pong carried', () => {
+    const parsed = serverViewSchema.safeParse({
+      ...A_SERVER,
+      roundTrip: {
+        ms: 12,
+        load: {
+          cpuCount: 14,
+          cpu: { percent: 31.4, windowMs: 20_000 },
+          loadAverage: [1.49951171875, 3.03271484375, 3.66796875],
+        },
+        measuredAt: 1_020,
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts a round trip whose pong could say nothing about the machine', () => {
+    // The server answers `load: null` when it could not read its own cpus.
+    // The timing is still a measurement, and dropping it with the load would
+    // throw away the half of the reading the hub actually took.
+    expect(
+      serverViewSchema.safeParse({
+        ...A_SERVER,
+        roundTrip: { ms: 0, load: null, measuredAt: 1_020 },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a round trip that is negative or not a whole millisecond', () => {
+    for (const ms of [-1, 12.5]) {
+      expect(
+        serverViewSchema.safeParse({
+          ...A_SERVER,
+          roundTrip: { ms, load: null, measuredAt: 1_020 },
+        }).success,
+        String(ms),
+      ).toBe(false);
+    }
+  });
+
+  it('rejects a round trip with no moment it was measured at', () => {
+    // A figure without its age is the over-claim the age label exists to
+    // prevent: a reading from an hour ago would draw as one from now.
+    expect(
+      serverViewSchema.safeParse({ ...A_SERVER, roundTrip: { ms: 12, load: null } }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a server view with no round-trip field: absent is not the same as unmeasured', () => {
+    const { roundTrip: _dropped, ...withoutRoundTrip } = A_SERVER;
+
+    expect(serverViewSchema.safeParse(withoutRoundTrip).success).toBe(false);
   });
 
   it('rejects a server view with no provider list at all', () => {

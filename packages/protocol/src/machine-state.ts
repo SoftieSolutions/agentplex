@@ -133,7 +133,8 @@ export type CpuSample = z.infer<typeof cpuSampleSchema>;
  *   it cannot observe -- the round trip it would have to be measured over is
  *   the very frame carrying it. The hub times its own `ping` against the `pong`
  *   that answers, which is the measurement that exists, and it belongs to the
- *   hub for the same reason `connectedSince` does.
+ *   hub for the same reason `connectedSince` does. It is published beside this
+ *   reading, on `serverRoundTripSchema` below.
  * - This is the rest: what this machine's cpus are doing. It is the one fact
  *   here that goes stale in seconds.
  *
@@ -219,6 +220,32 @@ export const serverDrainingSchema = z.object({
 });
 export type ServerDraining = z.infer<typeof serverDrainingSchema>;
 
+/**
+ * The last heartbeat this hub completed with one server: how long it took, and
+ * what the machine said about itself in the answer.
+ *
+ * The timing and the load are one object because they are one event. The load
+ * rides the `pong` that ends the round trip, so both are true of the same
+ * instant, and a view that held them apart could publish a load from one
+ * heartbeat beside a timing from another.
+ *
+ * `measuredAt` is the hub's clock at the pong's arrival, for the reason
+ * `connectedSince` is the hub's: the hub stamps what it receives. It is on the
+ * wire rather than left to the moment the frame arrives because a state frame
+ * is republished for many reasons, and a client reading "12ms" off a frame
+ * sent for a session change would otherwise take a reading from a minute ago
+ * for one from now. With it, an old reading can carry its age.
+ */
+export const serverRoundTripSchema = z.object({
+  /** Pong arrival minus ping send, by the hub's clock, in whole milliseconds. */
+  ms: z.int().nonnegative(),
+  /** What the machine said about its cpus in that pong, or `null` when it could not tell. */
+  load: machineLoadSchema.nullable(),
+  /** When the pong arrived, by the hub's clock. */
+  measuredAt: z.int().nonnegative(),
+});
+export type ServerRoundTrip = z.infer<typeof serverRoundTripSchema>;
+
 /** One paired server's connectivity, as the hub publishes it. */
 export const serverViewSchema = z.object({
   /** The stable key for this row, from the moment the pairing form was submitted. */
@@ -291,6 +318,16 @@ export const serverViewSchema = z.object({
    * server that was going down.
    */
   draining: serverDrainingSchema.nullable(),
+  /**
+   * The last completed heartbeat, or `null` while there is none to publish.
+   *
+   * `null` before the first pong of a connection and from the moment that
+   * connection ends. A figure kept across a close would be a latency for a
+   * link that no longer exists, which is not the same kind of fact as a store
+   * list kept with its age: the stores are still on that disk, and the round
+   * trip was only ever true of the socket.
+   */
+  roundTrip: serverRoundTripSchema.nullable(),
   /** What went wrong, in words. Never a token, and never an address with one in it. */
   problem: z.string().nullable(),
 });

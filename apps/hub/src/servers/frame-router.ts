@@ -8,9 +8,9 @@ import type { InstructionOutcome, StreamAnswer, TerminalOutputFrame } from './se
  * switched on rather than re-checked: an answer goes to whoever asked, a
  * report goes to the reducer, a drain notice goes to the loop that decides
  * when to dial, a terminal frame goes to the relay, an approval frame goes to
- * the feature holding what this hub may still be asked about, and the handshake
- * frames belong to a handshake that is already over. `pong` is the heartbeat's,
- * which reads the socket itself.
+ * the feature holding what this hub may still be asked about, a pong goes to
+ * the heartbeat that is timing it, and the handshake frames belong to a
+ * handshake that is already over.
  *
  * A document reply is an answer like any other: the three of them address the
  * frame that asked, so they go to whoever asked and this file says nothing
@@ -34,6 +34,9 @@ import type { InstructionOutcome, StreamAnswer, TerminalOutputFrame } from './se
 
 /** A server's whole view of one store, as the frame carries it. */
 export type StoreReport = Extract<ServerToHubFrame, { type: 'store-report' }>;
+
+/** The answer to the heartbeat's ping, with what the machine's cpus were doing. */
+export type Pong = Extract<ServerToHubFrame, { type: 'pong' }>;
 
 /** A server saying it is going down, and how long it will wait first. */
 export type DrainingNotice = Extract<ServerToHubFrame, { type: 'server-draining' }>;
@@ -91,6 +94,16 @@ export interface ServerFrameHandlers {
   onApprovalRequested(frame: ApprovalRequested): void;
   onApprovalWithdrawn(frame: ApprovalWithdrawn): void;
   onApprovalSettled(frame: ApprovalSettled): void;
+  /**
+   * The answer to the heartbeat's ping.
+   *
+   * Routed here rather than read off the socket by the heartbeat, which is
+   * what it used to do: a second listener with a parse of its own and a hand
+   * check of `type`, beside this switch, for one direction. Now the pong is
+   * discriminated once, like every other frame, and the load on it arrives at
+   * the heartbeat already parsed.
+   */
+  onPong(frame: Pong): void;
 }
 
 export function routeServerFrame(frame: ServerToHubFrame, handlers: ServerFrameHandlers): void {
@@ -148,9 +161,11 @@ export function routeServerFrame(frame: ServerToHubFrame, handlers: ServerFrameH
     case 'approval-settled':
       handlers.onApprovalSettled(frame);
       return;
+    case 'pong':
+      handlers.onPong(frame);
+      return;
     case 'handshake-accepted':
     case 'handshake-rejected':
-    case 'pong':
     case 'protocol-error':
       return;
     default:

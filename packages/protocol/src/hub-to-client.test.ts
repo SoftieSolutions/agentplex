@@ -356,6 +356,7 @@ describe('client and hub round trips', () => {
             lastConnectedAt: 1_000,
             staleReason: null,
             draining: null,
+            roundTrip: { ms: 12, load: null, measuredAt: 1_020 },
             problem: null,
           },
           {
@@ -384,6 +385,7 @@ describe('client and hub round trips', () => {
                 },
               ],
             },
+            roundTrip: null,
             problem: null,
           },
         ],

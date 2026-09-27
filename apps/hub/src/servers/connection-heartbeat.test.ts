@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { ServerToHubFrame } from '@agentplex/protocol';
+import type { MachineLoad } from '@agentplex/protocol';
 import {
   createFakeMessageSocket,
   PEER_GONE,
   createFakeTimers,
 } from '@agentplex/node-shared/testing';
 import { createFrameIdCounter, createLogger } from '@agentplex/node-shared';
-import { startHeartbeat } from './connection-heartbeat.js';
+import { startHeartbeat, type RoundTripReading } from './connection-heartbeat.js';
+import type { Pong } from './frame-router.js';
 
 /**
  * Liveness on a socket nobody is speaking on.
@@ -33,21 +34,46 @@ function pings(sent: readonly string[]): readonly number[] {
     .map((frame) => frame.id);
 }
 
+/**
+ * A load as a server's pong carries it. The figures are one real machine's
+ * answer, as `machine-state.test.ts` in the protocol package holds it.
+ */
+const LOAD: MachineLoad = {
+  cpuCount: 14,
+  cpu: { percent: 31.4, windowMs: 20_000 },
+  loadAverage: [1.49951171875, 3.03271484375, 3.66796875],
+};
+
+const T0 = 1_756_000_000_000;
+
 function beating() {
   const socket = createFakeMessageSocket();
   const timers = createFakeTimers();
+  let now = T0;
+  const clock = { now: () => now };
+  const readings: RoundTripReading[] = [];
   const heartbeat = startHeartbeat(socket, {
     timers,
+    clock,
     logger,
     nextFrameId: createFrameIdCounter(),
+    onRoundTrip: (reading) => readings.push(reading),
     intervalMs: 20_000,
     timeoutMs: 10_000,
   });
-  return { socket, timers, heartbeat };
+  return {
+    socket,
+    timers,
+    heartbeat,
+    readings,
+    /** Moves the hub's clock on, which is all a round trip is measured with. */
+    advance: (ms: number) => void (now += ms),
+    now: () => now,
+  };
 }
 
-function reply(frame: ServerToHubFrame): string {
-  return JSON.stringify(frame);
+function pong(replyTo: number, load: MachineLoad | null = null): Pong {
+  return { type: 'pong', replyTo, load };
 }
 
 describe('startHeartbeat', () => {
@@ -65,12 +91,11 @@ describe('startHeartbeat', () => {
     expect(pings(socket.sent)).toEqual([1]);
   });
 
-  it('keeps the connection when the pong names the ping', async () => {
-    const { socket, timers } = beating();
+  it('keeps the connection when the pong names the ping', () => {
+    const { socket, timers, heartbeat } = beating();
     timers.fireAll();
 
-    socket.receive(reply({ type: 'pong', replyTo: pings(socket.sent)[0] ?? 0, load: null }));
-    await settle();
+    heartbeat.pong(pong(pings(socket.sent)[0] ?? 0));
 
     expect(socket.closure).toBeNull();
     // And it goes round again: the next ping is scheduled, not the timeout.
@@ -88,34 +113,114 @@ describe('startHeartbeat', () => {
     expect(socket.closure).not.toBeNull();
   });
 
-  it('does not accept a pong that answers an earlier ping', async () => {
+  it('does not accept a pong that answers an earlier ping', () => {
     // A stale pong is what a peer that went away mid-round-trip and came back
     // sends. Taking it for an answer to the outstanding ping would mean a
     // connection could be kept alive by echoes of itself.
-    const { socket, timers } = beating();
+    const { socket, timers, heartbeat } = beating();
     timers.fireAll();
-    socket.receive(reply({ type: 'pong', replyTo: 1, load: null }));
-    await settle();
+    heartbeat.pong(pong(1));
     timers.fireAll();
 
-    socket.receive(reply({ type: 'pong', replyTo: 1, load: null }));
+    heartbeat.pong(pong(1));
+    timers.fireAll();
+
+    expect(socket.closure).not.toBeNull();
+  });
+
+  it('reads nothing off the socket itself: the transport routes the pong here', async () => {
+    // One parser and one switch per direction. A pong written straight onto
+    // the socket reaches nobody unless the frame router hands it over, so the
+    // deadline still closes a connection whose pongs nobody routed.
+    const { socket, timers } = beating();
+    timers.fireAll();
+
+    socket.receive(JSON.stringify(pong(pings(socket.sent)[0] ?? 0)));
     await settle();
     timers.fireAll();
 
     expect(socket.closure).not.toBeNull();
   });
 
-  it('ignores every other frame, because they belong to somebody else', async () => {
-    // The heartbeat shares the socket with whatever reads sessions off it. A
-    // frame it does not understand is not its business and is certainly not a
-    // reason to hang up.
-    const { socket, timers } = beating();
+  it('times the round trip from the ping leaving to the pong arriving', () => {
+    const { socket, timers, heartbeat, readings, advance, now } = beating();
+    timers.fireAll();
+    advance(12);
+
+    heartbeat.pong(pong(pings(socket.sent)[0] ?? 0, LOAD));
+
+    expect(readings).toEqual([{ ms: 12, load: LOAD, at: now() }]);
+  });
+
+  it('passes on the load exactly as the pong carried it, including none', () => {
+    // `null` is a server that could not read its own cpus. The timing is still
+    // a measurement, so the reading goes up with the load left empty rather
+    // than being dropped with it.
+    const { socket, timers, heartbeat, readings, advance } = beating();
+    timers.fireAll();
+    advance(40);
+
+    heartbeat.pong(pong(pings(socket.sent)[0] ?? 0, null));
+
+    expect(readings).toEqual([{ ms: 40, load: null, at: T0 + 40 }]);
+  });
+
+  it('publishes nothing before the first pong', () => {
+    // No figure is the honest answer until one has been measured: a zero here
+    // would draw as the fastest machine in the fleet.
+    const { timers, readings } = beating();
     timers.fireAll();
 
-    socket.receive('{"type":"handshake-accepted","replyTo":99,"protocolVersion":1,');
-    socket.receive(reply({ type: 'protocol-error', code: 'bad-request', message: 'not mine' }));
-    await settle();
+    expect(readings).toEqual([]);
+  });
 
+  it('times each round from its own ping, not from the first', () => {
+    const { socket, timers, heartbeat, readings, advance } = beating();
+    timers.fireAll();
+    advance(12);
+    heartbeat.pong(pong(pings(socket.sent)[0] ?? 0));
+
+    advance(20_000);
+    timers.fireAll();
+    advance(61);
+    heartbeat.pong(pong(pings(socket.sent)[1] ?? 0));
+
+    expect(readings.map((reading) => reading.ms)).toEqual([12, 61]);
+  });
+
+  it('measures nothing from a pong that answers an earlier ping', () => {
+    // The echo that cannot keep a connection alive cannot time one either: the
+    // interval between an old ping and a new pong is not a round trip.
+    const { socket, timers, heartbeat, readings, advance } = beating();
+    timers.fireAll();
+    heartbeat.pong(pong(pings(socket.sent)[0] ?? 0));
+    timers.fireAll();
+    advance(5);
+
+    heartbeat.pong(pong(pings(socket.sent)[0] ?? 0));
+
+    expect(readings).toHaveLength(1);
+  });
+
+  it('measures nothing from a pong nobody asked for', () => {
+    const { heartbeat, readings } = beating();
+
+    heartbeat.pong(pong(1));
+
+    expect(readings).toEqual([]);
+  });
+
+  it('keeps the connection but publishes no figure across a clock that stepped backwards', () => {
+    // A negative round trip is a clock that moved, not a link that answered
+    // before it was asked. Zero would claim a perfect link, so no figure is
+    // the reading that does not over-claim; the pong still proves the peer.
+    const { socket, timers, heartbeat, readings, advance } = beating();
+    timers.fireAll();
+    advance(-1_000);
+
+    heartbeat.pong(pong(pings(socket.sent)[0] ?? 0));
+
+    expect(readings).toEqual([]);
     expect(socket.closure).toBeNull();
   });
 

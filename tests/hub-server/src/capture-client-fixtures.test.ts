@@ -71,9 +71,11 @@ import {
 } from '@agentplex/node-shared/testing';
 import {
   createLogger,
+  type Clock,
   type DialResult,
   type MessageSocket,
   type SocketDialer,
+  type Timers,
 } from '@agentplex/node-shared';
 import { createFakeDatabase } from '../../../apps/hub/src/db/fake-database.js';
 import {
@@ -815,6 +817,16 @@ async function startFleetHub(
   served: Map<string, HubConnection> = new Map(),
   /** How to block a hook, for the one capture whose subject is an approval. */
   blocks: Map<string, () => void> = new Map(),
+  /**
+   * The hub's clock and timers, for the one capture whose subject is time
+   * passing: a round trip is the hub's clock read at a ping and again at its
+   * pong, and the ping leaves when the heartbeat's timer fires. Every other
+   * capture wants the clock standing at `START` and timers nothing fires.
+   */
+  time: { readonly clock: Clock; readonly timers: Timers } = {
+    clock: { now: () => START },
+    timers: createFakeTimers(),
+  },
 ): Promise<{ hub: Hub; cleanup: () => Promise<void> }> {
   const directory = await mkdtemp(join(tmpdir(), 'agentplex-capture-'));
   const database = createSqliteDatabase(join(directory, 'hub.db'));
@@ -841,12 +853,12 @@ async function startFleetHub(
     database,
     logger,
     ids: { newId: newRegistrationId },
-    clock,
+    clock: time.clock,
     clientToken: CLIENT_TOKEN,
     tokens: { newToken: () => `fleet-ticket-${(nextTicket += 1)}` },
     dialer: fleetDialer(machines, live, served, blocks),
     discovery,
-    timers: createFakeTimers(),
+    timers: time.timers,
     migrationsDirectory,
     migrationFileSystem: nodeMigrationFileSystem,
     // Nothing to serve: these fixtures are the frames the hub sends over a
@@ -2779,6 +2791,41 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const machineStateDraining = await captureState(drainingHub.hub);
     await drainingHub.cleanup();
 
+    // A machine the hub has timed. The heartbeat's own timer sends the ping,
+    // the real server end answers with the pong and the load its reader took,
+    // and the hub's clock is read at both ends: the interval has passed when
+    // the ping leaves, and 12 ms more when the pong is read. This is the state
+    // the machine selector's latency and a settings row's figure are drawn
+    // from. One machine, because what differs between a fast row and a slow
+    // one is a number, and the web's tests vary it on this captured row.
+    let measuredNow = START;
+    const measuredTimers = createFakeTimers();
+    const measuredHub = await startFleetHub(
+      single,
+      [{ label: 'mbp-robert', host: 'mbp-robert.example' }],
+      new Map(),
+      createFakeBeaconSource(),
+      countingHubIds(),
+      new Map(),
+      new Map(),
+      { clock: { now: () => measuredNow }, timers: measuredTimers },
+    );
+    await until(
+      () =>
+        measuredHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        sessionCount(measuredHub.hub) === 2,
+      'the machine to be timed to connect and report',
+    );
+    measuredNow = START + 20_000;
+    measuredTimers.fireAll();
+    measuredNow += 12;
+    await until(
+      () => measuredHub.hub.connections.snapshot().every((report) => report.roundTrip !== null),
+      'the hub to time a pong',
+    );
+    const machineStateMeasured = await captureState(measuredHub.hub);
+    await measuredHub.cleanup();
+
     // A shared volume: two machines with the same store mounted. This is the
     // state in which the new-session server override is drawn -- more than one
     // connected machine could run the store -- and, degraded, the state in
@@ -3449,6 +3496,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('refusalAttention', refusalAttention);
     captured.set('machineStateSingle', machineStateSingle);
     captured.set('machineStateDraining', machineStateDraining);
+    captured.set('machineStateMeasured', machineStateMeasured);
     captured.set('sessionStarted', sessionStarted);
     captured.set('sessionStopped', sessionStopped);
     captured.set('sessionPaused', sessionPaused);

@@ -47,6 +47,7 @@ function report(
     problem: null,
     staleReason: phase === 'stale' ? 'unreachable' : null,
     draining: null,
+    roundTrip: null,
   };
 }
 

@@ -213,6 +213,7 @@ function start(
       dialer: machine.dialer,
       hubId,
       timers,
+      clock: { now: options.now ?? (() => START) },
       logger,
       ...(options.heartbeatIntervalMs === undefined
         ? {}
@@ -454,6 +455,60 @@ describe('startDialLoop', () => {
     expect(connection.report.staleReason).toBe('dropped');
   });
 
+  it('publishes no round trip until a pong has answered, then the one the hub timed', async () => {
+    // The whole measurement end to end: the hub's own ping, the real server
+    // end's pong with the load it read, and the hub's clock on both sides.
+    let now = START;
+    const registration = await register('laptop');
+    const machine = fakeMachine({});
+    const connection = start(registration, machine, {
+      now: () => now,
+      heartbeatIntervalMs: 20_000,
+      heartbeatTimeoutMs: 10_000,
+    });
+    await until(() => connection.report.phase === 'connected', 'a connection');
+
+    // Connected is not measured. No figure is what a client draws until then.
+    expect(connection.report.roundTrip).toBeNull();
+
+    now += 20_000;
+    timers.fireAll();
+    now += 12;
+    await until(() => connection.report.roundTrip !== null, 'a round trip');
+
+    expect(connection.report.roundTrip).toEqual({
+      ms: 12,
+      // What the real server end answers with over that fake machine: the
+      // captured counters, and no share yet because its clock stands still.
+      load: createFakeMachineLoadReader().read(),
+      measuredAt: START + 20_012,
+    });
+  });
+
+  it('drops the round trip with the connection it was measured on', async () => {
+    // Unlike the store list, which is kept: a latency for a socket that has
+    // closed is a figure for a link that does not exist.
+    let now = START;
+    const registration = await register('laptop');
+    const machine = fakeMachine({});
+    const connection = start(registration, machine, {
+      now: () => now,
+      heartbeatIntervalMs: 20_000,
+      heartbeatTimeoutMs: 10_000,
+    });
+    await until(() => connection.report.phase === 'connected', 'a connection');
+    timers.fireAll();
+    now += 12;
+    await until(() => connection.report.roundTrip !== null, 'a round trip');
+
+    machine.reachable = false;
+    machine.live?.close(PEER_GONE);
+    await until(() => connection.report.phase === 'stale', 'a stale server');
+
+    expect(connection.report.roundTrip).toBeNull();
+    expect(connection.report.stores).toEqual(['store-a']);
+  });
+
   it('refuses a server that answers with a different identity, and says to re-pair', async () => {
     const registration = await register('laptop');
     const machine = fakeMachine({ serverId: 'server-original' });
@@ -559,7 +614,13 @@ describe('startDialLoop', () => {
     const phases: string[] = [];
     const connection = startDialLoop(registration, {
       pairing: pairing(),
-      transports: createMessageSocketTransports({ dialer: machine.dialer, hubId, timers, logger }),
+      transports: createMessageSocketTransports({
+        dialer: machine.dialer,
+        hubId,
+        timers,
+        clock: { now: () => START },
+        logger,
+      }),
       timers,
       clock: { now: () => START },
       logger,

@@ -1,5 +1,6 @@
 import type {
   GraphRunApproval,
+  MachineLoad,
   MachineState,
   ServerCandidate,
   ServerView,
@@ -129,7 +130,30 @@ function toServerView(report: ServerConnectionReport): ServerView {
             graceMs: report.draining.graceMs,
             sessions: [...report.draining.sessions],
           },
+    // The hub's own measurement, published whole: the figure, the load the
+    // pong carried, and the moment, so a client can label an old reading with
+    // its age. Copied for the reason the drain is.
+    roundTrip:
+      report.roundTrip === null
+        ? null
+        : {
+            ms: report.roundTrip.ms,
+            load: copyLoad(report.roundTrip.load),
+            measuredAt: report.roundTrip.measuredAt,
+          },
     problem: report.problem,
+  };
+}
+
+function copyLoad(load: MachineLoad | null): MachineLoad | null {
+  if (load === null) return null;
+  return {
+    cpuCount: load.cpuCount,
+    cpu: load.cpu === null ? null : { percent: load.cpu.percent, windowMs: load.cpu.windowMs },
+    loadAverage:
+      load.loadAverage === null
+        ? null
+        : [load.loadAverage[0], load.loadAverage[1], load.loadAverage[2]],
   };
 }
 

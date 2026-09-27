@@ -144,6 +144,7 @@ function server(
     problem: null,
     staleReason,
     draining: null,
+    roundTrip: null,
   };
 }
 
