@@ -78,8 +78,11 @@ import type { Timers } from '@agentplex/node-shared';
  * whoever keeps the list replaces a running record with its outcome rather
  * than holding a step that is forever running beside the one that ended.
  * Branches interleave, so the outcome is not always the record directly after
- * its running one: the open record with the same node and attempt is the one
- * to replace. Retries are further attempts of the same node, one wait apart.
+ * its running one, and two branches reaching one node that is no JOIN run it
+ * twice, perhaps at once, with the same node and attempt on both. So every
+ * report also names its record: one number per attempt, which is how the
+ * list keeper finds the one record to replace. Retries are further attempts
+ * of the same node, one wait apart.
  * A node reached twice, through a cycle, is two runs of records: the list is
  * the walk in order, not a table by node.
  *
@@ -201,9 +204,11 @@ export interface WalkDependencies {
   readonly timers: Timers;
   /**
    * Called for every step record, with how many nodes the run has reached so
-   * far -- the `step` of `step 3/9`.
+   * far -- the `step` of `step 3/9` -- and which record it is: the same number
+   * on every report of one attempt and on no other attempt's, so two visits
+   * of one node in flight at once are two records and not one.
    */
-  readonly onStep: (step: GraphRunStep, reached: number) => void;
+  readonly onStep: (step: GraphRunStep, reached: number, record: number) => void;
   /**
    * Called once, synchronously, with how the run ended, after the last
    * `onStep` and before `done` resolves.
@@ -384,6 +389,8 @@ export function walk(
   const queue: { readonly node: GraphNode; readonly carried: RouteInput }[] = [];
   /** What a branch that ended at a node with nowhere to go carried out, by that node. */
   const leaves = new Map<GraphNodeId, RouteInput>();
+  /** Attempts begun across every branch, which numbers each one's record. */
+  let records = 0;
   /** What has reached each JOIN so far, by the node it came from. */
   const arrivals = new Map<GraphNodeId, Map<GraphNodeId, RouteInput>>();
 
@@ -545,8 +552,9 @@ export function walk(
   ): Promise<{ readonly attempted: StepResult; readonly record: Recorder }> {
     // The child this attempt started, once the executor names one.
     let child: GraphRunChild | null = null;
+    const recordId = (records += 1);
     const record: Recorder = (outcome, output) =>
-      onStep({ nodeId: node.id, attempt, outcome, output, child }, reached);
+      onStep({ nodeId: node.id, attempt, outcome, output, child }, reached, recordId);
     record('running', null);
     try {
       const attempted = await execute(carried, {

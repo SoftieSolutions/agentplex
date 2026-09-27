@@ -207,6 +207,8 @@ interface ActiveRun {
   readonly lineage: readonly LineageEntry[];
   step: number;
   steps: GraphRunStep[];
+  /** Where each open record sits in `steps`, by the record number the walk reports it under. */
+  readonly open: Map<number, number>;
   walk: Walk | null;
   /** The state the queued flush will publish, or `null` when none is queued. */
   pending: GraphRunState | null;
@@ -324,24 +326,25 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
   });
 
   /**
-   * Replaces the open record this outcome is of, or appends. The record to
-   * replace is the newest one with the same node and attempt, and only while
-   * it is still open: branches running at once interleave their records, so
-   * it is not always the last one, and a node a cycle reaches again -- whose
-   * earlier visit ended -- gets a new record rather than overwriting it.
+   * Replaces the open record this report is of, or appends a new one. Found
+   * by the record number the walk gives every report of one attempt, not by
+   * node and attempt: branches interleave their records, so the one to
+   * replace is not always the last, and two branches reaching one node that
+   * is no JOIN run it twice with the same node and attempt -- perhaps at once,
+   * when keying on those would let the second visit's record replace the
+   * first's and leave one of them in flight with no record at all. A record
+   * is forgotten once it ends, and a node a cycle reaches again is a new
+   * attempt and so a new record.
    */
-  const record = (run: ActiveRun, step: GraphRunStep): void => {
-    for (let index = run.steps.length - 1; index >= 0; index -= 1) {
-      const earlier = run.steps[index];
-      if (earlier === undefined) continue;
-      if (earlier.nodeId !== step.nodeId || earlier.attempt !== step.attempt) continue;
-      if (earlier.outcome === 'running' || earlier.outcome === 'waiting') {
-        run.steps[index] = step;
-        return;
-      }
-      break;
+  const record = (run: ActiveRun, step: GraphRunStep, id: number): void => {
+    let index = run.open.get(id);
+    if (index === undefined) {
+      index = run.steps.push(step) - 1;
+    } else {
+      run.steps[index] = step;
     }
-    run.steps.push(step);
+    if (step.outcome === 'running' || step.outcome === 'waiting') run.open.set(id, index);
+    else run.open.delete(id);
   };
 
   /**
@@ -420,6 +423,7 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
         lineage: [...what.above, { graph: nodeId, name: what.graphName }],
         step: 0,
         steps: [],
+        open: new Map(),
         walk: null,
         pending: null,
         writes: Promise.resolve(),
@@ -454,8 +458,8 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
         join: joinExecutor,
       },
       timers,
-      onStep: (step, reached) => {
-        record(run, step);
+      onStep: (step, reached, id) => {
+        record(run, step, id);
         run.step = reached;
         const steps = [...run.steps];
         write(run, 'steps', () => replaceSteps(database, run.runId, steps));

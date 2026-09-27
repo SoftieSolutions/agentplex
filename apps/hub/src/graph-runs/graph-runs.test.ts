@@ -945,6 +945,55 @@ describe('graph runs', () => {
       expect(row?.status).toBe('succeeded');
       expect(row?.steps).toHaveLength(4);
     });
+
+    it('keeps a record for each of two overlapping visits of one node, so neither ends the other', async () => {
+      // Two branches reach one gate that is no JOIN, so the gate is run
+      // twice, the second before the first has ended. Each visit is its own
+      // record: the second's must not replace the first's open one, nor the
+      // first's outcome the second's.
+      const twice: GraphDocument = graphDocumentSchema.parse({
+        nodes: [
+          TRIGGER,
+          AGENT,
+          { ...AGENT, id: 'docs', label: 'Docs reviewer' },
+          {
+            ...BASE,
+            id: 'gate',
+            kind: 'human',
+            label: 'Ship it',
+            approvers: ['robert'],
+            timeoutMinutes: null,
+          },
+        ],
+        edges: [
+          { from: 'start', to: 'review' },
+          { from: 'start', to: 'docs' },
+          { from: 'review', to: 'gate' },
+          { from: 'docs', to: 'gate' },
+        ],
+      });
+      const h = build();
+      const nodeId = await publishedGraph(h, twice);
+      const started = await h.runs.start(nodeId, {});
+      if (!started.ok) throw new Error(started.problem);
+      await settle();
+
+      const gateRecords = (): string[] =>
+        (h.published.at(-1)?.steps ?? [])
+          .filter((step) => step.nodeId === 'gate')
+          .map((step) => step.outcome);
+      expect(gateRecords()).toEqual(['waiting', 'waiting']);
+      expect(h.published.at(-1)?.status).toBe('waiting');
+
+      // The scripted person answers the visit that asked last.
+      h.human.grant();
+      await settle();
+
+      // One visit ended and the other is still waiting, on a record of its
+      // own: the run is still waiting on a person, and says so.
+      expect(gateRecords()).toEqual(['waiting', 'succeeded']);
+      expect(h.published.at(-1)?.status).toBe('waiting');
+    });
   });
 
   describe('SUB-GRAPH', () => {
