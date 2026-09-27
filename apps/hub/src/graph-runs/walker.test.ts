@@ -1020,6 +1020,76 @@ describe('walk', () => {
       });
     });
 
+    it('hands on every branch that ended at one node, as a list under it, dropping none', async () => {
+      // Two branches reach one last node that is no JOIN, so it runs twice
+      // and both runs end the run there: each is kept, in the order they
+      // ended, under the node's id.
+      const trail: Executor<'agent'> = async (node, input) => ({
+        ok: true,
+        carried: { at: node.id, after: input['at'] ?? null },
+        output: null,
+        next: null,
+      });
+      const converging = document({
+        nodes: [TRIGGER, AGENT, DOCS_AGENT, MERGE],
+        edges: [
+          { from: 'start', to: 'review' },
+          { from: 'start', to: 'docs' },
+          { from: 'review', to: 'merge' },
+          { from: 'docs', to: 'merge' },
+        ],
+      });
+
+      const run = drive(converging, {}, table(trail));
+
+      await expect(run.done).resolves.toEqual({
+        status: 'succeeded',
+        output: {
+          branches: {
+            merge: [
+              { at: 'merge', after: 'review' },
+              { at: 'merge', after: 'docs' },
+            ],
+          },
+        },
+      });
+    });
+
+    it('keeps a node reached once as its one output beside a node reached twice', async () => {
+      const trail: Executor<'agent'> = async (node, input) => ({
+        ok: true,
+        carried: { at: node.id, after: input['at'] ?? null },
+        output: null,
+        next: null,
+      });
+      const LOG = { ...AGENT, id: 'log', label: 'Log' };
+      const converging = document({
+        nodes: [TRIGGER, AGENT, DOCS_AGENT, MERGE, LOG],
+        edges: [
+          { from: 'start', to: 'review' },
+          { from: 'start', to: 'docs' },
+          { from: 'start', to: 'log' },
+          { from: 'review', to: 'merge' },
+          { from: 'docs', to: 'merge' },
+        ],
+      });
+
+      const run = drive(converging, {}, table(trail));
+
+      await expect(run.done).resolves.toEqual({
+        status: 'succeeded',
+        output: {
+          branches: {
+            merge: [
+              { at: 'merge', after: 'review' },
+              { at: 'merge', after: 'docs' },
+            ],
+            log: { at: 'log', after: null },
+          },
+        },
+      });
+    });
+
     it('fails a JOIN that one of its branches never reached, naming the join and the branch', async () => {
       // The router sends the run down one side only, so the join's other
       // side never arrives: said as a failure rather than a run that sits.

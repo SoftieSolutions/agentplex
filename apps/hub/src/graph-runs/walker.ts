@@ -62,7 +62,8 @@ import type { Timers } from '@agentplex/node-shared';
  *
  * The run ends when its last branch does. One branch left at a node with
  * nowhere to go hands on what it carried, as a run always has; several hand
- * on each under its node, in the shape a JOIN would.
+ * on each under its node, in the shape a JOIN would, and a node that is no
+ * JOIN which two branches ended at holds a list of what each carried.
  *
  * `reached` is one counter for the run, however many branches add to it, so
  * the bound that stops a loop is the same bound for a run that fans out.
@@ -387,8 +388,11 @@ export function walk(
   let live = 0;
   /** Branches waiting their turn, in the order they were reached; only `in-turn` queues. */
   const queue: { readonly node: GraphNode; readonly carried: RouteInput }[] = [];
-  /** What a branch that ended at a node with nowhere to go carried out, by that node. */
-  const leaves = new Map<GraphNodeId, RouteInput>();
+  /**
+   * What each branch that ended at a node with nowhere to go carried out, by
+   * that node, in the order they ended: two branches can end at one node.
+   */
+  const leaves = new Map<GraphNodeId, RouteInput[]>();
   /** Attempts begun across every branch, which numbers each one's record. */
   let records = 0;
   /** What has reached each JOIN so far, by the node it came from. */
@@ -498,16 +502,23 @@ export function walk(
         reason: `the JOIN node ${nameOf(join)} waits for every incoming branch, and ${missing.join(' and ')} never reached it`,
       });
     }
-    // One leaf hands on what it carried, as a run always has; several hand
-    // on each under its node, in the document's order, as a JOIN would.
+    // One branch ending hands on what it carried, as a run always has.
+    // Several hand on each under the node it ended at, in the document's
+    // order, as a JOIN would -- and a node two branches ended at holds a
+    // list of both, in the order they ended, rather than the later one
+    // silently standing for both.
     const ended = document.nodes.filter((node) => leaves.has(node.id));
     const [single, ...more] = ended;
-    const only = single !== undefined && more.length === 0 ? leaves.get(single.id) : undefined;
-    if (only !== undefined) return end({ status: 'succeeded', output: only });
-    const branches: Record<string, RouteInput> = {};
+    const lone = single === undefined || more.length > 0 ? undefined : leaves.get(single.id);
+    const [only, ...alongside] = lone ?? [];
+    if (only !== undefined && alongside.length === 0) {
+      return end({ status: 'succeeded', output: only });
+    }
+    const branches: Record<string, RouteInput | RouteInput[]> = {};
     for (const node of ended) {
-      const output = leaves.get(node.id);
-      if (output !== undefined) branches[node.id] = output;
+      const outputs = leaves.get(node.id) ?? [];
+      const [first, ...rest] = outputs;
+      if (first !== undefined) branches[node.id] = rest.length === 0 ? first : outputs;
     }
     return end({ status: 'succeeded', output: ended.length === 0 ? input : { branches } });
   };
@@ -682,7 +693,7 @@ export function walk(
           return;
         }
         if (followed.next.length === 0) {
-          leaves.set(node.id, carried);
+          leaves.set(node.id, [...(leaves.get(node.id) ?? []), carried]);
           return;
         }
 
