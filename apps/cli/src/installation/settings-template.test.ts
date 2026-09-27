@@ -5,10 +5,11 @@ import { systemLayout, userLayout } from './layout.js';
 import { renderSettings } from './settings-template.js';
 
 /**
- * The settings file, held byte for byte against files `install.sh` wrote on
- * machines it really installed: `fixtures/settings/`, with the commands that
- * captured them in `CAPTURE.txt`. A change to `write_environment_file`
- * re-captures those, and this is what fails until the same change lands here.
+ * The settings file, held byte for byte against files a real install wrote:
+ * `install.sh` in the bootstrap stages, handing over to `agentplex install`,
+ * which writes through this. `fixtures/settings/` holds them, with the commands
+ * that captured them in `CAPTURE.txt`. A deliberate change to the text
+ * re-captures those, and this is what fails until it has.
  */
 
 function fixture(name: string): string {
@@ -19,11 +20,11 @@ function fixture(name: string): string {
 }
 
 describe('renderSettings', () => {
-  it('writes what install.sh wrote for a per-user hub', () => {
+  it('writes what an install wrote for a per-user hub', () => {
     expect(renderSettings('hub', userLayout('/home/alice'))).toBe(fixture('user.env'));
   });
 
-  it('writes what install.sh wrote for a --system hub', () => {
+  it('writes what an install wrote for a --system hub', () => {
     expect(renderSettings('hub', systemLayout())).toBe(fixture('system.env'));
   });
 

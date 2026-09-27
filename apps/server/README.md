@@ -8,21 +8,22 @@ This is not a command. There is no `agentplex server` to type: the package
 carries a compiled program, and what starts it is a systemd unit naming an
 interpreter and that file.
 
-```sh
-npm install --global https://github.com/SoftieSolutions/agentplex/releases/download/server-v1.0.0/agentplex-server.tgz
-node "$(npm root -g)/@softiesolutions/agentplex-server/apps/server/dist/main.js" --help
-```
-
 Nothing here is on npm. Every release is a GitHub Release carrying one tarball,
-and npm installs it from that URL -- so the version in it is a release tag and
-not a range. `install.sh` is what resolves a version for you.
+so the version in it is a release tag and not a range, and `agentplex install`
+is what resolves a version for you. The tarball carries an
+`npm-shrinkwrap.json`, the dependency versions it was tested with, and npm
+reads that only when the package is the project it installs into -- so it is
+unpacked and installed in place, never with `npm install --global <url>`, which
+ignores the shrinkwrap. [The procedure by hand](https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md#if-your-npm-is-configured-with-ignore-scripts) is in the command's
+README.
 
 This package's manifest carries an `agentplex.protocol` number, and a server
 only pairs with a hub that declares the same one.
 
 Install it with [the `agentplex` command](https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md),
-which is what configures and checks a machine, and let `install.sh
---role=server` write the unit:
+which is what configures and checks a machine: `agentplex install --role=server`
+installs this package and writes the unit, and on a machine with nothing on it
+yet `install.sh` puts a runtime and the command there and hands over to it:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/scripts/install.sh | bash -s -- --role=server
@@ -49,7 +50,7 @@ xcode-select --install                                                # macOS, i
 `install.sh` does this for you on the Linux path for `--role=server` and
 `--role=both`. An npm configured with `ignore-scripts=true` skips the build that
 makes node-pty usable, so this package's install needs
-`--ignore-scripts=false`, which is what `install.sh` passes.
+`--ignore-scripts=false`, which is what `agentplex install` passes.
 
 ## License
 

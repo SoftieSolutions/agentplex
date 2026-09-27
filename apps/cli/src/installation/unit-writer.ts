@@ -3,8 +3,8 @@ import { renderUnit, unitFileName, type Daemon } from './unit-file.js';
 import type { WriteMachine } from './write-machine.js';
 
 /**
- * One daemon's unit, written: `write_units`' `mkdir -p "$UNIT_DIR"` and
- * `render_unit "$daemon" >"$file"`.
+ * One daemon's unit, written: the unit directory made if it is not there, and
+ * the unit put in it.
  *
  * The bytes are `renderUnit`'s and nothing else, so what an install leaves on
  * disk is what `--print-unit` prints and what the captured fixtures hold. The

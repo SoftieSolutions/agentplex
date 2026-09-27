@@ -5,7 +5,14 @@ copy somebody typed.
 Script: scripts/install.sh at 1b91a6c2ffaa2d8a982a1f11e60c33d7604df140
   (AGX-321: the server unit stops with KillMode=mixed so its agents are left to
   the drain), master's, which is the render_unit this branch has once it is
-  rebased onto it. A change to render_unit re-captures every file here.
+  rebased onto it.
+
+Since AGX-329 install.sh renders no unit: it hands the install over to
+`agentplex install`, which renders through unit-file.ts, and answers
+--print-unit by asking that command. These files are therefore the units
+every machine installed before the handover carries, and what unit-file.ts
+is held to. A deliberate change to the unit re-captures every file here from
+`agentplex install --print-unit`, with the same roles, scopes and images.
 
 Captured on 2026-09-26 from the repository root, with docker. The script was
 taken out of that commit rather than the working tree,

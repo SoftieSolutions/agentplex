@@ -47,10 +47,15 @@ import { NODE_MAJOR } from '../../installation/node-directory.js';
 /**
  * Where the current release of that major is named.
  *
- * The same URL `install.sh` carries as `NODE_DIST_URL`, and the checksum file
- * under it is what makes one fetch answer all three questions: which version is
- * current, whether it is the one already here, and what the archive should hash
- * to.
+ * `install.sh` names the same URL as `NODE_DIST_URL`. The two runtimes are two
+ * implementations by necessity -- the script unpacks one on a machine with no
+ * Node, and this replaces it from the bin that Node runs -- so what they share
+ * is held by a test rather than by a comment: `runtime.test.ts` reads this and
+ * `NODE_MAJOR` against the script's `readonly` lines.
+ *
+ * The checksum file under it is what makes one fetch answer all three
+ * questions: which version is current, whether it is the one already here, and
+ * what the archive should hash to.
  */
 export const NODE_DIST_URL = `https://nodejs.org/dist/latest-v${NODE_MAJOR}.x`;
 

@@ -72,8 +72,8 @@ describe('the components', () => {
   });
 
   it('name the entry inside a package the way the unit files do', () => {
-    // The installer's `daemon_command` builds exactly this, and the container
-    // check greps for the whole ExecStart line. The layout inside a published
+    // The unit's ExecStart names exactly this, and the container check greps
+    // for the whole line. The layout inside a published
     // package is the workspace's, so one expression is right everywhere.
     expect(daemonEntrypoint('hub')).toBe('apps/hub/dist/main.js');
     expect(daemonEntrypoint('server')).toBe('apps/server/dist/main.js');

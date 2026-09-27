@@ -129,10 +129,31 @@ describe('the release line', () => {
     expect(planned(both, 'server protocol')).toBe('3, which hub, web and server agree on');
   });
 
+  /**
+   * The legs checked and reported are the pinned release's, not the current
+   * one's. Here the current hub has moved the client leg ahead of the web
+   * release that has not landed beside it, so taking the current hub's legs
+   * would refuse, and a pin back to the release before it is the set that
+   * agrees. A server pinned below a leg change says the older number.
+   */
   it('takes an exact pin the manifest lists, with the legs that release records', () => {
-    const pinned = input(['--role=hub@1.1.0', '--package-version=1.3.0', '--dry-run']);
+    const ranAhead = manifest([
+      ['cli', '1.3.0', {}],
+      ['cli', '1.4.0', {}],
+      ['hub', '1.1.0', BOTH_LEGS],
+      ['hub', '1.2.0', { client: 4, server: 3 }],
+      ['web', '1.1.0', BOTH_LEGS],
+      ['server', '1.4.0', { server: 2 }],
+      ['server', '1.5.0', { server: 3 }],
+    ]);
+    const release: ReleaseInput = { kind: 'manifest', source: MIRROR, manifest: ranAhead };
+    const hub = input(['--role=hub@1.1.0', '--package-version=1.3.0', '--dry-run'], { release });
+    const server = input(['--role=server@1.4.0', '--dry-run'], { release });
 
-    expect(planned(pinned, 'release')).toBe(`cli 1.3.0, hub 1.1.0, web 1.1.0 (from ${MIRROR})`);
+    expect(planned(hub, 'release')).toBe(`cli 1.3.0, hub 1.1.0, web 1.1.0 (from ${MIRROR})`);
+    expect(planned(hub, 'client protocol')).toBe('3, which hub and web agree on');
+    expect(planned(hub, 'server protocol')).toBe('3, which hub and web agree on');
+    expect(planned(server, 'server protocol')).toBe('2, which server agrees on');
   });
 
   it('resolves a series to the newest release under it, as the one table says', () => {
@@ -217,6 +238,81 @@ describe('the release line', () => {
         input(['--dry-run'], { release: { kind: 'manifest', source: MIRROR, manifest: server } }),
       ),
     ).toContain('a hub speaking server protocol 3 and a server speaking server protocol 4');
+  });
+
+  /**
+   * The same release set, on a machine that installs no server: nothing here
+   * speaks the server leg to anything else here, so there is nothing to refuse.
+   * A server elsewhere at the old number is refused at its own handshake.
+   */
+  it('lets a hub install whose server leg differs from the server release it does not take', () => {
+    const moved = { client: 3, server: 4 };
+    const release: ReleaseInput = {
+      kind: 'manifest',
+      source: MIRROR,
+      manifest: manifest([
+        ['cli', '1.4.0', {}],
+        ['hub', '1.2.0', moved],
+        ['web', '1.1.0', moved],
+        ['server', '1.5.0', { server: 3 }],
+      ]),
+    };
+
+    expect(planned(input(['--role=hub', '--dry-run'], { release }), 'server protocol')).toBe(
+      '4, which hub and web agree on',
+    );
+    expect(stopped(input(['--role=both', '--dry-run'], { release }))).toContain(
+      'a hub speaking server protocol 4 and a server speaking server protocol 3',
+    );
+  });
+
+  /**
+   * Asked of what this machine installs and not of the whole manifest. A hub
+   * install refused because the `server` entry disagrees would be refusing over
+   * a package this machine will never download.
+   */
+  it('ignores a disagreement in a component this machine does not install', () => {
+    const release: ReleaseInput = {
+      kind: 'manifest',
+      source: MIRROR,
+      manifest: updateVersionsManifest(CURRENT, 'server', {
+        version: '1.6.0',
+        protocol: { server: 4 },
+      }),
+    };
+
+    expect(planned(input(['--role=hub', '--dry-run'], { release }), 'release')).toBe(
+      `cli 1.4.0, hub 1.2.0, web 1.1.0 (from ${MIRROR})`,
+    );
+  });
+});
+
+describe('the protocol a pinned release speaks, checked before anything is installed', () => {
+  /**
+   * The judgement call in the pin grammar, answered out of the manifest rather
+   * than out of a second artifact published at each tag. Installing first and
+   * checking after ends at the machine this is trying to prevent: a hub and a
+   * server that are installed, running and unable to pair. The current hub
+   * agrees with the web beside it; the release the pin names does not.
+   */
+  it('refuses a pinned component that speaks a different protocol', () => {
+    const release: ReleaseInput = {
+      kind: 'manifest',
+      source: MIRROR,
+      manifest: manifest([
+        ['cli', '1.4.0', {}],
+        ['hub', '1.1.0', { client: 2, server: 2 }],
+        ['hub', '1.2.0', BOTH_LEGS],
+        ['web', '1.1.0', BOTH_LEGS],
+      ]),
+    };
+
+    expect(planned(input(['--role=hub', '--dry-run'], { release }), 'release')).toBe(
+      `cli 1.4.0, hub 1.2.0, web 1.1.0 (from ${MIRROR})`,
+    );
+    const refused = stopped(input(['--role=hub@1.1.0', '--dry-run'], { release }));
+    expect(refused).toContain('hub speaking client protocol 2');
+    expect(refused).toContain('web speaking client protocol 3');
   });
 });
 

@@ -167,7 +167,8 @@ export async function runInstallCommand(
   const unitsPresent: string[] = [];
   for (const daemon of request.daemons) {
     const file = unitFile(layout, unitFileName(daemon));
-    // `[ -e ]`, as `write_units` asks: anything at that path is somebody's.
+    // `[ -e ]`, as the script asked before it handed the units over: anything
+    // at that path is somebody's.
     if (await machine.exists(file)) unitsPresent.push(file);
   }
   const settingsPresent = await machine.exists(layout.settingsFile);
@@ -384,7 +385,7 @@ async function installedVersion(tree: string, machine: InstallMachine): Promise<
 }
 
 /**
- * `write_environment_file`, for a file that is not there: created `0600`
+ * The settings file, for a file that is not there: created `0600`
  * before a byte is in it, because the client token lives here, and under
  * `--system` then given to `root:<account>` and widened to `0640` -- after the
  * write and never before it, so the file is never wider than the mode it ends

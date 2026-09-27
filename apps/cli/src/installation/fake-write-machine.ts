@@ -12,7 +12,7 @@ import type { ManifestRead, ManifestReader, ManifestSource } from '../versions/v
  * command's own package last, a prefix with a stamp in it afterwards -- and all
  * of those are values in this object.
  *
- * It extends the read-only fake rather than restating it, so a test describes
+ * It extends the read-only fake rather than copying it, so a test describes
  * a prefix the same way `status`'s suites do.
  */
 export interface FakeWriteMachineOptions extends FakeInstallationFilesOptions {

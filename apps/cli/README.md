@@ -3,10 +3,11 @@
 Watch and drive coding-agent sessions across machines. This package is the
 command, `agentplex`. The hub and the server are daemons rather than
 subcommands -- nothing but `agentplex` is installed onto your PATH, and the
-units `install.sh` writes are what start them.
+units `agentplex install` writes are what start them.
 
 |                            |                                                         |
 | -------------------------- | ------------------------------------------------------- |
+| `agentplex install`        | a role's packages, its settings file and its units      |
 | `agentplex setup`          | the wizard, or `--plan <file>` to replay one            |
 | `agentplex doctor`         | the read-only check: can this machine do the work       |
 | `agentplex status`         | what is installed, at what version, and what is running |
@@ -21,7 +22,7 @@ write, a token, a free port, providers, stores, a pseudoterminal -- and
 lists them.
 
 ```sh
-npm install --global https://github.com/SoftieSolutions/agentplex/releases/download/cli-v1.0.0/agentplex.tgz
+curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/scripts/install.sh | bash -s -- --role=server
 agentplex doctor --role=server
 ```
 
@@ -31,14 +32,20 @@ unscoped name on npm is an unrelated placeholder somebody else registered, and a
 is.
 
 **It is not on npm.** Every release is a GitHub Release carrying one tarball,
-and npm installs it from that URL -- unpacking it and then resolving its own
-registry dependencies from npm in the ordinary way. So npm is what installs
-this; nothing of this project is published to a registry. `install.sh` below is
-the way to do it without typing a URL.
+and each tarball carries an `npm-shrinkwrap.json`: the registry dependencies it
+was tested with, transitive ones included. npm reads that file only when the
+package is the project it installs into, so a package is unpacked and npm is
+pointed at the unpacked directory -- not `npm install --global <url>`, which
+ignores the shrinkwrap and takes whatever the registry calls newest that day.
+Nothing of this project is published to a registry. `install.sh` below does it
+for you, and [the procedure by hand](#if-your-npm-is-configured-with-ignore-scripts)
+is further down.
 
-On a machine that has nothing on it yet, `install.sh` does the whole of it: the
-Node runtime, the toolchain if this machine needs one, the packages the role
-needs, and the systemd units, for the user who runs it:
+On a machine that has nothing on it yet, `install.sh` gets it as far as this
+command -- the Node runtime, the toolchain if this machine needs one, and this
+package -- and hands the rest to `agentplex install`: the packages the role
+needs, the settings file and the systemd units, for the user who runs it. Then
+it starts `agentplex setup`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/scripts/install.sh | bash
@@ -82,9 +89,9 @@ as one small file on the `v1` branch, beside `install.sh`:
 }
 ```
 
-`install.sh` reads it before it downloads anything, so one unauthenticated fetch
-answers what to install, whether the set agrees, and everything a pin leaves
-open. The file is append-only: a release adds a line to its component's history
+`install.sh` reads this command's entry in it and `agentplex install` the rest,
+each before it downloads anything, so one unauthenticated fetch answers what to
+install, whether the set agrees, and everything a pin leaves open. The file is append-only: a release adds a line to its component's history
 and never removes one, so a version that was ever advertised here stays
 installable.
 
@@ -108,7 +115,8 @@ compatibility constant -- the wire frames the hub and the server speak, and the
 on-disk formats they share -- and packaging writes it into every published
 manifest, so each component's protocol is a fact about the artifact rather than
 a claim about it. Components that do not agree on it do not talk to each other,
-so `install.sh` refuses the install, names both numbers, and writes nothing.
+so `agentplex install` refuses the install, names both numbers, and writes
+nothing.
 A protocol change releases every affected component together, which is why this
 is a tripwire and not something you have to resolve.
 
@@ -137,8 +145,8 @@ installs it, because the manifest lists it. Nothing wider is accepted; `^1.3.0`,
 tags and not a registry with a resolver behind it.
 
 A pin the manifest does not offer is refused before the first download, and the
-refusal says that rather than that the tag does not exist -- `install.sh` has no
-way to know the second. A `2.0.0` that really was released is simply not
+refusal says that rather than that the tag does not exist -- neither installer
+has a way to know the second. A `2.0.0` that really was released is simply not
 something the `v1` manifest advertises, and neither is anything missing from a
 mirror.
 
@@ -210,8 +218,8 @@ unusual one, produces an install that reports success and leaves node-pty as
 source that cannot load, and then the server fails to start with a module
 error rather than anything about a pty.
 
-`install.sh` and `agentplex update` both override it, and neither installs
-with `npm install --global`: each unpacks the release tarball beside the tree
+`install.sh`, `agentplex install` and `agentplex update` all override it, and
+none installs with `npm install --global`: each unpacks the release tarball beside the tree
 it replaces and installs its dependencies there, against the
 `npm-shrinkwrap.json` it carries, so a machine gets the versions the release
 was tested with rather than whatever the registry calls newest that day. To do
