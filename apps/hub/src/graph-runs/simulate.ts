@@ -46,7 +46,7 @@ import {
  * ## Every kind has an answer, by type
  *
  * `SimulatedTable` is keyed by every `GraphNodeKind`, ACTION and HUMAN
- * included, so a seventh kind added to the protocol is a type error here
+ * included, so an eighth kind added to the protocol is a type error here
  * rather than a simulation that falls back to executing it. The risk a
  * simulation carries is quietly doing something real, and the table is the
  * only place a node is answered: it is handed three reads -- where an AGENT
