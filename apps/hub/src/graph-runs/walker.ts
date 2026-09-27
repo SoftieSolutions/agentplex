@@ -56,9 +56,13 @@ import type { Timers } from '@agentplex/node-shared';
  * nowhere to go, or at a JOIN that is still waiting on another branch: the
  * JOIN holds each arrival under the node it came from, and the branch that
  * brings the last one goes on through it with `{ branches: { [from]: output
- * } }`. A JOIN one of whose branches never came -- a ROUTER upstream sent the
- * run elsewhere -- fails the run when nothing else is left to walk, naming the
- * join and the branch, rather than a run that sits forever.
+ * } }`. A node reached by two branches runs twice and so arrives twice: the
+ * JOIN queues arrivals per node and goes on once per complete set, oldest
+ * with oldest, so nothing is replaced and a cycle through a JOIN goes on
+ * each time round. A JOIN left holding an incomplete set -- a ROUTER upstream
+ * sent the run elsewhere, or one node arrived more often than another --
+ * fails the run when nothing else is left to walk, naming the join, what
+ * came and what did not, rather than a run that sits forever.
  *
  * The run ends when its last branch does. One branch left at a node with
  * nowhere to go hands on what it carried, as a run always has; several hand
@@ -395,8 +399,13 @@ export function walk(
   const leaves = new Map<GraphNodeId, RouteInput[]>();
   /** Attempts begun across every branch, which numbers each one's record. */
   let records = 0;
-  /** What has reached each JOIN so far, by the node it came from. */
-  const arrivals = new Map<GraphNodeId, Map<GraphNodeId, RouteInput>>();
+  /**
+   * What has reached each JOIN and not yet gone on through it, by the node it
+   * came from, oldest first: one node can arrive again before the others have.
+   */
+  const arrivals = new Map<GraphNodeId, Map<GraphNodeId, RouteInput[]>>();
+  /** How many times each JOIN has gone on, for the sentence a leftover arrival ends the run with. */
+  const joined = new Map<GraphNodeId, number>();
 
   let resolveDone: (outcome: WalkOutcome) => void = () => {};
   const done = new Promise<WalkOutcome>((resolve) => {
@@ -463,24 +472,27 @@ export function walk(
   };
 
   /**
-   * A branch reaching a JOIN: its output is held under the node it came
-   * from, and the join goes on -- with every branch's output -- only once
-   * each node `graphIncoming` names has arrived. `null` while any is still out.
+   * A branch reaching a JOIN: its output is queued under the node it came
+   * from, and the join goes on -- with the oldest arrival from each node
+   * `graphIncoming` names -- once every one of them has one waiting. `null`
+   * while any is still out. An arrival from a node already waiting queues
+   * behind it rather than replacing it, and goes on with the next set.
    */
   const arrive = (join: GraphNode, from: GraphNodeId, carried: RouteInput): RouteInput | null => {
     const expected = graphIncoming(document, join.id);
-    const held = arrivals.get(join.id) ?? new Map<GraphNodeId, RouteInput>();
-    held.set(from, carried);
-    if (expected.some((id) => !held.has(id))) {
-      arrivals.set(join.id, held);
-      return null;
-    }
-    arrivals.delete(join.id);
+    const held = arrivals.get(join.id) ?? new Map<GraphNodeId, RouteInput[]>();
+    arrivals.set(join.id, held);
+    held.set(from, [...(held.get(from) ?? []), carried]);
+    if (expected.some((id) => (held.get(id) ?? []).length === 0)) return null;
     const branches: Record<string, RouteInput> = {};
     for (const id of expected) {
-      const output = held.get(id);
+      const [output, ...later] = held.get(id) ?? [];
       if (output !== undefined) branches[id] = output;
+      if (later.length === 0) held.delete(id);
+      else held.set(id, later);
     }
+    if (held.size === 0) arrivals.delete(join.id);
+    joined.set(join.id, (joined.get(join.id) ?? 0) + 1);
     return { branches };
   };
 
@@ -491,15 +503,23 @@ export function walk(
     for (const [joinId, held] of arrivals) {
       const join = byId.get(joinId);
       if (join === undefined) continue;
-      const missing = graphIncoming(document, joinId)
-        .filter((id) => !held.has(id))
-        .map((id) => {
-          const source = byId.get(id);
-          return source === undefined ? id : nameOf(source);
+      const named = (id: GraphNodeId): string => {
+        const source = byId.get(id);
+        return source === undefined ? id : nameOf(source);
+      };
+      const incoming = graphIncoming(document, joinId);
+      const missing = incoming.filter((id) => !held.has(id)).map(named);
+      const times = joined.get(joinId) ?? 0;
+      if (times === 0) {
+        return end({
+          status: 'failed',
+          reason: `the JOIN node ${nameOf(join)} waits for every incoming branch, and ${missing.join(' and ')} never reached it`,
         });
+      }
+      const came = incoming.filter((id) => held.has(id)).map(named);
       return end({
         status: 'failed',
-        reason: `the JOIN node ${nameOf(join)} waits for every incoming branch, and ${missing.join(' and ')} never reached it`,
+        reason: `the JOIN node ${nameOf(join)} went on ${times === 1 ? 'once' : `${String(times)} times`} with every incoming branch, then ${came.join(' and ')} reached it again and ${missing.join(' and ')} did not`,
       });
     }
     // One branch ending hands on what it carried, as a run always has.

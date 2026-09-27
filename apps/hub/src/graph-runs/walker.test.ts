@@ -1090,6 +1090,100 @@ describe('walk', () => {
       });
     });
 
+    /** Carries where it is and the node before it, so a test can read which path an output took. */
+    const TRAIL: Executor<'agent'> = async (node, input) => ({
+      ok: true,
+      carried: { at: node.id, after: input['at'] ?? null },
+      output: null,
+      next: null,
+    });
+    const LOG = { ...AGENT, id: 'log', label: 'Log' };
+
+    it('goes on through a JOIN once per complete set, pairing each incoming node’s arrivals in order', async () => {
+      // Both of the join's incoming nodes are reached by two branches, so
+      // each arrives twice: the join goes on twice, each time with one
+      // arrival from each, first with first, and drops none. Log is slow, so
+      // both Merge notes arrive before either Log: the second must wait its
+      // turn rather than replace the first.
+      const twice = document({
+        nodes: [TRIGGER, AGENT, DOCS_AGENT, MERGE, LOG, JOIN],
+        edges: [
+          { from: 'start', to: 'review' },
+          { from: 'start', to: 'docs' },
+          { from: 'review', to: 'merge' },
+          { from: 'review', to: 'log' },
+          { from: 'docs', to: 'merge' },
+          { from: 'docs', to: 'log' },
+          { from: 'merge', to: 'both' },
+          { from: 'log', to: 'both' },
+        ],
+      });
+
+      const slowLog: Executor<'agent'> = async (node, input, context) => {
+        if (node.id === 'log') await settle();
+        return TRAIL(node, input, context);
+      };
+      const run = drive(twice, {}, table(slowLog));
+
+      await expect(run.done).resolves.toEqual({
+        status: 'succeeded',
+        output: {
+          branches: {
+            both: [
+              {
+                branches: {
+                  merge: { at: 'merge', after: 'review' },
+                  log: { at: 'log', after: 'review' },
+                },
+              },
+              {
+                branches: {
+                  merge: { at: 'merge', after: 'docs' },
+                  log: { at: 'log', after: 'docs' },
+                },
+              },
+            ],
+          },
+        },
+      });
+      expect(
+        run.steps.filter((step) => step.nodeId === 'both' && step.outcome === 'succeeded'),
+      ).toHaveLength(2);
+    });
+
+    it('fails, and does not hang, on an arrival left over after the JOIN went on, naming what came and what did not', async () => {
+      // Merge notes is reached by two branches and Log by one, so the join
+      // goes on once and the second Merge notes has nothing to pair with.
+      // Neither dropped nor waited on: the run ends failed, and the sentence
+      // says the join did go on, rather than that Log never came.
+      const PUBLISH = { ...AGENT, id: 'publish', label: 'Publish' };
+      const uneven = document({
+        nodes: [TRIGGER, AGENT, DOCS_AGENT, MERGE, LOG, JOIN, PUBLISH],
+        edges: [
+          { from: 'start', to: 'review' },
+          { from: 'start', to: 'docs' },
+          { from: 'start', to: 'log' },
+          { from: 'review', to: 'merge' },
+          { from: 'docs', to: 'merge' },
+          { from: 'merge', to: 'both' },
+          { from: 'log', to: 'both' },
+          { from: 'both', to: 'publish' },
+        ],
+      });
+
+      const run = drive(uneven, {}, table(TRAIL));
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason:
+          'the JOIN node Both reviews went on once with every incoming branch, then Merge notes reached it again and Log did not',
+      });
+      expect(
+        run.steps.filter((step) => step.nodeId === 'publish' && step.outcome === 'succeeded'),
+      ).toHaveLength(1);
+      expect(run.ended).toHaveLength(1);
+    });
+
     it('fails a JOIN that one of its branches never reached, naming the join and the branch', async () => {
       // The router sends the run down one side only, so the join's other
       // side never arrives: said as a failure rather than a run that sits.
