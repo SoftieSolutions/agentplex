@@ -14,6 +14,7 @@ import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createLogger } from '@agentplex/node-shared';
 import { createHumanExecutor } from './human-executor.js';
 import {
+  joinExecutor,
   routerExecutor,
   triggerExecutor,
   walk,
@@ -119,7 +120,14 @@ function table(
   human: Executor<'human'> = NOBODY,
   subgraph: Executor<'subgraph'> = NO_CHILD,
 ): ExecutorTable {
-  return { trigger: triggerExecutor, router: routerExecutor, agent: execute, human, subgraph };
+  return {
+    trigger: triggerExecutor,
+    router: routerExecutor,
+    agent: execute,
+    human,
+    subgraph,
+    join: joinExecutor,
+  };
 }
 
 const LINT = {
@@ -257,6 +265,7 @@ describe('walk', () => {
         return { ok: true, carried: input, output: null, next: null };
       },
       human: NOBODY,
+      join: joinExecutor,
     };
     const input = { body: 'x'.repeat(GRAPH_RUN_OUTPUT_MAX_CHARS + 500) };
 
@@ -294,6 +303,7 @@ describe('walk', () => {
       router: routerExecutor,
       human: NOBODY,
       subgraph: NO_CHILD,
+      join: joinExecutor,
       agent: async (node, input) => {
         seen.push(input);
         return { ok: true, carried: { ran: node.id }, output: null, next: null };
@@ -556,6 +566,7 @@ describe('walk', () => {
         router: routerExecutor,
         human: NOBODY,
         subgraph: NO_CHILD,
+        join: joinExecutor,
         agent: (_node, _input, context) =>
           new Promise((resolve) => {
             context.cancellation.onCancel(() => {
@@ -799,6 +810,284 @@ describe('walk', () => {
     });
   });
 
+  describe('branches and a JOIN', () => {
+    const JOIN = { ...BASE, id: 'both', kind: 'join', label: 'Both reviews' };
+    const MERGE = { ...AGENT, id: 'merge', label: 'Merge notes' };
+    /** TRIGGER fans out to the two reviewers, who meet at the join, which goes on to one agent. */
+    const FANNED = document({
+      nodes: [TRIGGER, AGENT, DOCS_AGENT, JOIN, MERGE],
+      edges: [
+        { from: 'start', to: 'review' },
+        { from: 'start', to: 'docs' },
+        { from: 'review', to: 'both' },
+        { from: 'docs', to: 'both' },
+        { from: 'both', to: 'merge' },
+      ],
+    });
+
+    /**
+     * An AGENT executor each call of which a test answers by node id, and
+     * which stops early on a cancel the way the real one asks a session to.
+     */
+    function gated(): {
+      execute: Executor<'agent'>;
+      readonly started: string[];
+      readonly inputs: Map<string, RouteInput>;
+      pass(id: string): void;
+      fail(id: string, problem: string): void;
+    } {
+      const started: string[] = [];
+      const inputs = new Map<string, RouteInput>();
+      const answers = new Map<
+        string,
+        (answer: { ok: true } | { ok: false; problem: string }) => void
+      >();
+      return {
+        started,
+        inputs,
+        pass: (id) => answers.get(id)?.({ ok: true }),
+        fail: (id, problem) => answers.get(id)?.({ ok: false, problem }),
+        execute: (node, input, context) =>
+          new Promise((resolve) => {
+            started.push(node.id);
+            inputs.set(node.id, input);
+            answers.set(node.id, (answer) =>
+              resolve(
+                answer.ok
+                  ? { ok: true, carried: { by: node.id }, output: null, next: null }
+                  : answer,
+              ),
+            );
+            context.cancellation.onCancel(() =>
+              resolve({ ok: false, problem: `${node.label} was stopped` }),
+            );
+          }),
+      };
+    }
+
+    /** The nodes whose latest record is open, in the order the records say. */
+    function inFlight(steps: readonly GraphRunStep[]): string[] {
+      const latest = new Map<string, GraphRunStep>();
+      for (const step of steps) latest.set(step.nodeId, step);
+      return [...latest.values()]
+        .filter((step) => step.outcome === 'running' || step.outcome === 'waiting')
+        .map((step) => step.nodeId);
+    }
+
+    it('runs every outgoing branch of a node at once, in the order the edges are listed', async () => {
+      const agents = gated();
+      const run = drive(FANNED, { language: 'rust' }, table(agents.execute));
+      await settle();
+
+      // Both reviewers started before either answered: two steps in flight.
+      expect(agents.started).toEqual(['review', 'docs']);
+      expect(inFlight(run.steps)).toEqual(['review', 'docs']);
+      // Each branch was handed what the node before the fan-out carried.
+      expect(agents.inputs.get('review')).toEqual({ language: 'rust' });
+      expect(agents.inputs.get('docs')).toEqual({ language: 'rust' });
+    });
+
+    it('waits at the JOIN for every incoming branch, then goes on once with each output by node', async () => {
+      const agents = gated();
+      const run = drive(FANNED, {}, table(agents.execute));
+      await settle();
+
+      agents.pass('docs');
+      await settle();
+      // One branch in: the join has not been reached, and nothing after it has.
+      expect(run.steps.some((step) => step.nodeId === 'both')).toBe(false);
+      expect(agents.started).toEqual(['review', 'docs']);
+
+      agents.pass('review');
+      await settle();
+      expect(agents.started).toEqual(['review', 'docs', 'merge']);
+      // The join hands on what each branch made, under the node it came from,
+      // in the order the edges into it are listed.
+      expect(agents.inputs.get('merge')).toEqual({
+        branches: { review: { by: 'review' }, docs: { by: 'docs' } },
+      });
+      expect(run.steps.filter((step) => step.nodeId === 'both')).toEqual([
+        { nodeId: 'both', attempt: 0, outcome: 'running', output: null, child: null },
+        { nodeId: 'both', attempt: 0, outcome: 'succeeded', output: null, child: null },
+      ]);
+
+      agents.pass('merge');
+      await expect(run.done).resolves.toEqual({ status: 'succeeded', output: { by: 'merge' } });
+      // The join counts once: trigger, two reviewers, join, merge.
+      expect(run.reached.at(-1)).toBe(5);
+      expect(run.ended).toHaveLength(1);
+    });
+
+    it('fails the run naming the branch that failed, and cancels the branch still running', async () => {
+      const agents = gated();
+      const run = drive(FANNED, {}, table(agents.execute));
+      await settle();
+
+      agents.fail('review', 'the review found nothing to review');
+
+      // Failed, not cancelled: the sibling was stopped because of the
+      // failure, and the failure is what the run ended on.
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason: 'the AGENT node Rust reviewer failed: the review found nothing to review',
+      });
+      expect(run.steps.filter((step) => step.nodeId === 'docs').at(-1)).toEqual({
+        nodeId: 'docs',
+        attempt: 0,
+        outcome: 'cancelled',
+        output: null,
+        child: null,
+      });
+      expect(agents.started).toEqual(['review', 'docs']);
+      expect(run.ended).toHaveLength(1);
+      expect(inFlight(run.steps)).toEqual([]);
+    });
+
+    it('does not retry a sibling cancelled by a failure, nor wait out its backoff', async () => {
+      const agents = gated();
+      const patient = document({
+        ...FANNED,
+        nodes: FANNED.nodes.map((node) =>
+          node.id === 'docs' ? { ...node, retry: { max: 3, backoff: 30 } } : node,
+        ),
+      });
+      const run = drive(patient, {}, table(agents.execute));
+      await settle();
+
+      agents.fail('review', 'no');
+
+      await expect(run.done).resolves.toMatchObject({ status: 'failed' });
+      expect(run.timers.pending).toBe(0);
+      expect(agents.started).toEqual(['review', 'docs']);
+    });
+
+    it('ends cancelled on a cancel during a fan-out, telling every branch in flight', async () => {
+      const agents = gated();
+      const run = drive(FANNED, {}, table(agents.execute));
+      await settle();
+
+      run.cancel();
+
+      await expect(run.done).resolves.toEqual({ status: 'cancelled' });
+      expect(
+        run.steps
+          .filter((step) => step.outcome === 'cancelled')
+          .map((step) => step.nodeId)
+          .sort(),
+      ).toEqual(['docs', 'review']);
+      expect(agents.started).toEqual(['review', 'docs']);
+      expect(run.ended).toEqual([
+        { outcome: { status: 'cancelled' }, stepsThen: run.steps.length },
+      ]);
+    });
+
+    it('says how it ended in the same synchronous stretch as the last branch’s last step', async () => {
+      const agents = gated();
+      const run = drive(FANNED, {}, table(agents.execute));
+      await settle();
+      agents.pass('review');
+      agents.pass('docs');
+      await settle();
+
+      agents.pass('merge');
+      await run.done;
+
+      expect(run.order.slice(-3)).toEqual(['step merge succeeded', 'end succeeded', 'tick']);
+    });
+
+    it('succeeds a run whose branches end apart with each last output under its node id', async () => {
+      const agents = gated();
+      const open = document({
+        nodes: [TRIGGER, AGENT, DOCS_AGENT],
+        edges: [
+          { from: 'start', to: 'review' },
+          { from: 'start', to: 'docs' },
+        ],
+      });
+      const run = drive(open, {}, table(agents.execute));
+      await settle();
+
+      agents.pass('docs');
+      await settle();
+      expect(run.ended).toEqual([]);
+      agents.pass('review');
+
+      await expect(run.done).resolves.toEqual({
+        status: 'succeeded',
+        output: { branches: { review: { by: 'review' }, docs: { by: 'docs' } } },
+      });
+    });
+
+    it('fails a JOIN that one of its branches never reached, naming the join and the branch', async () => {
+      // The router sends the run down one side only, so the join's other
+      // side never arrives: said as a failure rather than a run that sits.
+      const routedJoin = document({
+        nodes: [
+          TRIGGER,
+          {
+            ...BASE,
+            id: 'classify',
+            kind: 'router',
+            label: 'Classify',
+            model: 'haiku',
+            routes: [{ condition: 'language == rust', to: 'review' }],
+            otherwise: 'docs',
+          },
+          AGENT,
+          DOCS_AGENT,
+          JOIN,
+          MERGE,
+        ],
+        edges: [
+          { from: 'start', to: 'classify' },
+          { from: 'review', to: 'both' },
+          { from: 'docs', to: 'both' },
+          { from: 'both', to: 'merge' },
+        ],
+      });
+      const reviewer = agent(async () => ({ ok: true }));
+      const run = drive(routedJoin, { language: 'rust' }, table(reviewer.execute));
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason:
+          'the JOIN node Both reviews waits for every incoming branch, and Docs reviewer never reached it',
+      });
+      expect(reviewer.calls).toHaveLength(1);
+    });
+
+    it('walks the branches one after another, in edge order, when told to take them in turn', async () => {
+      const order: string[] = [];
+      const executors = table(async (node, input) => {
+        order.push(`start ${node.id}`);
+        await settle();
+        order.push(`end ${node.id}`);
+        return { ok: true, carried: input, output: null, next: null };
+      });
+      const handle = walk(
+        FANNED,
+        {},
+        {
+          executors,
+          timers: createFakeTimers(),
+          branches: 'in-turn',
+          onStep: () => {},
+          onEnd: () => {},
+        },
+      );
+
+      await expect(handle.done).resolves.toMatchObject({ status: 'succeeded' });
+      expect(order).toEqual([
+        'start review',
+        'end review',
+        'start docs',
+        'end docs',
+        'start merge',
+        'end merge',
+      ]);
+    });
+  });
+
   describe('the shape of the document', () => {
     it('fails a node whose kind the table has no executor for, naming it', async () => {
       const doc = document({
@@ -855,23 +1144,6 @@ describe('walk', () => {
       await expect(two.done).resolves.toMatchObject({
         status: 'failed',
         reason: 'a run starts at the one TRIGGER node, and this document has 2',
-      });
-    });
-
-    it('fails a node with two plain outgoing edges, because only a ROUTER chooses', async () => {
-      const doc = document({
-        nodes: [TRIGGER, AGENT, DOCS_AGENT],
-        edges: [
-          { from: 'start', to: 'review' },
-          { from: 'start', to: 'docs' },
-        ],
-      });
-      const run = drive(doc, {}, table(agent(async () => ({ ok: true })).execute));
-
-      await expect(run.done).resolves.toEqual({
-        status: 'failed',
-        reason:
-          'the TRIGGER node PR opened has 2 outgoing edges, and only a ROUTER chooses between them',
       });
     });
 

@@ -84,6 +84,7 @@ export {
   GRAPH_NODES_MAX,
   emptyGraphDocument,
   graphDocumentSchema,
+  graphIncoming,
   graphNameSchema,
   graphNodeIdSchema,
   graphNodeSchema,

@@ -855,6 +855,98 @@ describe('graph runs', () => {
     });
   });
 
+  describe('branches', () => {
+    /** TRIGGER fans out to an AGENT and a HUMAN gate, which meet at a JOIN. */
+    const FANNED: GraphDocument = graphDocumentSchema.parse({
+      nodes: [
+        TRIGGER,
+        AGENT,
+        {
+          ...BASE,
+          id: 'gate',
+          kind: 'human',
+          label: 'Ship it',
+          approvers: ['robert'],
+          timeoutMinutes: null,
+        },
+        { ...BASE, id: 'both', kind: 'join', label: 'Both' },
+      ],
+      edges: [
+        { from: 'start', to: 'review' },
+        { from: 'start', to: 'gate' },
+        { from: 'review', to: 'both' },
+        { from: 'gate', to: 'both' },
+      ],
+    });
+
+    it('keeps one record per branch as their records interleave, and reads running while any branch runs', async () => {
+      const h = build();
+      h.agent.answerWith('hang');
+      const nodeId = await publishedGraph(h, FANNED);
+      const started = await h.runs.start(nodeId, {});
+      if (!started.ok) throw new Error(started.problem);
+      await settle();
+
+      // A person is asked and an agent is working: the run is running,
+      // because something is, and each branch has its one open record.
+      expect(h.published.at(-1)).toMatchObject({
+        status: 'running',
+        step: 3,
+        of: 4,
+        steps: [
+          { nodeId: 'start', outcome: 'succeeded' },
+          { nodeId: 'review', attempt: 0, outcome: 'running' },
+          { nodeId: 'gate', attempt: 0, outcome: 'waiting' },
+        ],
+      });
+
+      expect(await h.runs.cancel(started.runId)).toEqual({ ok: true });
+      await settle();
+      // The agent's branch ends as what happened to it, in its own record
+      // and not a second one beside a record left running forever.
+      expect(h.published.at(-1)?.steps).toEqual([
+        expect.objectContaining({ nodeId: 'start', outcome: 'succeeded' }),
+        expect.objectContaining({ nodeId: 'review', outcome: 'cancelled' }),
+        expect.objectContaining({ nodeId: 'gate', outcome: 'waiting' }),
+      ]);
+    });
+
+    it('reads waiting once the only branch left is a person, and succeeds through the JOIN once they allow', async () => {
+      const h = build();
+      const nodeId = await publishedGraph(h, FANNED);
+      const started = await h.runs.start(nodeId, {});
+      if (!started.ok) throw new Error(started.problem);
+      await settle();
+
+      expect(h.published.at(-1)).toMatchObject({
+        status: 'waiting',
+        steps: [
+          { nodeId: 'start', outcome: 'succeeded' },
+          { nodeId: 'review', attempt: 0, outcome: 'succeeded' },
+          { nodeId: 'gate', attempt: 0, outcome: 'waiting' },
+        ],
+      });
+
+      h.human.grant();
+      await settle();
+
+      expect(h.published.at(-1)).toMatchObject({
+        status: 'succeeded',
+        step: 4,
+        of: 4,
+        steps: [
+          { nodeId: 'start', outcome: 'succeeded' },
+          { nodeId: 'review', outcome: 'succeeded' },
+          { nodeId: 'gate', outcome: 'succeeded' },
+          { nodeId: 'both', attempt: 0, outcome: 'succeeded', output: null, child: null },
+        ],
+      });
+      const row = await readRun(db(), started.runId);
+      expect(row?.status).toBe('succeeded');
+      expect(row?.steps).toHaveLength(4);
+    });
+  });
+
   describe('SUB-GRAPH', () => {
     const AGENT_ONLY: GraphDocument = graphDocumentSchema.parse({
       nodes: [TRIGGER, AGENT],

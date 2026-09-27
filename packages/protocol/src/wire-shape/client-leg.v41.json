@@ -1926,6 +1926,101 @@
                           "kind",
                           "name"
                         ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[A-Za-z0-9_-]+$"
+                          },
+                          "label": {
+                            "type": "string",
+                            "maxLength": 120
+                          },
+                          "position": {
+                            "type": "object",
+                            "properties": {
+                              "x": {
+                                "type": "number"
+                              },
+                              "y": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "x",
+                              "y"
+                            ]
+                          },
+                          "placement": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "cheapest"
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "pin"
+                                  },
+                                  "server": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "server"
+                                ]
+                              }
+                            ]
+                          },
+                          "retry": {
+                            "type": "object",
+                            "properties": {
+                              "max": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 10
+                              },
+                              "backoff": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3600
+                              }
+                            },
+                            "required": [
+                              "max",
+                              "backoff"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "const": "join"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "position",
+                          "placement",
+                          "retry",
+                          "kind"
+                        ]
                       }
                     ]
                   }
@@ -6321,6 +6416,101 @@
                           "kind",
                           "name"
                         ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[A-Za-z0-9_-]+$"
+                          },
+                          "label": {
+                            "type": "string",
+                            "maxLength": 120
+                          },
+                          "position": {
+                            "type": "object",
+                            "properties": {
+                              "x": {
+                                "type": "number"
+                              },
+                              "y": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "x",
+                              "y"
+                            ]
+                          },
+                          "placement": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "cheapest"
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "pin"
+                                  },
+                                  "server": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "server"
+                                ]
+                              }
+                            ]
+                          },
+                          "retry": {
+                            "type": "object",
+                            "properties": {
+                              "max": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 10
+                              },
+                              "backoff": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3600
+                              }
+                            },
+                            "required": [
+                              "max",
+                              "backoff"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "const": "join"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "position",
+                          "placement",
+                          "retry",
+                          "kind"
+                        ]
                       }
                     ]
                   }
@@ -7069,7 +7259,8 @@
                       "agent",
                       "subgraph",
                       "human",
-                      "action"
+                      "action",
+                      "join"
                     ]
                   },
                   "depth": {

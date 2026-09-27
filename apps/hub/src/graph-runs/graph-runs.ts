@@ -35,7 +35,7 @@ import {
   type LineageEntry,
 } from './subgraph-executor.js';
 import { simulate } from './simulate.js';
-import { routerExecutor, triggerExecutor, walk, type Walk } from './walker.js';
+import { joinExecutor, routerExecutor, triggerExecutor, walk, type Walk } from './walker.js';
 
 /**
  * Runs, from the hub's side: start one, cancel one, say where each one is,
@@ -296,13 +296,17 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
   };
 
   /**
-   * The open state a run is in, read off its own steps: `waiting` while the
-   * one attempt in flight is waiting on a person, else `running`. Off the
-   * list rather than a flag beside it, so the status and the strip's step
-   * records can never say two things.
+   * The open state a run is in, read off its own steps: `running` while any
+   * attempt in flight is running -- a branch working is a run working, even
+   * with another branch parked at a person -- `waiting` when every attempt
+   * in flight is waiting on one. Off the list rather than a flag beside it,
+   * so the status and the strip's step records can never say two things.
    */
   const openStatus = (run: ActiveRun): GraphRunState['status'] =>
-    run.steps.some((step) => step.outcome === 'waiting') ? 'waiting' : 'running';
+    run.steps.some((step) => step.outcome === 'running') ||
+    !run.steps.some((step) => step.outcome === 'waiting')
+      ? 'running'
+      : 'waiting';
 
   const stateOf = (
     run: ActiveRun,
@@ -320,24 +324,24 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
   });
 
   /**
-   * Replaces the open record this outcome is of, or appends. The walker
-   * reports an attempt's outcome directly after its running record -- or its
-   * waiting one, when the attempt stopped to ask a person -- so the record to
-   * replace is always the last one, and a node a cycle reaches again gets a
-   * new record rather than overwriting its earlier visit.
+   * Replaces the open record this outcome is of, or appends. The record to
+   * replace is the newest one with the same node and attempt, and only while
+   * it is still open: branches running at once interleave their records, so
+   * it is not always the last one, and a node a cycle reaches again -- whose
+   * earlier visit ended -- gets a new record rather than overwriting it.
    */
   const record = (run: ActiveRun, step: GraphRunStep): void => {
-    const last = run.steps.at(-1);
-    if (
-      last !== undefined &&
-      (last.outcome === 'running' || last.outcome === 'waiting') &&
-      last.nodeId === step.nodeId &&
-      last.attempt === step.attempt
-    ) {
-      run.steps[run.steps.length - 1] = step;
-    } else {
-      run.steps.push(step);
+    for (let index = run.steps.length - 1; index >= 0; index -= 1) {
+      const earlier = run.steps[index];
+      if (earlier === undefined) continue;
+      if (earlier.nodeId !== step.nodeId || earlier.attempt !== step.attempt) continue;
+      if (earlier.outcome === 'running' || earlier.outcome === 'waiting') {
+        run.steps[index] = step;
+        return;
+      }
+      break;
     }
+    run.steps.push(step);
   };
 
   /**
@@ -447,6 +451,7 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
           graphName: what.graphName,
         }),
         subgraph: subgraph.forRun({ runId: run.runId, lineage: run.lineage }),
+        join: joinExecutor,
       },
       timers,
       onStep: (step, reached) => {

@@ -3,6 +3,7 @@ import {
   evaluateRouteCondition,
   GRAPH_NODES_MAX,
   GRAPH_RUN_OUTPUT_MAX_CHARS,
+  graphIncoming,
   parseRouteCondition,
   type GraphDocument,
   type GraphNode,
@@ -16,8 +17,9 @@ import {
 import type { Timers } from '@agentplex/node-shared';
 
 /**
- * The walk: one node after another, from the TRIGGER to a node with nowhere
- * to go, with each node's work handed to an executor for its kind.
+ * The walk: from the TRIGGER, node after node down every branch, until no
+ * branch has anywhere to go, with each node's work handed to an executor for
+ * its kind.
  *
  * ## Pure, and everything injected
  *
@@ -33,7 +35,7 @@ import type { Timers } from '@agentplex/node-shared';
  * `ExecutorTable` is `Record` over every kind but `action`. Publish refuses
  * an ACTION node, since no build performs one, so a run reaching one is a
  * document that bypassed publish; it fails with a sentence naming the node,
- * from a switch that ends in `assertNever` -- so a seventh kind added to the
+ * from a switch that ends in `assertNever` -- so an eighth kind added to the
  * protocol is a type error here and not a silent fall through. The one table
  * that answers ACTION is a simulation's (`simulate.ts`), which walks the same
  * traversal with executors that report and do nothing.
@@ -46,15 +48,40 @@ import type { Timers } from '@agentplex/node-shared';
  * and the outcome. A retry is a new attempt and so a new child, which is what
  * lets a person see which try of the lint suite broke and open that one.
  *
+ * ## Branches, and the JOIN
+ *
+ * A node that is not a ROUTER goes on down every edge out of it. One edge is
+ * the walk carrying on; several are a fan-out, and each is a branch of its
+ * own, walked at the same time as the others. A branch ends at a node with
+ * nowhere to go, or at a JOIN that is still waiting on another branch: the
+ * JOIN holds each arrival under the node it came from, and the branch that
+ * brings the last one goes on through it with `{ branches: { [from]: output
+ * } }`. A JOIN one of whose branches never came -- a ROUTER upstream sent the
+ * run elsewhere -- fails the run when nothing else is left to walk, naming the
+ * join and the branch, rather than a run that sits forever.
+ *
+ * The run ends when its last branch does. One branch left at a node with
+ * nowhere to go hands on what it carried, as a run always has; several hand
+ * on each under its node, in the shape a JOIN would.
+ *
+ * `reached` is one counter for the run, however many branches add to it, so
+ * the bound that stops a loop is the same bound for a run that fans out.
+ *
+ * A simulation walks the branches `in-turn`: one after another in the order
+ * they were reached, so the path it answers with reads in a stable order and
+ * a SUB-GRAPH's child steps still follow the step that reached them.
+ *
  * ## A step is one attempt
  *
  * Every attempt at a node is reported twice: once as `running` when it begins
- * and once with what it became. The same `nodeId` and `attempt` on both, and
- * the second always directly after the first, so that whoever keeps the list
- * replaces a running record with its outcome rather than holding a step that
- * is forever running beside the one that ended. Retries are further attempts
- * of the same node, one wait apart. A node reached twice, through a cycle,
- * is two runs of records: the list is the walk in order, not a table by node.
+ * and once with what it became, the same `nodeId` and `attempt` on both, so
+ * whoever keeps the list replaces a running record with its outcome rather
+ * than holding a step that is forever running beside the one that ended.
+ * Branches interleave, so the outcome is not always the record directly after
+ * its running one: the open record with the same node and attempt is the one
+ * to replace. Retries are further attempts of the same node, one wait apart.
+ * A node reached twice, through a cycle, is two runs of records: the list is
+ * the walk in order, not a table by node.
  *
  * ## What a step hands on is not what it records
  *
@@ -73,14 +100,19 @@ import type { Timers } from '@agentplex/node-shared';
  * that the run's status can say `waiting` off the same list everything else
  * is read from rather than off a second flag.
  *
- * ## Cancel stops before the next step
+ * ## Cancel stops before the next step, and so does a failing branch
  *
  * A cancel does not interrupt the step in flight. An agent mid-turn is the
  * case a stop refuses to touch, for the reason `routeStop` gives -- an edit
  * half applied -- and the same reason holds here. What a cancel does is tell
- * the executor (which may stop early if it can), cancel any backoff wait, and
- * end the run `cancelled` the moment the step in flight has ended, before the
- * next node is reached.
+ * every executor in flight (which may stop early if it can), cancel any
+ * backoff wait, and end the run `cancelled` once the steps in flight have
+ * ended, before any next node is reached.
+ *
+ * A branch that fails does the same to its siblings -- there is no run left
+ * for them to finish -- and the run then ends `failed` with the failing
+ * branch's sentence, not `cancelled`: the executors are told through the
+ * one `halt` both fire, and only the run's own cancel makes the end say so.
  */
 
 /**
@@ -88,7 +120,7 @@ import type { Timers } from '@agentplex/node-shared';
  *
  * `carried` is handed to the next node; `output` is recorded on the step, or
  * `null` when the step has nothing worth a record. `next` is the node the run
- * goes to, or `null` to follow the node's one outgoing edge. Only a ROUTER
+ * goes to, or `null` to follow every edge out of the node. Only a ROUTER
  * ever names one: its routes are the choice, and the walk following an edge
  * on its behalf would be a second reading of the same decision.
  *
@@ -139,7 +171,7 @@ export type Executor<K extends GraphNodeKind> = (
   context: StepContext,
 ) => Promise<StepResult>;
 
-/** The kinds this runtime executes: every one but ACTION, which publish refuses. */
+/** The kinds this runtime executes: every one but ACTION, which publish refuses. JOIN included: its step is the walk going through it. */
 export type ExecutableKind = Exclude<GraphNodeKind, 'action'>;
 
 export type ExecutorTable = { readonly [K in ExecutableKind]: Executor<K> };
@@ -177,6 +209,12 @@ export interface WalkDependencies {
    * `onStep` and before `done` resolves.
    */
   readonly onEnd: (outcome: WalkOutcome) => void;
+  /**
+   * How a fan-out's branches are walked: `together` (the default), each at
+   * once, as a run walks them; or `in-turn`, one after another in the order
+   * they were reached, as a simulation does so its path reads in order.
+   */
+  readonly branches?: 'together' | 'in-turn';
 }
 
 export interface Walk {
@@ -198,6 +236,7 @@ export const KIND_WORDS: Record<GraphNodeKind, string> = {
   subgraph: 'SUB-GRAPH',
   human: 'HUMAN',
   action: 'ACTION',
+  join: 'JOIN',
 };
 
 /**
@@ -208,6 +247,18 @@ export const triggerExecutor: Executor<'trigger'> = async (_node, input) => ({
   ok: true,
   carried: input,
   output: { kind: 'text', text: JSON.stringify(input).slice(0, GRAPH_RUN_OUTPUT_MAX_CHARS) },
+  next: null,
+});
+
+/**
+ * A JOIN hands on what the walk gathered for it -- every incoming branch's
+ * output under the node it came from -- and records nothing of it: the
+ * branches' own steps already say what each made.
+ */
+export const joinExecutor: Executor<'join'> = async (_node, input) => ({
+  ok: true,
+  carried: input,
+  output: null,
   next: null,
 });
 
@@ -269,6 +320,8 @@ function executorFor(
       return (input, context) => table.human(node, input, context);
     case 'subgraph':
       return (input, context) => table.subgraph(node, input, context);
+    case 'join':
+      return (input, context) => table.join(node, input, context);
     case 'action': {
       const action = table.action;
       return action === undefined ? null : (input, context) => action(node, input, context);
@@ -308,10 +361,56 @@ export function walk(
   dependencies: WalkDependencies,
 ): Walk {
   const { executors, timers, onStep, onEnd } = dependencies;
+  const inTurn = dependencies.branches === 'in-turn';
+  /** The run's own cancel: what `Walk.cancel` fires, and what makes the end `cancelled`. */
   const cancellation = createCancellation();
+  /**
+   * What every step and backoff is handed: fired by the run's cancel and by
+   * the first branch that fails, so a failure stops its siblings the way a
+   * cancel would -- while the end still says `failed`, because `halt` is not
+   * what decides the end.
+   */
+  const halt = createCancellation();
+  cancellation.onCancel(() => halt.cancel());
   const byId = new Map(document.nodes.map((node) => [node.id, node]));
 
-  /** Waits `ms`, or returns early with `false` when the run is cancelled meanwhile. */
+  /** The first failure, which is the run's end; later ones are its siblings being stopped. */
+  let failure: Extract<WalkOutcome, { status: 'failed' }> | null = null;
+  /** Nodes reached across every branch: one counter, so the loop bound holds for the run. */
+  let reached = 0;
+  /** Branches started and not yet ended. The run ends when the last one does. */
+  let live = 0;
+  /** Branches waiting their turn, in the order they were reached; only `in-turn` queues. */
+  const queue: { readonly node: GraphNode; readonly carried: RouteInput }[] = [];
+  /** What a branch that ended at a node with nowhere to go carried out, by that node. */
+  const leaves = new Map<GraphNodeId, RouteInput>();
+  /** What has reached each JOIN so far, by the node it came from. */
+  const arrivals = new Map<GraphNodeId, Map<GraphNodeId, RouteInput>>();
+
+  let resolveDone: (outcome: WalkOutcome) => void = () => {};
+  const done = new Promise<WalkOutcome>((resolve) => {
+    resolveDone = resolve;
+  });
+
+  /**
+   * Every exit goes through here, so the end is said in the same synchronous
+   * stretch as the last step -- an `await` between them would be a microtask
+   * in which the list is published without its end.
+   */
+  const end = (outcome: WalkOutcome): void => {
+    onEnd(outcome);
+    resolveDone(outcome);
+  };
+
+  /** Records the first failure and stops every other branch; a failure after a cancel is the cancel. */
+  const fail = (reason: string, retryable?: false): void => {
+    if (halt.cancelled) return;
+    failure =
+      retryable === false ? { status: 'failed', reason, retryable } : { status: 'failed', reason };
+    halt.cancel();
+  };
+
+  /** Waits `ms`, or returns early with `false` when the run is halted meanwhile. */
   const wait = (ms: number): Promise<boolean> =>
     new Promise((resolve) => {
       let settled = false;
@@ -323,150 +422,299 @@ export function walk(
         resolve(waited);
       };
       const cancelTimer = timers.schedule(ms, () => finish(true));
-      const detach = cancellation.onCancel(() => finish(false));
+      const detach = halt.onCancel(() => finish(false));
     });
 
-  /** The one node an edge leads to, or the reason there is not exactly one. */
-  const followEdge = (
+  /**
+   * Where a run goes after a node: the one node a ROUTER named, or every node
+   * an edge leads to, each once, in the order the edges are listed. More than
+   * one is a fan-out; none is the end of this branch.
+   */
+  const nextOf = (
     node: GraphNode,
-  ): { readonly next: GraphNode | null } | { readonly problem: string } => {
-    const outgoing = document.edges.filter((edge) => edge.from === node.id);
-    if (outgoing.length === 0) return { next: null };
-    if (outgoing.length > 1) {
-      return {
-        problem: `the ${KIND_WORDS[node.kind]} node ${nameOf(node)} has ${String(outgoing.length)} outgoing edges, and only a ROUTER chooses between them`,
-      };
+    result: Extract<StepResult, { ok: true }>,
+  ): { readonly next: readonly GraphNode[] } | { readonly problem: string } => {
+    if (result.next !== null) {
+      const named = byId.get(result.next);
+      if (named === undefined) {
+        return { problem: `${nameOf(node)} routed to ${result.next}, which is no node here` };
+      }
+      return { next: [named] };
     }
-    // The schema refused any edge to a node that is not there.
-    return { next: byId.get(outgoing[0]?.to ?? node.id) ?? null };
+    const next: GraphNode[] = [];
+    for (const edge of document.edges) {
+      if (edge.from !== node.id) continue;
+      // The schema refused any edge to a node that is not there.
+      const target = byId.get(edge.to);
+      if (target !== undefined && !next.includes(target)) next.push(target);
+    }
+    return { next };
   };
 
   /**
-   * Every exit of `run` goes through here, so the end is said in the same
-   * synchronous stretch as the last step -- an `await` between them would be
-   * a microtask in which the list is published without its end.
+   * A branch reaching a JOIN: its output is held under the node it came
+   * from, and the join goes on -- with every branch's output -- only once
+   * each node `graphIncoming` names has arrived. `null` while any is still out.
    */
-  const end = (outcome: WalkOutcome): WalkOutcome => {
-    onEnd(outcome);
-    return outcome;
+  const arrive = (join: GraphNode, from: GraphNodeId, carried: RouteInput): RouteInput | null => {
+    const expected = graphIncoming(document, join.id);
+    const held = arrivals.get(join.id) ?? new Map<GraphNodeId, RouteInput>();
+    held.set(from, carried);
+    if (expected.some((id) => !held.has(id))) {
+      arrivals.set(join.id, held);
+      return null;
+    }
+    arrivals.delete(join.id);
+    const branches: Record<string, RouteInput> = {};
+    for (const id of expected) {
+      const output = held.get(id);
+      if (output !== undefined) branches[id] = output;
+    }
+    return { branches };
   };
 
-  async function run(): Promise<WalkOutcome> {
-    const triggers = document.nodes.filter((node) => node.kind === 'trigger');
-    const trigger = triggers[0];
-    if (trigger === undefined || triggers.length !== 1) {
+  /** How the run ended, once no branch is left: said once, synchronously. */
+  const finish = (): void => {
+    if (failure !== null) return end(failure);
+    if (cancellation.cancelled) return end({ status: 'cancelled' });
+    for (const [joinId, held] of arrivals) {
+      const join = byId.get(joinId);
+      if (join === undefined) continue;
+      const missing = graphIncoming(document, joinId)
+        .filter((id) => !held.has(id))
+        .map((id) => {
+          const source = byId.get(id);
+          return source === undefined ? id : nameOf(source);
+        });
       return end({
         status: 'failed',
-        reason: `a run starts at the one TRIGGER node, and this document has ${String(triggers.length)}`,
+        reason: `the JOIN node ${nameOf(join)} waits for every incoming branch, and ${missing.join(' and ')} never reached it`,
       });
     }
+    // One leaf hands on what it carried, as a run always has; several hand
+    // on each under its node, in the document's order, as a JOIN would.
+    const ended = document.nodes.filter((node) => leaves.has(node.id));
+    const [single, ...more] = ended;
+    const only = single !== undefined && more.length === 0 ? leaves.get(single.id) : undefined;
+    if (only !== undefined) return end({ status: 'succeeded', output: only });
+    const branches: Record<string, RouteInput> = {};
+    for (const node of ended) {
+      const output = leaves.get(node.id);
+      if (output !== undefined) branches[node.id] = output;
+    }
+    return end({ status: 'succeeded', output: ended.length === 0 ? input : { branches } });
+  };
 
-    let node: GraphNode = trigger;
-    let carried: RouteInput = input;
-    let reached = 0;
+  /** A branch has ended: start the next in turn, or end the run when none is left. */
+  const branchEnded = (): void => {
+    live -= 1;
+    const next = queue.shift();
+    if (next !== undefined && !halt.cancelled) {
+      start(next.node, next.carried);
+      return;
+    }
+    queue.length = 0;
+    if (live === 0) finish();
+  };
 
-    for (;;) {
-      if (cancellation.cancelled) return end({ status: 'cancelled' });
-      reached += 1;
-      if (reached > GRAPH_NODES_MAX) {
-        return end({
-          status: 'failed',
-          reason: `the run reached ${nameOf(node)} as its ${String(reached)}th step, more nodes than a graph holds, so it is looping`,
-        });
-      }
+  /** Starts a branch now, or queues it behind the one walking when branches take turns. */
+  const spawn = (node: GraphNode, carried: RouteInput): void => {
+    if (inTurn) queue.push({ node, carried });
+    else start(node, carried);
+  };
 
-      const execute = executorFor(executors, node);
-      if (execute === null) {
-        return end({
-          status: 'failed',
-          reason: `the ${KIND_WORDS[node.kind]} node ${nameOf(node)} is a kind this runtime cannot execute yet`,
-        });
-      }
+  const start = (node: GraphNode, carried: RouteInput): void => {
+    live += 1;
+    void branch(node, carried);
+  };
 
-      let result: StepResult | null = null;
-      for (let attempt = 0; attempt <= node.retry.max; attempt += 1) {
-        // The child this attempt started, once the executor names one.
-        let child: GraphRunChild | null = null;
-        const record = (outcome: GraphRunStep['outcome'], output: GraphRunStepOutput | null) =>
-          onStep({ nodeId: node.id, attempt, outcome, output, child }, reached);
-        record('running', null);
-        let attempted: StepResult;
-        try {
-          attempted = await execute(carried, {
-            document,
-            attempt,
-            cancellation,
-            waiting: () => record('waiting', null),
-            child: (named) => {
-              child = named;
-              record('running', null);
-            },
-          });
-        } catch (error) {
-          attempted = { ok: false, problem: String(error) };
-        }
+  /** How to record a step of one attempt at one node, with the child it named if any. */
+  type Recorder = (outcome: GraphRunStep['outcome'], output: GraphRunStepOutput | null) => void;
 
-        if (attempted.ok) {
-          record('succeeded', attempted.output);
-          result = attempted;
-          break;
-        }
-
-        // A failure while cancelled is the cancel arriving, not the node
-        // failing: the step is marked as what happened to it, and the run
-        // ends without another try.
-        if (cancellation.cancelled) {
-          record('cancelled', null);
-          return end({ status: 'cancelled' });
-        }
-
-        record('failed', null);
-        if (attempt === node.retry.max || attempted.retryable === false) {
-          const named = `the ${KIND_WORDS[node.kind]} node ${nameOf(node)}`;
-          let reason: string;
-          if (attempt === 0) reason = `${named} failed: ${attempted.problem}`;
-          else if (attempted.retryable === false)
-            reason = `${named} failed on attempt ${String(attempt + 1)}, and not for a reason another try changes: ${attempted.problem}`;
-          else
-            reason = `${named} failed on all ${String(attempt + 1)} attempts; the last said: ${attempted.problem}`;
-          return end(
-            attempted.retryable === false
-              ? { status: 'failed', reason, retryable: false }
-              : { status: 'failed', reason },
-          );
-        }
-        const waited = await wait(node.retry.backoff * 1_000);
-        if (!waited) return end({ status: 'cancelled' });
-      }
-
-      // Unreachable by construction -- the loop either broke with a result or
-      // returned -- and said as a failure rather than a throw so the run ends
-      // in words if it ever is reached.
-      if (result === null || !result.ok) {
-        return end({ status: 'failed', reason: `the node ${nameOf(node)} ended with no result` });
-      }
-
-      carried = result.carried;
-      if (cancellation.cancelled) return end({ status: 'cancelled' });
-
-      let next: GraphNode | null;
-      if (result.next !== null) {
-        next = byId.get(result.next) ?? null;
-        if (next === null) {
-          return end({
-            status: 'failed',
-            reason: `${nameOf(node)} routed to ${result.next}, which is no node here`,
-          });
-        }
-      } else {
-        const followed = followEdge(node);
-        if ('problem' in followed) return end({ status: 'failed', reason: followed.problem });
-        next = followed.next;
-      }
-      if (next === null) return end({ status: 'succeeded', output: carried });
-      node = next;
+  /**
+   * One attempt at a node: records it running, runs it, and answers what it
+   * became with the recorder for its outcome. The outcome is recorded by the
+   * caller, so that the record and whatever the branch does next -- the next
+   * node's start, or the run's end -- are one synchronous stretch.
+   */
+  async function attemptAt(
+    node: GraphNode,
+    execute: (input: RouteInput, context: StepContext) => Promise<StepResult>,
+    carried: RouteInput,
+    attempt: number,
+  ): Promise<{ readonly attempted: StepResult; readonly record: Recorder }> {
+    // The child this attempt started, once the executor names one.
+    let child: GraphRunChild | null = null;
+    const record: Recorder = (outcome, output) =>
+      onStep({ nodeId: node.id, attempt, outcome, output, child }, reached);
+    record('running', null);
+    try {
+      const attempted = await execute(carried, {
+        document,
+        attempt,
+        cancellation: halt,
+        waiting: () => record('waiting', null),
+        child: (named) => {
+          child = named;
+          record('running', null);
+        },
+      });
+      return { attempted, record };
+    } catch (error) {
+      return { attempted: { ok: false, problem: String(error) }, record };
     }
   }
 
-  return { done: run(), cancel: () => cancellation.cancel() };
+  /** The sentence a run ends with when a node has failed for the last time. */
+  function failedWords(
+    node: GraphNode,
+    attempt: number,
+    attempted: { problem: string; retryable?: false },
+  ): string {
+    const named = `the ${KIND_WORDS[node.kind]} node ${nameOf(node)}`;
+    if (attempt === 0) return `${named} failed: ${attempted.problem}`;
+    if (attempted.retryable === false) {
+      return `${named} failed on attempt ${String(attempt + 1)}, and not for a reason another try changes: ${attempted.problem}`;
+    }
+    return `${named} failed on all ${String(attempt + 1)} attempts; the last said: ${attempted.problem}`;
+  }
+
+  /**
+   * Every attempt at a node its retry policy allows, until one ends it: one
+   * that succeeded, one that failed for the last time, one the halt reached,
+   * or a backoff the halt cut short. The last attempt's outcome is left for
+   * the branch to record, after the last `await` here, so that record and
+   * what the branch does next -- the next node's start, or the run's end --
+   * are one synchronous stretch and whoever publishes them sends one change.
+   */
+  async function attempts(
+    node: GraphNode,
+    execute: (input: RouteInput, context: StepContext) => Promise<StepResult>,
+    carried: RouteInput,
+  ): Promise<
+    | {
+        readonly ended: 'succeeded';
+        readonly result: Extract<StepResult, { ok: true }>;
+        readonly record: Recorder;
+      }
+    | {
+        readonly ended: 'failed';
+        readonly reason: string;
+        readonly retryable?: false;
+        readonly record: Recorder;
+      }
+    | { readonly ended: 'halted'; readonly record: Recorder | null }
+  > {
+    for (let attempt = 0; ; attempt += 1) {
+      const { attempted, record } = await attemptAt(node, execute, carried, attempt);
+      if (attempted.ok) return { ended: 'succeeded', result: attempted, record };
+      // A failure while halted is the halt arriving, not the node failing:
+      // the step is marked as what happened to it, and the branch ends
+      // without another try.
+      if (halt.cancelled) return { ended: 'halted', record };
+      if (attempt >= node.retry.max || attempted.retryable === false) {
+        const reason = failedWords(node, attempt, attempted);
+        return attempted.retryable === false
+          ? { ended: 'failed', reason, retryable: false, record }
+          : { ended: 'failed', reason, record };
+      }
+      record('failed', null);
+      const waited = await wait(node.retry.backoff * 1_000);
+      if (!waited) return { ended: 'halted', record: null };
+    }
+  }
+
+  /**
+   * One branch: node after node until it reaches a node with nowhere to go,
+   * a JOIN still waiting on another branch, a fan-out (whose branches it
+   * starts and then ends), a failure, or the halt. `branchEnded` is called in
+   * the `finally`, synchronously at the branch's last step, so the run's end
+   * is said in the same stretch as that step.
+   */
+  async function branch(first: GraphNode, firstCarried: RouteInput): Promise<void> {
+    let node = first;
+    let carried = firstCarried;
+    try {
+      for (;;) {
+        if (halt.cancelled) return;
+        reached += 1;
+        if (reached > GRAPH_NODES_MAX) {
+          fail(
+            `the run reached ${nameOf(node)} as its ${String(reached)}th step, more nodes than a graph holds, so it is looping`,
+          );
+          return;
+        }
+
+        const execute = executorFor(executors, node);
+        if (execute === null) {
+          fail(
+            `the ${KIND_WORDS[node.kind]} node ${nameOf(node)} is a kind this runtime cannot execute yet`,
+          );
+          return;
+        }
+
+        const tried = await attempts(node, execute, carried);
+        if (tried.ended === 'halted') {
+          tried.record?.('cancelled', null);
+          return;
+        }
+        if (tried.ended === 'failed') {
+          tried.record('failed', null);
+          fail(tried.reason, tried.retryable);
+          return;
+        }
+        const result = tried.result;
+        tried.record('succeeded', result.output);
+        carried = result.carried;
+        if (halt.cancelled) return;
+
+        const followed = nextOf(node, result);
+        if ('problem' in followed) {
+          fail(followed.problem);
+          return;
+        }
+        if (followed.next.length === 0) {
+          leaves.set(node.id, carried);
+          return;
+        }
+
+        const going: { readonly node: GraphNode; readonly carried: RouteInput }[] = [];
+        for (const next of followed.next) {
+          if (next.kind !== 'join') {
+            going.push({ node: next, carried });
+            continue;
+          }
+          const merged = arrive(next, node.id, carried);
+          if (merged !== null) going.push({ node: next, carried: merged });
+        }
+        const [only, ...others] = going;
+        if (only === undefined) return;
+        if (others.length > 0) {
+          // A fan-out: each branch its own, started in the order the edges
+          // are listed, and this one ends here.
+          for (const each of going) spawn(each.node, each.carried);
+          return;
+        }
+        node = only.node;
+        carried = only.carried;
+      }
+    } catch (error) {
+      fail(`the walk broke at ${nameOf(node)}: ${String(error)}`);
+    } finally {
+      branchEnded();
+    }
+  }
+
+  const triggers = document.nodes.filter((node) => node.kind === 'trigger');
+  const trigger = triggers[0];
+  if (trigger === undefined || triggers.length !== 1) {
+    end({
+      status: 'failed',
+      reason: `a run starts at the one TRIGGER node, and this document has ${String(triggers.length)}`,
+    });
+  } else {
+    start(trigger, input);
+  }
+
+  return { done, cancel: () => cancellation.cancel() };
 }

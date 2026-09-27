@@ -1,9 +1,10 @@
-import type {
-  GraphDocument,
-  GraphNode,
-  GraphPublishedVersion,
-  NodeId,
-  RefusalCode,
+import {
+  graphIncoming,
+  type GraphDocument,
+  type GraphNode,
+  type GraphPublishedVersion,
+  type NodeId,
+  type RefusalCode,
 } from '@agentplex/protocol';
 import type { Clock, IdGenerator, Logger } from '@agentplex/node-shared';
 import type { Database, Queryable } from '../db/database.js';
@@ -40,7 +41,11 @@ import {
  *     performs none, so a graph with one would publish a step that can only
  *     fail -- refused now, in words, rather than at step six of a run;
  *   - a SUB-GRAPH node pins a published version of another graph, and a pin
- *     at a version nobody has published is a step that would read nothing.
+ *     at a version nobody has published is a step that would read nothing;
+ *   - a JOIN waits for every branch that can reach it, and one with fewer
+ *     than two is not joining anything: with one it is a node that does
+ *     nothing, with none a node no run reaches. The document takes either,
+ *     because a person draws the join before the edges into it.
  *
  * The draft is left exactly as it was on a refusal. The canvas can go on
  * editing it, and the sentence says what to change.
@@ -195,6 +200,16 @@ export function createGraphs(dependencies: GraphsDependencies): Graphs {
             );
           }
           break;
+        case 'join': {
+          const incoming = graphIncoming(document, node.id).length;
+          if (incoming < 2) {
+            return (
+              `the JOIN node ${nameOf(node)} has ${String(incoming)} incoming ` +
+              `${incoming === 1 ? 'branch' : 'branches'}, and a join waits for two or more`
+            );
+          }
+          break;
+        }
         case 'trigger':
         case 'router':
         case 'agent':
