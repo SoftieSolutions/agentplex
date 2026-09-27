@@ -227,6 +227,13 @@ describe('the wizard machine card', () => {
     expect(about.style.fontSize).toContain('0.6875rem');
     expect(about.style.color).toBe(asDrawn(colorForRole('textMuted', 'dark')));
     expect(about.style.fontWeight).toBe('');
+    // The name it sits beside is the mock's too: 13px, bold. At 15px the two
+    // read as a title and a footnote rather than as one line.
+    const name = [...group.children].find((child) => child.textContent === 'mbp-robert connected');
+    expect(name).toBeInstanceOf(HTMLElement);
+    if (!(name instanceof HTMLElement)) return;
+    expect(name.style.fontSize).toContain('0.8125rem');
+    expect(name.style.fontWeight).toBe('700');
   });
 
   it('puts the address and the connection age on their own line under the name', async () => {

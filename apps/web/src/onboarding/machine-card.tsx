@@ -226,7 +226,7 @@ function CardFrame({
       <Stack gap={10}>
         <Group gap={10} align="center" wrap="nowrap">
           <ToneDot tone={tone} scheme={scheme} />
-          <Text fz={15} fw={700} c={colorForRole('text', scheme)}>
+          <Text fz={13} fw={700} c={colorForRole('text', scheme)}>
             {headline}
           </Text>
           {about !== null && (
