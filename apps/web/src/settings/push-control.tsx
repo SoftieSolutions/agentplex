@@ -256,10 +256,10 @@ export function PushControl({ store, push }: PushControlProps): JSX.Element | nu
     <Section scheme={scheme}>
       <Stack gap="sm">
         <Title order={4}>Notifications</Title>
-        <Text size="md" c="dimmed">
+        <Text size="md" lh="prose" c="dimmed">
           {view.words}
         </Text>
-        <Text size="md" c="dimmed">
+        <Text size="md" lh="prose" c="dimmed">
           {PUSH_SHARING_WORDS}
         </Text>
         {view.kind === 'offer' && (

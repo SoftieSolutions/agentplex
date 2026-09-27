@@ -74,7 +74,7 @@ export function MachineCard({
          a card with a name and an address on it would be this screen showing
          somebody something the hub has not said. */
       return (
-        <Text fz={14} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+        <Text fz={14} lh="prose" c={colorForRole('textSecondary', scheme)}>
           Pairing recorded; the hub dials it from here.
         </Text>
       );
@@ -144,7 +144,7 @@ export function MachineCard({
         <CardFrame tone="blocked" scheme={scheme} headline={`${progress.label} ${progress.words}`}>
           <DetailLine scheme={scheme} text={progress.address} />
           {progress.problem !== null && (
-            <Text fz={13} lh={1.6} style={{ color: colorForToneText('blocked', scheme) }}>
+            <Text fz={13} lh="prose" style={{ color: colorForToneText('blocked', scheme) }}>
               {progress.problem}
             </Text>
           )}
@@ -247,7 +247,7 @@ function Sentence({
   readonly children: ReactNode;
 }): JSX.Element {
   return (
-    <Text fz={13} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+    <Text fz={13} lh="prose" c={colorForRole('textSecondary', scheme)}>
       {children}
     </Text>
   );

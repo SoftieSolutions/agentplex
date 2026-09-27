@@ -128,7 +128,7 @@ export function EnrollPanel({
         <Title order={2} fz={20} c={colorForRole('text', scheme)}>
           Run a server on a machine
         </Title>
-        <Text fz={14} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+        <Text fz={14} lh="prose" c={colorForRole('textSecondary', scheme)}>
           Works on macOS and Linux. The hub dials the server, so the server needs one port the hub
           can reach.
         </Text>
@@ -159,7 +159,7 @@ export function EnrollPanel({
                 onCopy={(text) => void copyCommand(text)}
               />
               <CopyLine outcome={outcome} scheme={scheme} />
-              <Text fz={13} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+              <Text fz={13} lh="prose" c={colorForRole('textSecondary', scheme)}>
                 {targetNotes(each)}
               </Text>
             </Stack>
@@ -168,7 +168,7 @@ export function EnrollPanel({
       </Tabs>
 
       <Stack gap={10} align="flex-start">
-        <Text fz={13} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+        <Text fz={13} lh="prose" c={colorForRole('textSecondary', scheme)}>
           Whichever of these you run, setup is the part that mints this server its identity file
           (~/.agentplex/server.json by default). The pairing token is in that file and shown nowhere
           else, so read it off that machine and bring it back here with the address.

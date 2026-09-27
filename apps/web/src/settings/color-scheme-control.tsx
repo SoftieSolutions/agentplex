@@ -27,7 +27,7 @@ export function ColorSchemeControl(): JSX.Element {
   return (
     <Stack gap="sm">
       <Title order={4}>Appearance</Title>
-      <Text size="md" c="dimmed">
+      <Text size="md" lh="prose" c="dimmed">
         The colour scheme is kept on this device only. Follow the system and a phone that turns
         itself over at sunset takes the app with it.
       </Text>

@@ -129,7 +129,7 @@ export function PairStep({
   return (
     <Stack gap={16} maw={520}>
       <StepTitle scheme={scheme} />
-      <Text fz={14} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+      <Text fz={14} lh="prose" c={colorForRole('textSecondary', scheme)}>
         A server is the agentplex process on a machine your agents run on. This hub dials out to it
         and merges what it reports, so what pairing needs is an address this hub can reach and that
         machine&apos;s token, which setup wrote into its identity file and showed nowhere.

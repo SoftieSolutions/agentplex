@@ -226,6 +226,22 @@ describe('the settings screen with nothing paired', () => {
     expect(words).toContain('never printed');
   });
 
+  it('sets every paragraph of explanation at the prose line height', async () => {
+    await draw(hubFrames.machineState);
+
+    // A paragraph is anything that runs past a line at this width; the labels,
+    // statuses and field names are shorter and keep the body's own height.
+    const paragraphs = Array.from(container.querySelectorAll('p')).filter(
+      (p) => (p.textContent ?? '').length > 80,
+    );
+    expect(paragraphs.length).toBeGreaterThan(3);
+    for (const paragraph of paragraphs) {
+      expect(paragraph.style.lineHeight, paragraph.textContent ?? '').toBe(
+        'var(--mantine-line-height-prose)',
+      );
+    }
+  });
+
   it('says nothing about pairing before the hub has answered at all', async () => {
     const storage = fakeStorage();
     const { store, snapshot } = await storeOn(hubFrames.pong);
