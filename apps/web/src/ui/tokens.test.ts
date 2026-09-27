@@ -73,3 +73,18 @@ describe('colorForRole', () => {
     expect(Object.keys(roles.light).sort()).toEqual(Object.keys(roles.dark).sort());
   });
 });
+
+describe('the mock tag', () => {
+  it('is no status hue in its scheme, so sample data is never read as a session state', () => {
+    for (const scheme of schemes) {
+      const toneValues = tones.map((tone) => colorForTone(tone, scheme));
+      expect(toneValues, scheme).not.toContain(colorForRole('mockTag', scheme));
+    }
+  });
+
+  it('draws its word in a hue other than its own background', () => {
+    for (const scheme of schemes) {
+      expect(colorForRole('onMockTag', scheme), scheme).not.toBe(colorForRole('mockTag', scheme));
+    }
+  });
+});

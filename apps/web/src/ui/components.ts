@@ -11,6 +11,10 @@
 import '@mantine/core/styles.css';
 import { useComputedColorScheme as useMantineComputedColorScheme } from '@mantine/core';
 
+// The app's own chip for sample data, beside the library's controls because
+// every feature that draws sample data renders it (see ./mock-tag.tsx).
+export { MockTag } from './mock-tag.js';
+
 export {
   Anchor,
   Box,
@@ -32,6 +36,7 @@ export {
   Slider,
   Stack,
   Stepper,
+  Switch,
   Tabs,
   Text,
   Textarea,
