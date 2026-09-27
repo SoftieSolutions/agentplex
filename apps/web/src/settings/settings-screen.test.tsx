@@ -4,13 +4,15 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fakeStorage } from '../auth/fake-storage.js';
 import { createTokenStore } from '../auth/token.js';
+import { createMockSwitch, type MockSwitch } from '../mock/mock-switch.js';
+import { MockModeProvider, useMockMode } from '../mock/use-mock-mode.js';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import type { HubSnapshot } from '../store/views.js';
 import { createFakeTimers } from '../store/timers.js';
-import { MantineProvider } from '../ui/components.js';
+import { MantineProvider, MockTag } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { createFakePairingOperations } from './fake-pairing-operations.js';
 import { createFakePushOperations } from './fake-push-operations.js';
@@ -269,5 +271,154 @@ describe('the settings screen with nothing paired', () => {
 
     expect(container.textContent).not.toContain('No servers are paired');
     expect(container.textContent).toContain('gpu-box-01');
+  });
+});
+
+describe('the developer section', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    installMatchMedia();
+    installResizeObserver();
+    container = document.createElement('div');
+    document.body.append(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+    container.remove();
+  });
+
+  /** A switch that records what the toggle asked of it, and otherwise is one. */
+  function recording(inner: MockSwitch): MockSwitch & { readonly calls: boolean[] } {
+    const calls: boolean[] = [];
+    return {
+      calls,
+      read: inner.read,
+      subscribe: inner.subscribe,
+      set(on: boolean): boolean {
+        calls.push(on);
+        return inner.set(on);
+      },
+    };
+  }
+
+  /** What a mocked feature looks like: a sample, tagged, only while it is on. */
+  function Harness(): JSX.Element | null {
+    return useMockMode() ? (
+      <p data-harness="">
+        sample graph run
+        <MockTag scheme="dark" />
+      </p>
+    ) : null;
+  }
+
+  async function draw(mock: MockSwitch | null): Promise<void> {
+    const storage = fakeStorage();
+    const sockets = createFakeSocketFactory();
+    const store = createHubStore({
+      fetchTicket: () => Promise.resolve('ticket-1'),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIds(),
+    });
+    const screen = (
+      <>
+        <SettingsScreen
+          snapshot={store.getSnapshot()}
+          store={store}
+          tokens={createTokenStore(() => storage)}
+          pairing={NO_PAIRING}
+          push={createFakePushOperations()}
+          candidates={[]}
+        />
+        <Harness />
+      </>
+    );
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <MantineProvider
+          theme={theme}
+          cssVariablesResolver={cssVariablesResolver}
+          defaultColorScheme="dark"
+        >
+          {mock === null ? screen : <MockModeProvider mock={mock}>{screen}</MockModeProvider>}
+        </MantineProvider>,
+      );
+    });
+  }
+
+  function toggle(): HTMLInputElement {
+    const input = container.querySelector<HTMLInputElement>('input[role="switch"]');
+    if (input === null) throw new Error('no mock data toggle drawn');
+    return input;
+  }
+
+  it('comes after the appearance control, with a toggle that reads the switch as off', async () => {
+    await draw(createMockSwitch({ storage: () => fakeStorage(), search: () => '' }));
+
+    const headings = [...container.querySelectorAll('h4')].map((h) => h.textContent);
+    expect(headings.slice(-2)).toEqual(['Appearance', 'Developer']);
+    const words = container.textContent ?? '';
+    expect(words).toContain('Show mock data');
+    expect(words).toContain(
+      'Shows sample data for features that have no backend yet. Kept on this device only.',
+    );
+    expect(toggle().checked).toBe(false);
+  });
+
+  it('reads the switch as on when this device turned it on', async () => {
+    await draw(createMockSwitch({ storage: () => fakeStorage(), search: () => '?mock=1' }));
+    expect(toggle().checked).toBe(true);
+  });
+
+  it('flips the switch, and the sample appears and goes without a reload', async () => {
+    const storage = fakeStorage();
+    const mock = recording(createMockSwitch({ storage: () => storage, search: () => '' }));
+    await draw(mock);
+    expect(container.querySelector('[data-harness]')).toBeNull();
+
+    await act(async () => {
+      toggle().click();
+    });
+    expect(mock.calls).toEqual([true]);
+    expect(storage.getItem('agentplex.mock')).toBe('on');
+    expect(toggle().checked).toBe(true);
+    expect(container.querySelector('[data-harness] [data-mock-tag]')).not.toBeNull();
+
+    await act(async () => {
+      toggle().click();
+    });
+    expect(mock.calls).toEqual([true, false]);
+    expect(toggle().checked).toBe(false);
+    expect(container.querySelector('[data-harness]')).toBeNull();
+  });
+
+  it('says the choice holds for this page only when the browser refuses to keep it', async () => {
+    await draw(
+      createMockSwitch({
+        storage: () => {
+          throw new Error('SecurityError');
+        },
+        search: () => '',
+      }),
+    );
+    await act(async () => {
+      toggle().click();
+    });
+    expect(toggle().checked).toBe(true);
+    expect(container.textContent).toContain('This browser refused to keep it');
+  });
+
+  it('is absent with no switch to flip', async () => {
+    await draw(null);
+    expect(container.textContent).not.toContain('Developer');
+    expect(container.querySelector('input[role="switch"]')).toBeNull();
   });
 });

@@ -3,6 +3,8 @@ import { useSyncExternalStore, type JSX } from 'react';
 import type { TokenStore } from './auth/token.js';
 import { useDocRoute } from './docs/doc-route.js';
 import { useGraphRoute } from './graphs/graph-route.js';
+import type { MockSwitch } from './mock/mock-switch.js';
+import { MockModeProvider } from './mock/use-mock-mode.js';
 import type { OnboardingDismissal } from './onboarding/dismissal.js';
 import { onboardingVerdict } from './onboarding/onboarding-model.js';
 import { useOnboardingRoute } from './onboarding/onboarding-route.js';
@@ -35,6 +37,13 @@ export interface AppProps {
    * one dismissal, and a test has no browser storage worth trusting.
    */
   readonly dismissal: OnboardingDismissal;
+  /**
+   * Whether this device shows sample data for features with no backend yet.
+   * Built by `main.tsx` beside the other per-device stores, and provided
+   * here to the whole tree rather than threaded: its readers are leaves of
+   * every feature, and Settings' Developer toggle is its one writer.
+   */
+  readonly mock: MockSwitch;
 }
 
 /**
@@ -44,7 +53,7 @@ export interface AppProps {
  * `shell/app-shell.tsx`. So this file changes when the provider stack changes
  * and for no other reason.
  */
-export function App({ hub, tokens, dismissal }: AppProps): JSX.Element {
+export function App({ hub, tokens, dismissal, mock }: AppProps): JSX.Element {
   return (
     <MantineProvider
       theme={theme}
@@ -52,7 +61,9 @@ export function App({ hub, tokens, dismissal }: AppProps): JSX.Element {
       colorSchemeManager={colorSchemeManager}
       defaultColorScheme="dark"
     >
-      <OnboardingGate hub={hub} tokens={tokens} dismissal={dismissal} />
+      <MockModeProvider mock={mock}>
+        <OnboardingGate hub={hub} tokens={tokens} dismissal={dismissal} />
+      </MockModeProvider>
     </MantineProvider>
   );
 }
@@ -85,7 +96,7 @@ export function App({ hub, tokens, dismissal }: AppProps): JSX.Element {
  * than a second socket, because subscribing to a hub store only ever declares
  * that somebody is looking.
  */
-function OnboardingGate({ hub, tokens, dismissal }: AppProps): JSX.Element {
+function OnboardingGate({ hub, tokens, dismissal }: Omit<AppProps, 'mock'>): JSX.Element {
   const snapshot = useHubSnapshot(hub);
   const requested = useOnboardingRoute();
   const sessionRef = useSessionRoute();

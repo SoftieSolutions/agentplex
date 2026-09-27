@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { browserTokenStore } from './auth/token.js';
+import { createMockSwitch } from './mock/mock-switch.js';
 import { browserOnboardingDismissal } from './onboarding/dismissal.js';
 import { startDocumentTitle } from './pwa/document-title.js';
 import { registerServiceWorker } from './pwa/register-service-worker.js';
@@ -32,6 +33,18 @@ const hub = createHubStore(createBrowserDependencies({ tokens: browserTokenStore
 // because its lifecycle follows subscriber count and this one never leaves.
 startDocumentTitle(hub, document);
 
+/**
+ * The page's mock switch, built once here for the reason the hub store is:
+ * it reads `?mock=1` when it is built, and one built in render would read the
+ * address again on every remount and undo a Settings toggle turned off on a
+ * page whose address still carries the parameter. Both accesses are inside
+ * the switch's guarded calls.
+ */
+const browserMockSwitch = createMockSwitch({
+  storage: () => window.localStorage,
+  search: () => window.location.search,
+});
+
 const container = document.querySelector('#root');
 if (container === null) {
   throw new Error('index.html has no #root to mount into');
@@ -39,6 +52,11 @@ if (container === null) {
 
 createRoot(container).render(
   <StrictMode>
-    <App hub={hub} tokens={browserTokenStore} dismissal={browserOnboardingDismissal} />
+    <App
+      hub={hub}
+      tokens={browserTokenStore}
+      dismissal={browserOnboardingDismissal}
+      mock={browserMockSwitch}
+    />
   </StrictMode>,
 );

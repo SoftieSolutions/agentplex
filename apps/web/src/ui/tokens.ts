@@ -49,6 +49,8 @@ export const hues = {
   ember: '#e0605a',
   /** Dark paused marker: a session set down on purpose, alive and waiting. */
   slate: '#7d93b8',
+  /** Dark mock tag: the chip on anything drawn from sample data. */
+  lilac: '#b8a1d9',
 
   // Light scheme, back to front.
   /** Light app background. */
@@ -79,6 +81,8 @@ export const hues = {
   denim: '#4a6fa5',
   /** Light idle marker. */
   pumice: '#cfcbc0',
+  /** Light mock tag: lilac deepened to carry white text on paper. */
+  plum: '#5e3f8a',
 } as const;
 
 export type HueName = keyof typeof hues;
@@ -126,6 +130,14 @@ export interface SchemeRoles {
   terminalMatch: HueName;
   /** The wash behind the one match the find bar is standing on. */
   terminalMatchActive: HueName;
+  /**
+   * The chip on anything drawn from sample data rather than from the hub.
+   * A purple no status tone uses, so the tag is never read as a session
+   * state: the five tones already take green, amber, red, grey and blue.
+   */
+  mockTag: HueName;
+  /** The word on the mock tag. */
+  onMockTag: HueName;
 }
 
 export const roles = {
@@ -147,6 +159,8 @@ export const roles = {
     terminalText: 'driftwood',
     terminalMatch: 'walnut',
     terminalMatchActive: 'ridge',
+    mockTag: 'lilac',
+    onMockTag: 'char',
   },
   light: {
     background: 'parchment',
@@ -170,6 +184,8 @@ export const roles = {
     // driftwood text on paper and make the match the one thing unreadable.
     terminalMatch: 'walnut',
     terminalMatchActive: 'ridge',
+    mockTag: 'plum',
+    onMockTag: 'paper',
   },
 } as const satisfies Record<Scheme, SchemeRoles>;
 
