@@ -28,6 +28,7 @@ import type { ServerIdentity } from '@agentplex/providers';
 import type { GrantId } from '../grants/server-grants.js';
 import type { GrantAuthority } from '../grants/server-grant-store.js';
 import type { ApprovalGate } from '../approvals/approval-gate.js';
+import type { ServerAbout } from '../about/server-about.js';
 import type { DirectoryBrowser } from '../directories/directory-browse.js';
 import type { HubAudience, HubMember } from './hub-audience.js';
 import type { MachineLoadReader } from '../machine-load/machine-load.js';
@@ -157,6 +158,12 @@ export interface HubConnectionDependencies {
    * said at all.
    */
   readonly providers: readonly ProviderReadiness[];
+  /**
+   * What this machine runs and which daemon build is answering, read once at
+   * boot and stated on every handshake beside the providers, for the same
+   * reason they are a value: nothing about either changes without a restart.
+   */
+  readonly about: ServerAbout;
   /**
    * The one thing on this connection that starts and stops sessions.
    *
@@ -296,6 +303,7 @@ export function serveHubConnection(
     audience,
     stores,
     providers,
+    about,
     sessions,
     terminals,
     browse,
@@ -823,6 +831,8 @@ export function serveHubConnection(
       serverId: identity.serverId,
       stores: [...stores],
       providers: [...providers],
+      os: about.os,
+      daemonVersion: about.daemonVersion,
     });
     logger.info('hub connection established', {
       // The label the operator gave the grant, beside the name the hub gave

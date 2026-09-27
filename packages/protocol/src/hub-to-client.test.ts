@@ -357,6 +357,8 @@ describe('client and hub round trips', () => {
             staleReason: null,
             draining: null,
             roundTrip: { ms: 12, load: null, measuredAt: 1_020 },
+            os: 'macOS 26.6.2',
+            daemonVersion: '2.0.3',
             problem: null,
           },
           {
@@ -386,6 +388,8 @@ describe('client and hub round trips', () => {
               ],
             },
             roundTrip: null,
+            os: null,
+            daemonVersion: null,
             problem: null,
           },
         ],

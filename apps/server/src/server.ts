@@ -41,6 +41,7 @@ import { ensureServerIdentity } from '@agentplex/providers';
 import { createHubAudience } from './hub/hub-audience.js';
 import { sweepGrants } from './hub/grant-sweep.js';
 import { createSessionController } from './sessions/session-control.js';
+import type { ServerAbout } from './about/server-about.js';
 import type { MachineLoadReader } from './machine-load/machine-load.js';
 import { createProjectDocs } from './projects/project-docs.js';
 import type { ProjectFileSystem } from './projects/project-files.js';
@@ -214,6 +215,16 @@ export interface SessionServerDependencies {
    */
   readonly machineLoad: MachineLoadReader;
   /**
+   * What this machine runs and which daemon build is answering, as `main`
+   * read them at boot: stated on every handshake, beside the providers.
+   *
+   * Read once rather than per handshake, because neither changes without a
+   * restart and the reading costs a child process on a Mac. It is `main`'s to
+   * read for the reason the preflight's probes are: that is where this
+   * process's view of the machine is assembled.
+   */
+  readonly about: ServerAbout;
+  /**
    * The data root, as `boot.ts` ensured it before anything was served, and
    * the disk under it for the project file store.
    *
@@ -324,6 +335,7 @@ export async function startSessionServer(
     operations,
     workingTree,
     machineLoad,
+    about,
     dataRoot,
     projectFiles,
     timers,
@@ -598,6 +610,7 @@ export async function startSessionServer(
           // after a store came back reachable is told what is mounted now.
           stores,
           providers: readiness,
+          about,
           // The roots this server was configured with, and nothing a frame can
           // add to. A connection may ask; what it may be told is decided above.
           browse,

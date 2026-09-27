@@ -468,10 +468,93 @@ describe('parseServerToHubFrame', () => {
       serverId: 'server-1',
       stores: [{ storeId: 'store-1', path: '/data/store' }],
       providers: [READY_CLAUDE],
+      os: 'macOS 26.6.2',
+      daemonVersion: '2.0.3',
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value).toMatchObject({ serverId: 'server-1' });
+  });
+
+  it('carries what the machine says it runs, and which daemon is answering', () => {
+    const result = parseServerToHubFrame({
+      type: 'handshake-accepted',
+      replyTo: 1,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
+      serverId: 'server-1',
+      stores: [],
+      providers: [],
+      os: 'Debian GNU/Linux 12 (bookworm)',
+      daemonVersion: '2.0.3',
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toMatchObject({
+      os: 'Debian GNU/Linux 12 (bookworm)',
+      daemonVersion: '2.0.3',
+    });
+  });
+
+  it('accepts a server that could name neither, which is not the same as one that did not say', () => {
+    const result = parseServerToHubFrame({
+      type: 'handshake-accepted',
+      replyTo: 1,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
+      serverId: 'server-1',
+      stores: [],
+      providers: [],
+      os: null,
+      daemonVersion: null,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toMatchObject({ os: null, daemonVersion: null });
+  });
+
+  it('refuses an acceptance with no os or daemon version field at all', () => {
+    const complete = {
+      type: 'handshake-accepted',
+      replyTo: 1,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
+      serverId: 'server-1',
+      stores: [],
+      providers: [],
+      os: 'macOS 26.6.2',
+      daemonVersion: '2.0.3',
+    };
+    const { os: _os, ...withoutOs } = complete;
+    const { daemonVersion: _version, ...withoutVersion } = complete;
+
+    expect(parseServerToHubFrame(withoutOs).ok).toBe(false);
+    expect(parseServerToHubFrame(withoutVersion).ok).toBe(false);
+  });
+
+  it('refuses an os or daemon version that is empty, too long, or not text a person can read', () => {
+    // Both are drawn on the machine card as they arrive. A bound keeps one
+    // machine from pushing the card's layout around, and a control character
+    // or a bidirectional override is a string that renders as something other
+    // than what it says.
+    const accepted = (os: unknown, daemonVersion: unknown): boolean =>
+      parseServerToHubFrame({
+        type: 'handshake-accepted',
+        replyTo: 1,
+        protocolVersion: SERVER_PROTOCOL_VERSION,
+        serverId: 'server-1',
+        stores: [],
+        providers: [],
+        os,
+        daemonVersion,
+      }).ok;
+
+    expect(accepted('x'.repeat(64), 'y'.repeat(32))).toBe(true);
+    for (const os of ['', 'x'.repeat(65), 'macOS\u001b[2J', 'macOS \u202e61.5', ' macOS 26.6.2']) {
+      expect(accepted(os, '2.0.3'), JSON.stringify(os)).toBe(false);
+    }
+    for (const version of ['', 'y'.repeat(33), '2.0.3\n', '2.0 .3']) {
+      expect(accepted('macOS 26.6.2', version), JSON.stringify(version)).toBe(false);
+    }
   });
 
   it('accepts a server with nothing mounted yet', () => {
@@ -482,6 +565,8 @@ describe('parseServerToHubFrame', () => {
       serverId: 'server-1',
       stores: [],
       providers: [],
+      os: null,
+      daemonVersion: null,
     });
     expect(result.ok).toBe(true);
   });
@@ -502,6 +587,8 @@ describe('parseServerToHubFrame', () => {
           problem: 'no directory this server searches holds claude',
         },
       ],
+      os: null,
+      daemonVersion: null,
     });
 
     expect(result.ok).toBe(true);
@@ -518,6 +605,8 @@ describe('parseServerToHubFrame', () => {
       protocolVersion: SERVER_PROTOCOL_VERSION,
       serverId: 'server-1',
       stores: [],
+      os: null,
+      daemonVersion: null,
     });
 
     expect(result.ok).toBe(false);
@@ -868,6 +957,8 @@ describe('hub and server round trips', () => {
       serverId: serverIdSchema.parse('server-1'),
       stores: [{ storeId: storeIdSchema.parse('store-1'), path: '/data/store' }],
       providers: [READY_CLAUDE],
+      os: 'macOS 26.6.2',
+      daemonVersion: '2.0.3',
     },
     { type: 'handshake-rejected', replyTo: 1, reason: 'unauthorized' },
     {

@@ -41,6 +41,8 @@ function machine(
     staleReason: null,
     draining: null,
     roundTrip: null,
+    os: null,
+    daemonVersion: null,
     problem: null,
     ...overrides,
   };

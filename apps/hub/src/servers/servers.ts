@@ -156,6 +156,17 @@ export interface ServerConnectionReport {
    * for a link that is not there.
    */
   readonly roundTrip: ServerRoundTrip | null;
+  /**
+   * What the last handshake said the machine runs, or `null` before any has,
+   * or when the machine could not name it.
+   *
+   * Kept while it is stale, like the store list and unlike the round trip:
+   * this is a fact about the box, not the socket, and the box is still the
+   * one it was when it went quiet. A handshake replaces it.
+   */
+  readonly os: string | null;
+  /** Which daemon build the last handshake said is answering; kept and replaced as `os` is. */
+  readonly daemonVersion: string | null;
 }
 
 /**

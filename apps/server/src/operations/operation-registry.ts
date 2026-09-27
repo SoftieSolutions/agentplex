@@ -1,6 +1,7 @@
 import { createGitDiffOperation } from './git-diff.js';
 import { runGuardedGitProbe, type GitProbe } from './git-probe.js';
 import { createGitStatusOperation } from './git-status.js';
+import { osNameOperation } from './os-name.js';
 import {
   runOperation,
   type Operation,
@@ -41,7 +42,7 @@ import {
 /**
  * Every operation this build can run.
  *
- * Three today, and each earns its place by being needed rather than by
+ * Four today, and each earns its place by being needed rather than by
  * demonstrating the shape:
  *
  * - `process.start-time` dates a pid where `/proc` does not exist. It is on the
@@ -53,8 +54,11 @@ import {
  *   the server's disk.
  * - `git.diff` answers the next one, which is how much is uncommitted and in
  *   which files.
+ * - `system.os-name` names a Mac's operating system the way its owner does,
+ *   `macOS 26.6.2` rather than the kernel's `Darwin 25.6.0`, for the machine
+ *   card. It runs once, at boot, from `main`.
  *
- * Both of the last two are on the store report path: every scan attaches what
+ * The two git probes are on the store report path: every scan attaches what
  * it read to the descriptors it is about to send, so the branch and the numbers
  * a client draws are what this machine read off its own disk. Each of them is
  * two children rather than one: the filter read above, then the probe with
@@ -68,6 +72,7 @@ const OPERATIONS: readonly RegisteredOperation[] = [
   registerGuarded(createGitDiffOperation),
   registerGuarded(createGitStatusOperation),
   register(processStartTimeOperation),
+  register(osNameOperation),
 ];
 
 /**

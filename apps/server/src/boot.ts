@@ -9,6 +9,7 @@ import type { BeaconNetwork } from './beacon/server-beacon.js';
 import type { StoreWatcher } from './store-watch/store-watch.js';
 import type { ApprovalHooks } from './approvals/approval-launch.js';
 import { startSessionServer, type SessionServer } from './server.js';
+import type { ServerAbout } from './about/server-about.js';
 import type { MachineLoadReader } from './machine-load/machine-load.js';
 import type { WorkingTree } from './working-tree/working-tree.js';
 import type { TerminalManager } from './terminal/terminal-manager.js';
@@ -147,6 +148,12 @@ export interface RuntimeDependencies {
    */
   readonly machineLoad: MachineLoadReader;
   /**
+   * What this machine runs and which daemon build this is, read by `main`
+   * once before the runtime starts. A value and not a reader, because nothing
+   * below boot has a reason to ask twice.
+   */
+  readonly about: ServerAbout;
+  /**
    * What the server would announce itself on, if it is configured to.
    *
    * Supplied whatever the configuration says, and consulted only when it says
@@ -211,6 +218,7 @@ export async function startRuntime(
     operations,
     workingTree,
     machineLoad,
+    about,
     beacon,
     approvals,
     timers,
@@ -254,6 +262,7 @@ export async function startRuntime(
     operations,
     workingTree,
     machineLoad,
+    about,
     // The root as ensured above and not as configured: the two are the same
     // string today, and the day they differ the server should be writing
     // where it proved it could.

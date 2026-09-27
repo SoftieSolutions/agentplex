@@ -116,6 +116,7 @@ async function startServer({
     drainMs: DEFAULT_DRAIN_MS,
     workingTree: createFakeWorkingTree(),
     machineLoad: createFakeMachineLoadReader(),
+    about: { os: null, daemonVersion: null },
     dataRoot: '/var/lib/agentplex',
     projectFiles: createFakeProjectFiles(),
     timers: systemTimers,

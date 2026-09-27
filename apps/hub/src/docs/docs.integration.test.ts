@@ -77,6 +77,8 @@ function connection(
     staleReason: phase === 'stale' ? 'unreachable' : null,
     draining: null,
     roundTrip: null,
+    os: null,
+    daemonVersion: null,
   };
 }
 

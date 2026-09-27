@@ -188,6 +188,49 @@ export const machineLoadSchema = z.object({
 export type MachineLoad = z.infer<typeof machineLoadSchema>;
 
 /**
+ * The characters no label a machine gives about itself may carry: the C0 and
+ * C1 controls, and the bidirectional marks, embeddings, overrides and
+ * isolates. The same two classes `displayableApprovalText` removes, refused
+ * here rather than removed, because this string is not an agent's prose
+ * that has to be shown whatever it holds: it is a name the server composed
+ * from its own probe, and one that holds an escape sequence is a server
+ * reporting something other than an operating system.
+ */
+// eslint-disable-next-line no-control-regex -- the point is the control characters.
+const UNREADABLE = /[\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/;
+
+/**
+ * What a machine calls its operating system, e.g. `macOS 26.6.2` or
+ * `Debian GNU/Linux 12 (bookworm)`, as the server read it at boot.
+ *
+ * A name a person reads rather than a platform a program branches on: nothing
+ * downstream may parse it, which is why it is one string and not a family and
+ * a version. The bound is the machine card's, not any distribution's -- a
+ * `PRETTY_NAME` longer than this is not a name that fits beside a label.
+ */
+export const machineOsSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine((text) => !UNREADABLE.test(text), 'not text a person can read')
+  .refine((text) => text.trim() === text, 'padded with whitespace');
+
+/**
+ * Which build of the server daemon is answering, as its installed package
+ * manifest says, e.g. `2.0.3`.
+ *
+ * A version and not a range, and never compared: there is no update prompt or
+ * skew warning built on it, and there must not be one that reads it without a
+ * parser of its own. Whitespace is refused anywhere in it, because no version
+ * a package manager writes has any.
+ */
+export const daemonVersionSchema = z
+  .string()
+  .min(1)
+  .max(32)
+  .refine((text) => !UNREADABLE.test(text) && !/\s/.test(text), 'not a version');
+
+/**
  * A shutdown a server announced, as the hub holds it.
  *
  * The hub's reading of one `server-draining` frame, stamped with the hub's own
@@ -328,6 +371,18 @@ export const serverViewSchema = z.object({
    * trip was only ever true of the socket.
    */
   roundTrip: serverRoundTripSchema.nullable(),
+  /**
+   * What its last handshake said the machine runs, or `null` when no
+   * handshake has, or when the machine could not name it.
+   *
+   * Kept while it is stale, for the reason the store list is: an unreachable
+   * machine is still the same box, and the operating system it last reported
+   * is the last thing known about it. A handshake replaces it, and there is
+   * no other way it changes.
+   */
+  os: machineOsSchema.nullable(),
+  /** Which daemon build its last handshake said is answering; kept and replaced as `os` is. */
+  daemonVersion: daemonVersionSchema.nullable(),
   /** What went wrong, in words. Never a token, and never an address with one in it. */
   problem: z.string().nullable(),
 });

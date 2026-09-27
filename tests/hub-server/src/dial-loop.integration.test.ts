@@ -40,6 +40,7 @@ import { startDialLoop, type DialLoop } from '../../../apps/hub/src/servers/dial
 import { createMessageSocketTransports } from '../../../apps/hub/src/servers/transport.js';
 import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import type { ServerAbout } from '../../../apps/server/src/about/server-about.js';
 
 /**
  * The connection supervisor for one server, driven end to end.
@@ -123,6 +124,8 @@ interface FakeMachine {
   serverId: ServerId;
   token: string;
   stores: readonly StoreDescriptor[];
+  /** What its server end read about itself, as the next handshake will state it. */
+  about: ServerAbout;
 }
 
 function fakeMachine(options: {
@@ -139,6 +142,7 @@ function fakeMachine(options: {
     serverId: serverIdSchema.parse(options.serverId ?? 'server-laptop'),
     token: options.token ?? 'tok-laptop',
     stores: options.stores ?? [store('store-a', '/volumes/claude')],
+    about: { os: 'macOS 26.6.2', daemonVersion: '2.0.3' },
 
     dialer: {
       dial: async () => {
@@ -155,6 +159,7 @@ function fakeMachine(options: {
           identity: { serverId: machine.serverId, token: machine.token },
           stores: machine.stores,
           providers: [readyProvider()],
+          about: machine.about,
           logger,
         });
         live = serverEnd;
@@ -284,6 +289,39 @@ describe('startDialLoop', () => {
       problem: null,
       failedAttempts: 0,
     });
+  });
+
+  it('reports what the machine runs and which daemon answered, from its handshake', async () => {
+    const registration = await register('laptop');
+    const connection = start(registration, fakeMachine({}));
+
+    await until(() => connection.report.phase === 'connected', 'a connection');
+
+    expect(connection.report).toMatchObject({ os: 'macOS 26.6.2', daemonVersion: '2.0.3' });
+  });
+
+  it('keeps the os and version through a close, and takes the next handshake over them', async () => {
+    // A fact about the box rather than the socket: an unreachable machine is
+    // still running what it said it was running. A restart into a new build
+    // is the next handshake's to report.
+    const registration = await register('laptop');
+    const machine = fakeMachine({});
+    const connection = start(registration, machine);
+    await until(() => connection.report.phase === 'connected', 'a connection');
+
+    machine.reachable = false;
+    machine.live?.close(PEER_GONE);
+    await until(() => connection.report.phase === 'stale', 'a stale server');
+
+    expect(connection.report).toMatchObject({ os: 'macOS 26.6.2', daemonVersion: '2.0.3' });
+
+    await retryDelayAfter(connection, 1);
+    machine.about = { os: 'macOS 26.7', daemonVersion: '2.0.4' };
+    machine.reachable = true;
+    timers.fireAll();
+    await until(() => connection.report.phase === 'connected', 'the reconnection');
+
+    expect(connection.report).toMatchObject({ os: 'macOS 26.7', daemonVersion: '2.0.4' });
   });
 
   it('writes the connection down, so a restart can still say when it was up', async () => {

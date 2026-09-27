@@ -76,6 +76,7 @@ function dependencies(
     operations: createOperationRegistry(createFakeProcessRunner()),
     workingTree: createFakeWorkingTree(),
     machineLoad: createFakeMachineLoadReader(),
+    about: { os: 'Linux 6.8.0', daemonVersion: null },
     // Announcing is off in every configuration in this file, so this is a
     // capability nothing here may reach for. Opening it is the bug, and the
     // fake fails loudly rather than quietly putting a UDP socket into a test

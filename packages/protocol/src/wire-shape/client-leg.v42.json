@@ -3667,6 +3667,30 @@
                           }
                         ]
                       },
+                      "os": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "daemonVersion": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 32
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "problem": {
                         "type": [
                           "string",
@@ -3688,6 +3712,8 @@
                       "staleReason",
                       "draining",
                       "roundTrip",
+                      "os",
+                      "daemonVersion",
                       "problem"
                     ]
                   }

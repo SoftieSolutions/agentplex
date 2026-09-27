@@ -141,6 +141,11 @@ function toServerView(report: ServerConnectionReport): ServerView {
             load: copyLoad(report.roundTrip.load),
             measuredAt: report.roundTrip.measuredAt,
           },
+    // Straight through: two strings the handshake parser already bounded, and
+    // `null` published as `null`. There is no placeholder here for a machine
+    // that said nothing, because a word standing in for a fact is drawn as one.
+    os: report.os,
+    daemonVersion: report.daemonVersion,
     problem: report.problem,
   };
 }

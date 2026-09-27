@@ -73,6 +73,8 @@ function connection(
     staleReason: phase === 'stale' ? 'unreachable' : null,
     draining: null,
     roundTrip: null,
+    os: null,
+    daemonVersion: null,
     ...overrides,
   };
 }
@@ -712,6 +714,46 @@ describe('the change signal', () => {
     );
 
     expect(seen).toEqual([]);
+  });
+
+  it('tells a subscriber when a handshake reports a different os or daemon version', () => {
+    // A machine upgraded and restarted comes back with the same stores and
+    // providers. Without these in the comparison the card would go on naming
+    // the version it had before.
+    const reducer = reduce();
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        os: 'macOS 26.6.2',
+        daemonVersion: '2.0.3',
+      }),
+    );
+
+    const seen: number[] = [];
+    reducer.subscribe((snapshot) => seen.push(snapshot.version));
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        os: 'macOS 26.6.2',
+        daemonVersion: '2.0.4',
+      }),
+    );
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        os: 'macOS 26.7',
+        daemonVersion: '2.0.4',
+      }),
+    );
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        os: 'macOS 26.7',
+        daemonVersion: '2.0.4',
+      }),
+    );
+
+    expect(seen).toEqual([2, 3]);
+    expect(reducer.snapshot().servers[0]).toMatchObject({
+      os: 'macOS 26.7',
+      daemonVersion: '2.0.4',
+    });
   });
 
   it('stops telling a subscriber that has unsubscribed', () => {

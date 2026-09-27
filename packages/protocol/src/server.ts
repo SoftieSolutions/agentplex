@@ -22,7 +22,7 @@ import {
   storeDescriptorSchema,
   storeIdSchema,
 } from './identity.js';
-import { machineLoadSchema } from './machine-state.js';
+import { daemonVersionSchema, machineLoadSchema, machineOsSchema } from './machine-state.js';
 import { frameParser } from './parse.js';
 import { providerReadinessSchema } from './readiness.js';
 import {
@@ -323,6 +323,22 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
      * or never provisioned, saying so before anybody taps start.
      */
     providers: z.array(providerReadinessSchema),
+    /**
+     * What this machine runs, as the server named it at boot -- `macOS 26.6.2`
+     * from `sw_vers`, a Linux distribution's `PRETTY_NAME`, or the kernel's
+     * own name where neither could be read -- or `null` for none at all.
+     *
+     * Required and nullable rather than optional, for the reason `providers`
+     * is required: a server that could not say and a server that did not say
+     * are different facts, and the frame should not let them look alike.
+     */
+    os: machineOsSchema.nullable(),
+    /**
+     * Which daemon build is answering, from its installed manifest, or `null`
+     * when that manifest could not be read. A label a person reads; nothing
+     * compares it.
+     */
+    daemonVersion: daemonVersionSchema.nullable(),
   }),
   /**
    * Says that the handshake failed, and no more. A rejection that explained
