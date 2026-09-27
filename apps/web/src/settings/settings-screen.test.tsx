@@ -307,6 +307,29 @@ describe('the settings screen with nothing paired', () => {
     expect(container.textContent).toContain('gpu-box-01');
   });
 
+  it('draws what each machine said it runs, muted beside its identity', async () => {
+    await draw(hubFrames.machineStatePopulated, () => MEASURED_AT);
+
+    // Both captured servers named themselves in their handshake; the row
+    // draws each in the same muted monospace as the identity it sits beside.
+    const beside = [
+      ['server-mbp', 'macOS 26.6.2 · daemon 2.0.3'],
+      ['server-gpu', 'Ubuntu 24.04.5 LTS · daemon 2.0.3'],
+    ] as const;
+    for (const [identity, words] of beside) {
+      const about = drawn(words);
+      expect(about.style.fontFamily).toContain('monospace');
+      expect(about.parentElement).toBe(drawn(identity).parentElement);
+    }
+  });
+
+  it('draws nothing in their place for a machine that has not said', async () => {
+    await draw(hubFrames.machineStateWithServer);
+
+    expect(container.textContent).toContain('gpu-box-01');
+    expect(container.textContent).not.toMatch(/daemon|unknown/i);
+  });
+
   it('draws the round trip the hub measured beside the phase', async () => {
     await draw(hubFrames.machineStateMeasured, () => MEASURED_AT);
 

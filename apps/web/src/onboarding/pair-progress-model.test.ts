@@ -112,24 +112,17 @@ describe('a registration that answered', () => {
       connectedSince: 1_756_000_000_000,
       stores: ['store-agentplex'],
       providers: [{ name: 'claude', tone: 'running', words: 'claude 9.9.9', problem: null }],
+      os: 'macOS 26.6.2',
+      daemonVersion: '2.0.3',
     });
   });
 
-  it('claims nothing about the operating system or the daemon build', () => {
-    // Neither is on any frame the hub sends, so neither can be drawn. A line
-    // that said "macOS 15, agentplex 1.4" would be the wizard inventing the
-    // two facts a first-run reader is most likely to believe.
-    const progress = pairProgress(justPaired, onlyRow(justPaired).registrationId);
-    expect(Object.keys(progress).sort()).toEqual([
-      'address',
-      'connectedSince',
-      'kind',
-      'label',
-      'providers',
-      'stores',
-      'tone',
-      'words',
-    ]);
+  it('carries no operating system and no build for a machine that did not say', () => {
+    // The captured drain is of a server that sent `null` for both. The wizard
+    // draws what the handshake said and nothing in its place: a filler word
+    // here would be the one fact on the card a first-run reader cannot check.
+    const progress = pairProgress(draining, onlyRow(draining).registrationId);
+    expect(progress).toMatchObject({ kind: 'online', os: null, daemonVersion: null });
   });
 
   it('needs no intermediate state: the first frame after pairing can already be online', () => {

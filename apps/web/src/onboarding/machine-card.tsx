@@ -1,6 +1,7 @@
 import type { JSX, ReactNode } from 'react';
 import { assertNever } from '@agentplex/protocol';
 import { ageLabel } from '../sessions/session-list-model.js';
+import { aboutWords } from '../settings/server-rows.js';
 import { Group, Paper, Stack, Text } from '../ui/components.js';
 import { ProviderLine } from '../ui/provider-line.js';
 import { ToneDot } from '../ui/tone-dot.js';
@@ -20,14 +21,17 @@ import type { PairProgress } from './pair-progress-model.js';
  * paired.
  *
  * The shape is the approved mockup's connected card (turn 7f) -- a bordered
- * card, a tone dot, the machine's name in bold, a muted monospace detail line,
- * then a sentence -- with what the mock put on that detail line taken out. It
- * read `macOS 15.6 · daemon 2.0.3`, and neither fact is on any frame the hub
- * sends: the server reports its stores and what it can start, never what it is
- * running on or which build it is. A first-run reader has no way to check
- * either, which makes this the worst screen in the product to invent one on.
- * What goes there instead is the address this hub dials and how long the
- * connection it now holds has been up, both of which the hub published.
+ * card, a tone dot, the machine's name in bold with a muted monospace
+ * `macOS 26.6.2 · daemon 2.0.3` beside it, then a sentence. Those two facts are
+ * the server's own, from its handshake, and each is drawn only when it was
+ * said: a machine that named one draws that one, and one that named neither
+ * draws the name alone. A first-run reader has no way to check either, which
+ * makes this the worst screen in the product to fill a gap with a guess.
+ *
+ * Under the name, on a line of its own, is what the hub knows rather than what
+ * the machine said: the address this hub dials and how long the connection it
+ * now holds has been up. The mock has no such line; it is kept because two
+ * machines somebody called `mbp-robert` are the same card without it.
  *
  * Every state is drawn from the progress it is handed and nothing else; there
  * is no state in this file, so a card that has gone stale is a card whose rows
@@ -98,6 +102,7 @@ export function MachineCard({
           tone={progress.tone}
           scheme={scheme}
           headline={`${progress.label} ${progress.words}`}
+          about={aboutWords(progress.os, progress.daemonVersion)}
         >
           <DetailLine
             scheme={scheme}
@@ -186,6 +191,8 @@ interface CardFrameProps {
   readonly tone: Tone;
   readonly scheme: Scheme;
   readonly headline: string;
+  /** The muted facts drawn beside the headline, or `null` for none. */
+  readonly about?: string | null | undefined;
   readonly children: ReactNode;
 }
 
@@ -198,7 +205,13 @@ interface CardFrameProps {
  * the thing to see from across the room. It is `colorForTone` and never a
  * literal, so the light scheme gets the light scheme's hue.
  */
-function CardFrame({ tone, scheme, headline, children }: CardFrameProps): JSX.Element {
+function CardFrame({
+  tone,
+  scheme,
+  headline,
+  about = null,
+  children,
+}: CardFrameProps): JSX.Element {
   return (
     <Paper
       withBorder
@@ -216,6 +229,11 @@ function CardFrame({ tone, scheme, headline, children }: CardFrameProps): JSX.El
           <Text fz={15} fw={700} c={colorForRole('text', scheme)}>
             {headline}
           </Text>
+          {about !== null && (
+            <Text fz={11} ff="monospace" c={colorForRole('textMuted', scheme)}>
+              {about}
+            </Text>
+          )}
         </Group>
         {children}
       </Stack>
