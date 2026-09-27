@@ -858,6 +858,39 @@ describe('a request the hub raised for a graph run', () => {
     expect(late.outcome).toBe('withdrawn');
   });
 
+  it('withdraws one request of a run and leaves its other branches asking', async () => {
+    // Two HUMAN nodes of one run waiting at once, on parallel branches: the
+    // one whose own wait ran out takes back its request and nobody else's.
+    const approvals = feature();
+    const timed = approvals.requestedByHub(A_RUN, human(FIRST), {
+      graph: RELEASE,
+      number: 38,
+      nodeLabel: 'Ship it',
+    });
+    const sibling = {
+      kind: 'graphRun',
+      runId: RUN_38,
+      nodeId: graphNodeIdSchema.parse('sign-off'),
+    } as const;
+    void approvals.requestedByHub(sibling, human(SECOND), {
+      graph: RELEASE,
+      number: 38,
+      nodeLabel: 'Sign-off',
+    });
+    await settle();
+
+    // Named under the other node: no request of that subject has this id.
+    approvals.withdrawnOneByHub(sibling, FIRST);
+    expect(last()?.map((waiting) => waiting.approval.approvalId)).toEqual([FIRST, SECOND]);
+
+    approvals.withdrawnOneByHub(A_RUN, FIRST);
+
+    await expect(timed).resolves.toBe('withdrawn');
+    expect(last()?.map((waiting) => waiting.approval.approvalId)).toEqual([SECOND]);
+    const late = await approvals.decide({ subject: A_RUN, approvalId: FIRST, decision: 'grant' });
+    expect(late.outcome).toBe('withdrawn');
+  });
+
   it('withdraws nothing and says nothing for a run holding no request', () => {
     const approvals = feature();
     approvals.withdrawnByHub(RUN_38);

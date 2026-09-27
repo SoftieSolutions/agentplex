@@ -12,6 +12,7 @@ import {
 } from '@agentplex/protocol';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createLogger } from '@agentplex/node-shared';
+import { createFakeApprovals } from '../approvals/fake-approvals.js';
 import { createHumanExecutor } from './human-executor.js';
 import {
   joinExecutor,
@@ -660,6 +661,7 @@ describe('walk', () => {
               answers.push(resolve);
             }),
           withdrawnByHub: () => {},
+          withdrawnOneByHub: () => {},
         },
         ids: { newId: () => `approval-${String((minted += 1))}` },
         timers: createFakeTimers(),
@@ -1054,6 +1056,63 @@ describe('walk', () => {
           'the JOIN node Both reviews waits for every incoming branch, and Docs reviewer never reached it',
       });
       expect(reviewer.calls).toHaveLength(1);
+    });
+
+    it('fails naming the HUMAN node whose wait ran out, while a HUMAN on another branch waits unbounded', async () => {
+      // The real HUMAN executor over the approvals fake. The untimed gate's
+      // edge is listed first, so were the timeout to take back every request
+      // the run holds, the untimed gate's "withdrawn" would reach the run's
+      // end first and name the wrong node.
+      const waitingOn: string[][] = [];
+      const approvals = createFakeApprovals({
+        onGraphRunChanged: (waiting) => waitingOn.push(waiting.map((entry) => entry.nodeLabel)),
+      });
+      const humanTimers = createFakeTimers();
+      let minted = 0;
+      const human = createHumanExecutor({
+        approvals,
+        ids: { newId: () => `approval-${String((minted += 1))}` },
+        timers: humanTimers,
+        logger: createLogger('error', () => {}),
+      }).forRun({
+        runId: graphRunIdSchema.parse('run-38'),
+        number: 38,
+        graph: nodeIdSchema.parse('node-graph-release'),
+        graphName: 'release',
+      });
+      const gates = document({
+        nodes: [
+          TRIGGER,
+          { ...GATE, id: 'untimed', label: 'Untimed' },
+          { ...GATE, id: 'timed', label: 'Timed', timeoutMinutes: 2 },
+          JOIN,
+        ],
+        edges: [
+          { from: 'start', to: 'untimed' },
+          { from: 'start', to: 'timed' },
+          { from: 'untimed', to: 'both' },
+          { from: 'timed', to: 'both' },
+        ],
+      });
+      const run = drive(gates, {}, table(agent(async () => ({ ok: true })).execute, human));
+      await settle();
+      expect(waitingOn.at(-1)).toEqual(['Untimed', 'Timed']);
+
+      humanTimers.fireAll();
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason:
+          'the HUMAN node Timed failed: Timed waited 2 minutes for a person and nobody answered',
+        retryable: false,
+      });
+      // The untimed gate was stopped because the run failed, and its request
+      // went with it: nobody is left being asked about a run that has ended.
+      expect(run.steps.filter((step) => step.nodeId === 'untimed').at(-1)?.outcome).toBe(
+        'cancelled',
+      );
+      expect(run.steps.filter((step) => step.nodeId === 'timed').at(-1)?.outcome).toBe('failed');
+      expect(waitingOn.at(-1)).toEqual([]);
     });
 
     it('walks the branches one after another, in edge order, when told to take them in turn', async () => {
