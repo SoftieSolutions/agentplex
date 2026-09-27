@@ -89,13 +89,28 @@ export interface Flow {
   readonly edges: Edge[];
 }
 
-/** Every node as a card, every edge and route as an edge, the selection marked. */
+/** No node running: the default, one value so an idle canvas never looks like a change. */
+const NO_NODES: ReadonlySet<GraphNodeId> = new Set();
+
+/** Whether two sets of running nodes name the same nodes, so a new set with the same members is no change. */
+function sameNodes(left: ReadonlySet<GraphNodeId>, right: ReadonlySet<GraphNodeId>): boolean {
+  if (left === right) return true;
+  if (left.size !== right.size) return false;
+  for (const id of left) if (!right.has(id)) return false;
+  return true;
+}
+
+/**
+ * Every node as a card, every edge and route as an edge, the selection
+ * marked, and every node in `running` drawn in the running tone -- a run that
+ * has fanned out has a step in flight on each branch, and each is marked.
+ */
 export function toFlow(
   document: GraphDocument,
   selection: GraphNodeId | null,
   labels: ReadonlyMap<ServerRegistrationId, string>,
   scheme: Scheme = 'dark',
-  running: GraphNodeId | null = null,
+  running: ReadonlySet<GraphNodeId> = NO_NODES,
 ): Flow {
   const nodes: CardNode[] = document.nodes.map((node) => ({
     id: node.id,
@@ -106,7 +121,7 @@ export function toFlow(
       kind: node.kind,
       label: node.label,
       subtitle: nodeSubtitle(node, labels),
-      running: node.id === running,
+      running: running.has(node.id),
       scheme,
     },
   }));
@@ -167,6 +182,9 @@ export function fromFlowChange(change: FlowNodeChange, document: GraphDocument):
 /** The card's width, as mockup 6d draws them. */
 const CARD_WIDTH = 170;
 
+/** A JOIN's diameter: mockup 6d draws it as a 44px circle where the branches meet. */
+const JOIN_SIZE = 44;
+
 const MONO = "'Fira Code', var(--mantine-font-family-monospace, monospace)";
 
 /**
@@ -174,7 +192,61 @@ const MONO = "'Fira Code', var(--mantine-font-family-monospace, monospace)";
  * third line. The handles are what a connection is dragged between, on the
  * left and the right because the layout reads left to right.
  */
-function CardNodeView({ id, data, selected }: NodeProps<CardNode>): JSX.Element {
+function CardNodeView(props: NodeProps<CardNode>): JSX.Element {
+  if (props.data.kind === 'join') return <JoinNodeView {...props} />;
+  return <RectangleNodeView {...props} />;
+}
+
+/**
+ * A JOIN, as mockup 6d draws it (6d:44): a 44px circle on the card surface
+ * with the join glyph in the middle, and nothing else -- no kind line, no
+ * label, no third line, because what a join does is where its edges meet.
+ * The label is its accessible name. Its edge follows the same rule every
+ * card's does: the running tone while the run is at it, then the selection.
+ * The handles are on both sides like any card's: branches come in on the
+ * left and the run goes on from the right.
+ */
+function JoinNodeView({ id, data, selected }: NodeProps<CardNode>): JSX.Element {
+  const scheme = data.scheme;
+  const edge = data.running
+    ? colorForTone('running', scheme)
+    : selected
+      ? colorForRole('accent', scheme)
+      : colorForRole('borderStrong', scheme);
+  const style: CSSProperties = {
+    width: JOIN_SIZE,
+    height: JOIN_SIZE,
+    borderRadius: '50%',
+    background: colorForRole('surface', scheme),
+    border: `1px solid ${edge}`,
+    display: 'grid',
+    placeItems: 'center',
+    boxShadow: selected ? `0 0 0 4px color-mix(in srgb, ${edge} 15%, transparent)` : undefined,
+  };
+  return (
+    <div
+      data-node-card={id}
+      data-kind={data.kind}
+      data-running={data.running ? 'true' : undefined}
+      aria-label={`${KIND_WORDS[data.kind]} ${data.label}`}
+      title={data.label}
+      style={style}
+    >
+      <Handle type="target" position={Position.Left} />
+      <span
+        data-join-glyph
+        aria-hidden
+        style={{ fontSize: 15, lineHeight: 1, color: colorForRole('textSecondary', scheme) }}
+      >
+        ⋈
+      </span>
+      <Handle type="source" position={Position.Right} />
+    </div>
+  );
+}
+
+/** Every other kind: the rectangular card with its kind, label and third line. */
+function RectangleNodeView({ id, data, selected }: NodeProps<CardNode>): JSX.Element {
   const scheme = data.scheme;
   // A running node is drawn in the running tone, and that wins over the
   // selection ring: the mock marks the executing card whatever is selected.
@@ -351,8 +423,8 @@ export interface GraphCanvasProps {
    * pointer and the library's drag handling has nothing to bind to.
    */
   readonly interactive?: boolean;
-  /** The node whose run step is in flight, drawn in the running tone, or `null`. */
-  readonly running?: GraphNodeId | null;
+  /** Every node whose run step is in flight, each drawn in the running tone. */
+  readonly running?: ReadonlySet<GraphNodeId>;
   readonly onSelect: (id: GraphNodeId | null) => void;
   /** An edit the canvas asks of the document: a card dropped where it was dragged to. */
   readonly onEdit: (edit: (document: GraphDocument) => GraphEdit) => void;
@@ -364,7 +436,7 @@ interface Held {
   readonly selection: GraphNodeId | null;
   readonly labels: ReadonlyMap<ServerRegistrationId, string>;
   readonly scheme: Scheme;
-  readonly running: GraphNodeId | null;
+  readonly running: ReadonlySet<GraphNodeId>;
   readonly nodes: CardNode[];
 }
 
@@ -380,7 +452,7 @@ export function deriveNodes(
   selection: GraphNodeId | null,
   labels: ReadonlyMap<ServerRegistrationId, string>,
   scheme: Scheme,
-  running: GraphNodeId | null,
+  running: ReadonlySet<GraphNodeId>,
   previous: readonly CardNode[],
 ): CardNode[] {
   const held = new Map(previous.map((node) => [node.id, node]));
@@ -420,7 +492,7 @@ function Canvas({
   labels,
   scheme,
   interactive = true,
-  running = null,
+  running = NO_NODES,
   onSelect,
   onEdit,
   onConnect,
@@ -443,7 +515,9 @@ function Canvas({
     held.selection !== selection ||
     held.labels !== labels ||
     held.scheme !== scheme ||
-    held.running !== running
+    // By members, not identity: the screen derives a new set from each run
+    // state, and one naming the same nodes is no reason to derive again.
+    !sameNodes(held.running, running)
   ) {
     nodes = deriveNodes(document, selection, labels, scheme, running, held.nodes);
     setHeld({ document, selection, labels, scheme, running, nodes });

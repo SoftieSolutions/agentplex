@@ -42,6 +42,15 @@ function fixtureDocument(): GraphDocument {
   return parsed.value.document;
 }
 
+/** The document a real hub answered the open of a graph that fans out and joins with. */
+function branchesDocument(): GraphDocument {
+  const parsed = parseTextFrame(parseHubFrame, hubFrames.graphDocumentBranches);
+  if (!parsed.ok || parsed.value.type !== 'graph-document') {
+    throw new Error('the captured frame is not a graph document');
+  }
+  return parsed.value.document;
+}
+
 const id = (text: string) => graphNodeIdSchema.parse(text);
 const STORE = storeIdSchema.parse('store-agentplex');
 const SEED = { storeId: STORE, graph: nodeIdSchema.parse('hub-11') } as const;
@@ -74,13 +83,39 @@ describe('newNodeId', () => {
 describe('addNode', () => {
   it('adds a node of every kind that parses, at the position asked for', () => {
     let document = fixtureDocument();
-    for (const kind of ['trigger', 'router', 'agent', 'subgraph', 'human', 'action'] as const) {
+    for (const kind of [
+      'trigger',
+      'router',
+      'agent',
+      'subgraph',
+      'human',
+      'action',
+      'join',
+    ] as const) {
       document = accepted(addNode(document, kind, { x: 10, y: 20 }, SEED));
       const added = document.nodes.at(-1);
       expect(added?.kind).toBe(kind);
       expect(added?.position).toEqual({ x: 10, y: 20 });
     }
-    expect(document.nodes).toHaveLength(9);
+    expect(document.nodes).toHaveLength(10);
+  });
+
+  it('adds a JOIN with nothing but what every node carries, as a draft still waiting for its edges', () => {
+    const document = accepted(addNode(fixtureDocument(), 'join', { x: 700, y: 156 }, SEED));
+    expect(document.nodes.at(-1)).toEqual({
+      id: 'join-1',
+      kind: 'join',
+      label: 'Join',
+      position: { x: 700, y: 156 },
+      placement: { kind: 'cheapest' },
+      retry: { max: 0, backoff: 1 },
+    });
+  });
+
+  it('lets a node that is not a ROUTER connect to a second node, which is a fan-out', () => {
+    const document = accepted(addNode(fixtureDocument(), 'agent', { x: 500, y: 152 }, SEED));
+    const fanned = accepted(connect(document, id('start'), id('agent-1')));
+    expect(fanned.edges.filter((edge) => edge.from === 'start')).toHaveLength(2);
   });
 
   it('refuses an AGENT when no store is known to start it in', () => {
@@ -277,6 +312,7 @@ describe('words', () => {
       subgraph: 'SUB-GRAPH',
       human: 'HUMAN',
       action: 'ACTION',
+      join: 'JOIN',
     });
   });
 
@@ -292,5 +328,8 @@ describe('words', () => {
     expect(nodeSubtitle({ ...agent, placement: { kind: 'cheapest' } }, labels)).toBe(
       'claude · any machine',
     );
+    const join = branchesDocument().nodes.find((node) => node.kind === 'join');
+    if (join === undefined) throw new Error('the captured document has no JOIN');
+    expect(nodeSubtitle(join, labels)).toBe('waits for every incoming branch');
   });
 });

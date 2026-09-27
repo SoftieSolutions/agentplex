@@ -12,7 +12,7 @@ import {
   isRunOpen,
   lastOutputFor,
   lastOutputText,
-  runningNode,
+  runningNodes,
   runStripText,
   runTone,
 } from './run-model.js';
@@ -70,6 +70,10 @@ describe('runStripText', () => {
     );
   });
 
+  it('counts the steps reached over the nodes when two branches are in flight at once', () => {
+    expect(runStripText(state(hubFrames.graphRunStateBranches))).toBe('run #1 · live · step 3/4');
+  });
+
   it('reads the mock’s example when given its numbers', () => {
     const mock: GraphRunState = {
       ...state(hubFrames.graphRunStateRunning),
@@ -107,23 +111,30 @@ describe('isRunOpen', () => {
   });
 });
 
-describe('runningNode', () => {
+describe('runningNodes', () => {
+  const ids = (set: ReadonlySet<string>): string[] => [...set];
+
   it('names the node whose step is in flight', () => {
-    expect(runningNode(state(hubFrames.graphRunStateRunning))).toBe('review');
+    expect(ids(runningNodes(state(hubFrames.graphRunStateRunning)))).toEqual(['review']);
+  });
+
+  it('names every node in flight when the run has fanned out, from a captured run', () => {
+    expect(ids(runningNodes(state(hubFrames.graphRunStateBranches)))).toEqual(['rust', 'ts']);
   });
 
   it('names nothing for a stale run', () => {
-    expect(runningNode(state(hubFrames.graphRunStateRunning), true)).toBeNull();
+    expect(runningNodes(state(hubFrames.graphRunStateRunning), true).size).toBe(0);
+    expect(runningNodes(state(hubFrames.graphRunStateBranches), true).size).toBe(0);
   });
 
   it('names the node a run is waiting at, so the canvas marks the gate', () => {
-    expect(runningNode(state(hubFrames.graphRunStateWaiting))).toBe('approve');
+    expect(ids(runningNodes(state(hubFrames.graphRunStateWaiting)))).toEqual(['approve']);
   });
 
   it('names nothing for a run that has ended, or no run', () => {
-    expect(runningNode(state(hubFrames.graphRunStateCancelled))).toBeNull();
-    expect(runningNode(state(hubFrames.graphRunStateFailed))).toBeNull();
-    expect(runningNode(null)).toBeNull();
+    expect(runningNodes(state(hubFrames.graphRunStateCancelled)).size).toBe(0);
+    expect(runningNodes(state(hubFrames.graphRunStateFailed)).size).toBe(0);
+    expect(runningNodes(null).size).toBe(0);
   });
 });
 

@@ -46,6 +46,7 @@ export const KIND_WORDS: Record<GraphNodeKind, string> = {
   subgraph: 'SUB-GRAPH',
   human: 'HUMAN',
   action: 'ACTION',
+  join: 'JOIN',
 };
 
 /** Every kind, in the order the palette offers them. */
@@ -56,6 +57,7 @@ export const KINDS: readonly GraphNodeKind[] = [
   'subgraph',
   'human',
   'action',
+  'join',
 ];
 
 /**
@@ -177,6 +179,10 @@ function blankNode(
       return { ...base, kind, label: 'Approval', approvers: ['approver'], timeoutMinutes: null };
     case 'action':
       return { ...base, kind, label: 'Action', name: 'action' };
+    case 'join':
+      // Nothing of its own: what it waits for is the edges drawn into it
+      // next, and publish refuses it until there are two.
+      return { ...base, kind, label: 'Join' };
   }
 }
 
@@ -370,5 +376,7 @@ export function nodeSubtitle(
     }
     case 'action':
       return node.name;
+    case 'join':
+      return 'waits for every incoming branch';
   }
 }

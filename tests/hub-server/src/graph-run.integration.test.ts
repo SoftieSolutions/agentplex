@@ -121,12 +121,18 @@ let migrated: MigratedSchema | null = null;
 let harness: Harness | null = null;
 let suite = 0;
 
-/** The provider writing its transcript as a spawned session comes up. */
-function providerWrites(sessionId: string, cwd: string): void {
+/**
+ * The provider writing its transcript as a spawned session comes up. `pid`
+ * is the process the provider verified as the session's own, which is how a
+ * server tells apart two sessions that came up at once: by time alone it
+ * binds only when exactly one session fits.
+ */
+function providerWrites(sessionId: string, cwd: string, pid?: number): void {
   held().machine.transcripts[`/volumes/work/claude/sessions/${sessionId}.json`] = JSON.stringify({
     signal: 'awaiting-input',
     updatedAt: START,
     cwd,
+    ...(pid === undefined ? {} : { running: true, pid }),
   });
 }
 
@@ -598,6 +604,87 @@ describe('a graph run over the whole path', () => {
       holder: { server: ATTIC, stoppable: true },
       task: PROMPT,
     });
+  });
+
+  it('runs two AGENT branches at once, both marked running, and goes on through the JOIN once', async () => {
+    const TS_PROMPT = 'Review the TypeScript in this change.';
+    const agentNode = {
+      ...BASE,
+      kind: 'agent',
+      provider: 'claude',
+      storeId: WORK,
+    };
+    const fanned: GraphDocument = graphDocumentSchema.parse({
+      nodes: [
+        { ...BASE, id: 'start', kind: 'trigger', label: 'PR opened', source: 'manual' },
+        { ...agentNode, id: 'rust', label: 'Rust reviewer', prompt: PROMPT },
+        { ...agentNode, id: 'ts', label: 'TS reviewer', prompt: TS_PROMPT },
+        { ...BASE, id: 'both', kind: 'join', label: 'Both reviews' },
+      ],
+      edges: [
+        { from: 'start', to: 'rust' },
+        { from: 'start', to: 'ts' },
+        { from: 'rust', to: 'both' },
+        { from: 'ts', to: 'both' },
+      ],
+    });
+    const client = await attach();
+    const nodeId = await publishedGraph(client, fanned);
+    // Each session's transcript names the process the provider verified as
+    // its own -- the fake machine hands out pids 1000, 1001 in fork order --
+    // because two sessions that come up at once in one directory are told
+    // apart by pid: by time alone the server binds only when one fits.
+    providerWrites('session-first-fork', PROJECT_DIRECTORY, 1000);
+    providerWrites('session-second-fork', PROJECT_DIRECTORY, 1001);
+
+    await client.say({ type: 'graph-run', id: 5, nodeId, input: { language: 'rust' } });
+    expect(client.reply(5).type).toBe('graph-run-started');
+
+    // Both sessions are forked before either has said anything: two steps in
+    // flight in one state, which is the two running cards on the canvas.
+    await until(() => held().machine.ptys.opened.length === 2, 'both sessions to be forked');
+    expect(held().machine.ptys.opened.map((request) => request.args)).toEqual([
+      [PROMPT],
+      [TS_PROMPT],
+    ]);
+    await until(
+      () =>
+        runStates(client).some(
+          (state) =>
+            state.status === 'running' &&
+            state.steps.filter((step) => step.outcome === 'running').length === 2,
+        ),
+      'both branches to be running at once',
+    );
+
+    await until(
+      () => runStates(client).some((state) => state.status === 'succeeded'),
+      'the run to succeed through the join',
+    );
+
+    // No state has the join reached while either branch is still open.
+    const open = (outcome: string): boolean => outcome === 'running' || outcome === 'waiting';
+    expect(
+      runStates(client).some(
+        (state) =>
+          state.steps.some((step) => step.nodeId === 'both') &&
+          state.steps.some((step) => step.nodeId !== 'both' && open(step.outcome)),
+      ),
+    ).toBe(false);
+
+    const ended = runStates(client).at(-1);
+    expect(ended).toMatchObject({ status: 'succeeded', reason: null, step: 4, of: 4 });
+    expect(ended?.steps.map((step) => `${step.nodeId} ${step.outcome}`).sort()).toEqual(
+      ['both succeeded', 'rust succeeded', 'start succeeded', 'ts succeeded'].sort(),
+    );
+    // The join was reached once, after both branches, and is the last step.
+    expect(ended?.steps.filter((step) => step.nodeId === 'both')).toHaveLength(1);
+    expect(ended?.steps.at(-1)?.nodeId).toBe('both');
+    // Each branch ran its own session, named by the process it forked.
+    const sessions = (ended?.steps ?? []).flatMap((step) =>
+      step.output?.kind === 'session' ? [`${step.nodeId} ${step.output.sessionId}`] : [],
+    );
+    expect(sessions.sort()).toEqual(['rust session-first-fork', 'ts session-second-fork']);
   });
 
   it('fails a run whose router matches nothing, naming the node, and starts no session', async () => {

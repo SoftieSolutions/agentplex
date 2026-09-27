@@ -281,6 +281,15 @@ function labelFor(text: string): string {
     if (frame.status === 'succeeded' && frame.steps.some((step) => step.child !== null)) {
       return 'graphRunStateSubgraph';
     }
+    // A run with more than one step in flight has fanned out: the reading
+    // the canvas draws as several running cards at once.
+    if (
+      frame.status === 'running' &&
+      frame.steps.filter((step) => step.outcome === 'running' || step.outcome === 'waiting')
+        .length > 1
+    ) {
+      return 'graphRunStateBranches';
+    }
     // Labelled by where the run is, because those are the readings the strip
     // has to draw apart: live, and each of the three ways a run ends.
     switch (frame.status) {
@@ -2378,6 +2387,125 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const graphSimulated = starter.received.find((text) => labelFor(text) === 'graphSimulated');
     if (graphSimulated === undefined) throw new Error('the simulation was not answered');
 
+    // A run that fans out. A sixth graph: the TRIGGER goes on to two AGENT
+    // nodes at once, which meet at a JOIN. Both steps start sessions through
+    // the path a client's start takes, and neither session is ever named, so
+    // the run parks with both branches in flight: the state the canvas draws
+    // as two running cards at once, captured rather than imagined. The open
+    // answer carries the document with its JOIN, which is what the canvas
+    // draws the join card from. A cancel ends it, so nothing after this
+    // inherits a run in flight.
+    starter.send({
+      type: 'graph-create',
+      id: 44,
+      projectId: created.value.nodeId,
+      name: 'dual-review',
+    });
+    const answersDualCreate = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-created' && seen.value.replyTo === 44;
+    };
+    await until(() => starter.received.some(answersDualCreate), 'the fanned graph to be made');
+    const dualCreated = starter.received.find(answersDualCreate);
+    const dual = dualCreated === undefined ? null : parseTextFrame(parseHubFrame, dualCreated);
+    if (dual === null || !dual.ok || dual.value.type !== 'graph-created') {
+      throw new Error('the fanned graph was not made');
+    }
+    const reviewer = {
+      ...graphBase,
+      kind: 'agent',
+      placement: { kind: 'pin', server: 'registration-mbp-robert' },
+      provider: 'claude',
+      storeId: 'store-agentplex',
+    } as const;
+    starter.send({
+      type: 'graph-save',
+      id: 45,
+      nodeId: dual.value.nodeId,
+      document: {
+        nodes: [
+          { ...graphBase, id: 'start', kind: 'trigger', label: 'PR opened', source: 'manual' },
+          {
+            ...reviewer,
+            id: 'rust',
+            label: 'Rust reviewer',
+            position: { x: 500, y: 62 },
+            prompt: 'Review the Rust in this change.',
+          },
+          {
+            ...reviewer,
+            id: 'ts',
+            label: 'TS reviewer',
+            position: { x: 500, y: 152 },
+            prompt: 'Review the TypeScript in this change.',
+          },
+          {
+            ...graphBase,
+            id: 'both',
+            kind: 'join',
+            label: 'Both reviews',
+            position: { x: 700, y: 156 },
+          },
+        ],
+        edges: [
+          { from: 'start', to: 'rust' },
+          { from: 'start', to: 'ts' },
+          { from: 'rust', to: 'both' },
+          { from: 'ts', to: 'both' },
+        ],
+      },
+    });
+    starter.send({ type: 'graph-publish', id: 46, nodeId: dual.value.nodeId });
+    const answersDualPublish = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-published' && seen.value.replyTo === 46;
+    };
+    await until(() => starter.received.some(answersDualPublish), 'the fanned graph to publish');
+    starter.send({ type: 'graph-open', id: 47, nodeId: dual.value.nodeId });
+    const answersDualOpen = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-document' && seen.value.replyTo === 47;
+    };
+    await until(() => starter.received.some(answersDualOpen), 'the fanned graph to open');
+    const graphDocumentBranches = starter.received.find(answersDualOpen);
+    if (graphDocumentBranches === undefined) throw new Error('the fanned graph did not open');
+    starter.send({
+      type: 'graph-run',
+      id: 48,
+      nodeId: dual.value.nodeId,
+      input: { language: 'rust' },
+    });
+    const answersDualRun = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-run-started' && seen.value.replyTo === 48;
+    };
+    await until(() => starter.received.some(answersDualRun), 'the fanned run to be answered');
+    const dualStarted = starter.received.find(answersDualRun);
+    const dualRun = dualStarted === undefined ? null : parseTextFrame(parseHubFrame, dualStarted);
+    if (dualRun === null || !dualRun.ok || dualRun.value.type !== 'graph-run-started') {
+      throw new Error('the fanned run was not started');
+    }
+    const dualRunId = dualRun.value.runId;
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunStateBranches'),
+      'the fanned run to have both branches in flight',
+    );
+    const graphRunStateBranches = starter.received.find(
+      (text) => labelFor(text) === 'graphRunStateBranches',
+    );
+    if (graphRunStateBranches === undefined) throw new Error('the fanned run never fanned out');
+    starter.send({ type: 'graph-run-cancel', id: 49, runId: dualRunId });
+    const dualEnded = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return (
+        seen.ok &&
+        seen.value.type === 'graph-run-state' &&
+        seen.value.runId === dualRunId &&
+        seen.value.status === 'cancelled'
+      );
+    };
+    await until(() => starter.received.some(dualEnded), 'the fanned run to end cancelled');
+
     // The same save once the machine has gone away, which is the refusal the
     // editor is written around: the hub holds no copy of a document, so a
     // write it cannot deliver is a no with the machine named in it, and what
@@ -3356,6 +3484,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('graphRunStateSubgraph', graphRunStateSubgraph);
     captured.set('graphRunHistory', graphRunHistory);
     captured.set('graphSimulated', graphSimulated);
+    captured.set('graphDocumentBranches', graphDocumentBranches);
+    captured.set('graphRunStateBranches', graphRunStateBranches);
     captured.set('layoutWithProject', layoutWithProject);
     captured.set('nodeCreated', nodeCreated);
     captured.set('nodeMoved', nodeMoved);

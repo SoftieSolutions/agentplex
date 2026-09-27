@@ -18,7 +18,7 @@ import { addNode, connect, KIND_WORDS, KINDS, type NodeSeed } from './graph-mode
 import { createGraphStore } from './graph-store.js';
 import { NodeInspector, type InspectorMachine } from './node-inspector.js';
 import { RunHistory } from './run-history.js';
-import { isRunOpen, lastOutputFor, runningNode } from './run-model.js';
+import { isRunOpen, lastOutputFor, runningNodes } from './run-model.js';
 import { RunStrip } from './run-strip.js';
 import { SimulatePanel } from './simulate-panel.js';
 import { sampleInput } from './simulate-model.js';
@@ -196,7 +196,7 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
   const muted = colorForRole('textMuted', scheme);
   const document = state.document;
   const selected = document?.nodes.find((node) => node.id === state.selection) ?? null;
-  const running = runningNode(state.run, state.runStale);
+  const running = runningNodes(state.run, state.runStale);
   const simulateBlocked = state.dirty
     ? 'Save the draft first: a simulation walks the draft the hub holds'
     : null;
@@ -435,7 +435,7 @@ interface AddNodeMenuProps {
   readonly onPick: (kind: GraphNodeKind) => void;
 }
 
-/** The six kinds, in the model's order, each a row that adds one. */
+/** Every kind, in the model's order, each a row that adds one. */
 function AddNodeMenu({ disabled, onPick }: AddNodeMenuProps): JSX.Element {
   return (
     <Menu position="bottom-end" shadow="md" withinPortal>

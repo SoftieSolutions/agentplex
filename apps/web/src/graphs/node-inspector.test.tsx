@@ -72,6 +72,15 @@ function fixtureDocument(): GraphDocument {
   return parsed.value.document;
 }
 
+/** The document a real hub answered the open of a graph that fans out and joins with. */
+function branchesDocument(): GraphDocument {
+  const parsed = parseTextFrame(parseHubFrame, hubFrames.graphDocumentBranches);
+  if (!parsed.ok || parsed.value.type !== 'graph-document') {
+    throw new Error('the captured frame is not a graph document');
+  }
+  return parsed.value.document;
+}
+
 function nodeNamed(document: GraphDocument, id: string): GraphNode {
   const node = document.nodes.find((each) => each.id === id);
   if (node === undefined) throw new Error(`the fixture has no node ${id}`);
@@ -244,6 +253,22 @@ describe('NodeInspector', () => {
     expect(container.querySelector('[aria-label="Timeout"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="Retry max"]')).toBeNull();
     expect(container.querySelector('[aria-label="Retry backoff"]')).toBeNull();
+  });
+
+  it('draws a JOIN with no fields, only what it does: it waits for every incoming branch', async () => {
+    const branches = branchesDocument();
+    await mount(nodeNamed(branches, 'both'), branches);
+
+    expect(container.textContent).toContain('JOIN · SELECTED');
+    expect(input('Label').value).toBe('Both reviews');
+    expect(container.querySelector('[data-join-sentence]')?.textContent).toBe(
+      'Waits for every incoming branch, then goes on once with what each made.',
+    );
+    // A join runs nothing, so there is no machine to place it on and no try to repeat.
+    expect(container.querySelector('input[type="radio"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Retry max"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Retry backoff"]')).toBeNull();
+    expect(buttons()).toContain('Remove node');
   });
 
   it('draws a TRIGGER with its source and no fields that are not its own', async () => {
