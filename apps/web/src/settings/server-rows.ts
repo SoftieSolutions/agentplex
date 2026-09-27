@@ -3,9 +3,11 @@ import type {
   ProviderReadiness,
   ServerDraining,
   ServerRegistrationId,
+  ServerRoundTrip,
   ServerView,
   StaleReason,
 } from '@agentplex/protocol';
+import { ageLabel } from '../sessions/session-list-model.js';
 import type { ProviderRowView } from '../ui/provider-line.js';
 import type { Tone } from '../ui/tokens.js';
 
@@ -25,12 +27,12 @@ export type ServerTone = Exclude<Tone, 'paused'>;
  * component so the mapping from wire fact to screen word is testable without
  * a DOM.
  *
- * What is *not* here is as deliberate as what is. There is no latency, because
- * the machine state carries none: only the end that dialled can time a round
- * trip, the hub does not yet measure one, and a figure invented client-side
- * would be an over-claim about how far away a machine is. The pairing token is
- * nowhere near the wire at all, by design — it travels once, inbound, on the
- * frame that pairs a server.
+ * The round trip is the hub's: only the end that dialled can time one, so the
+ * figure here is the one the hub measured ping to pong, never one a client
+ * worked out. A machine with no pong yet has no figure, rather than a zero.
+ * What is *not* here is as deliberate as what is: the pairing token is nowhere
+ * near the wire at all, by design — it travels once, inbound, on the frame
+ * that pairs a server.
  *
  * The address is drawn, and it is the one thing on this row the user typed.
  * Two machines a person labelled `gpu-box` are one row twice without it, and
@@ -91,6 +93,54 @@ export interface ServerRowView {
    * appeared and vanished, with nothing on any screen pointing at the cause.
    */
   readonly providers: readonly ProviderRowView[];
+  /**
+   * The last heartbeat the hub completed with this machine, or `null` while
+   * there is none -- before the first pong, and once the connection has ended.
+   *
+   * Carried as the reading rather than as words, for the reason
+   * `connectedSince` is: whether it is old enough to need its age is a
+   * question for the clock that ticks, which is the drawing's, and
+   * `roundTripWords` is how the drawing asks it.
+   */
+  readonly roundTrip: ServerRoundTrip | null;
+  /** Whether that round trip is past `SLOW_ROUND_TRIP_MS`, which is drawn in a warning tone. */
+  readonly slow: boolean;
+}
+
+/**
+ * The round trip past which a machine is drawn in the warning tone.
+ *
+ * A named threshold rather than a hue: what it decides is the tone, and the
+ * tone is the tokens file's. 200 ms is where a terminal starts to feel like
+ * it is echoing somebody else's keystrokes.
+ */
+export const SLOW_ROUND_TRIP_MS = 200;
+
+/**
+ * How old a reading may be and still be drawn as current.
+ *
+ * Three heartbeats: the hub pings every 20 s and gives up on a pong after 10,
+ * so a live link is never a minute behind. Past this the figure is still worth
+ * showing -- it is the last thing known -- but only with its age beside it.
+ */
+export const ROUND_TRIP_FRESH_MS = 60_000;
+
+/** Whether a reading is past the threshold. No reading is not slow: it is unmeasured. */
+export function isSlowRoundTrip(reading: ServerRoundTrip | null): boolean {
+  return reading !== null && reading.ms > SLOW_ROUND_TRIP_MS;
+}
+
+/**
+ * A round trip in the words a row draws, as of `now`: `12ms`, or
+ * `12ms · 3m ago` for one older than `ROUND_TRIP_FRESH_MS`, or `null` when no
+ * pong has been timed -- never a zero, which would draw as the fastest machine
+ * in the fleet.
+ */
+export function roundTripWords(reading: ServerRoundTrip | null, now: number): string | null {
+  if (reading === null) return null;
+  const figure = `${String(reading.ms)}ms`;
+  if (now - reading.measuredAt <= ROUND_TRIP_FRESH_MS) return figure;
+  return `${figure} · ${ageLabel(now, reading.measuredAt)} ago`;
 }
 
 /**
@@ -204,5 +254,7 @@ export function serverRows(state: MachineState | null): readonly ServerRowView[]
     connectedSince: view.connectedSince,
     stores: view.stores,
     providers: view.providers.map(providerRow),
+    roundTrip: view.roundTrip,
+    slow: isSlowRoundTrip(view.roundTrip),
   }));
 }

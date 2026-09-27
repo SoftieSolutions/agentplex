@@ -6,7 +6,7 @@ import {
   ALL_MACHINES,
   machineHeader,
   machineSelector,
-  type MachineRow,
+  type MachineSelectorRow,
 } from './machine-selector-model.js';
 
 /**
@@ -30,6 +30,13 @@ export interface MachineSelectorProps {
   /** `null` is All machines: the selection taken away, not a machine named. */
   readonly onPick: (machine: ServerRegistrationId | null) => void;
   readonly scheme: Scheme;
+  /**
+   * The clock a round trip's age is read against, injected so a test can pin
+   * one. Read once per render, during it: the state is republished on every
+   * pong, so the selector is redrawn well inside the window a reading stays
+   * current for, and a ticking effect would be a second clock for one line.
+   */
+  readonly now?: () => number;
 }
 
 export function MachineSelector({
@@ -37,8 +44,9 @@ export function MachineSelector({
   chosen,
   onPick,
   scheme,
+  now = Date.now,
 }: MachineSelectorProps): JSX.Element {
-  const view = machineSelector(state, chosen);
+  const view = machineSelector(state, chosen, now());
   const wide = machineHeader(view, 'wide');
   const narrow = machineHeader(view, 'narrow');
   const muted = colorForRole('textMuted', scheme);
@@ -60,7 +68,7 @@ export function MachineSelector({
               {wide.title}
             </Text>
             {wide.detail === null ? null : (
-              <Text component="span" fz={11} c={muted} visibleFrom="md">
+              <Text component="span" ff="monospace" fz={10} fw={500} c={muted} visibleFrom="md">
                 {wide.detail}
               </Text>
             )}
@@ -100,7 +108,7 @@ export function MachineSelector({
 }
 
 interface MachineRowLineProps {
-  readonly row: MachineRow;
+  readonly row: MachineSelectorRow;
   readonly scheme: Scheme;
 }
 
@@ -111,6 +119,10 @@ interface MachineRowLineProps {
  * menu is where a person learns what `gpu` on a row means; the full label sits
  * beside it because the short one is an abbreviation and an abbreviation alone
  * is not a machine's name.
+ *
+ * The words at the right are the round trip the hub measured, or the phase
+ * where there is no figure. A slow one takes the warning tone, which is the
+ * mockup's (6c) amber for a machine that is up and far away.
  */
 function MachineRowLine({ row, scheme }: MachineRowLineProps): JSX.Element {
   return (
@@ -133,12 +145,22 @@ function MachineRowLine({ row, scheme }: MachineRowLineProps): JSX.Element {
       </Text>
       <Text
         component="span"
+        {...(row.measured ? { ff: 'monospace', fw: 500 } : {})}
         fz={11}
-        c={colorForRole('textFaint', scheme)}
-        style={{ flexShrink: 0 }}
+        style={{ flexShrink: 0, color: trailingColor(row, scheme) }}
       >
-        {row.words}
+        {row.trailing}
       </Text>
     </Group>
   );
+}
+
+/**
+ * The right-hand words' colour: the warning tone for a slow round trip, the
+ * muted text a figure is drawn in (mockup 6c), and the faint text the phase
+ * words have always had.
+ */
+function trailingColor(row: MachineSelectorRow, scheme: Scheme): string {
+  if (row.slow) return colorForTone('needs-you', scheme);
+  return colorForRole(row.measured ? 'textMuted' : 'textFaint', scheme);
 }

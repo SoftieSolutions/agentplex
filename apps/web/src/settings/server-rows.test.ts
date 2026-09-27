@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { serverRows } from './server-rows.js';
+import {
+  ROUND_TRIP_FRESH_MS,
+  roundTripWords,
+  serverRows,
+  SLOW_ROUND_TRIP_MS,
+} from './server-rows.js';
 
 /** Reads a captured machine-state frame the way the store does. */
 function stateFrom(text: string): MachineState {
@@ -231,5 +236,56 @@ describe('the paired-server rows', () => {
     });
 
     expect(projected?.providers[0]).toMatchObject({ tone: 'needs-you', words: 'claude unknown' });
+  });
+
+  it('carries the round trip the hub timed, and no figure for a machine it has not', () => {
+    // Captured from a hub whose heartbeat fired and whose clock moved 12 ms
+    // before the pong was read. The reading is carried raw, like the moment the
+    // connection began: its age is the drawing's to work out, on a clock that
+    // ticks.
+    const [measured] = serverRows(stateFrom(hubFrames.machineStateMeasured));
+    expect(measured?.roundTrip).toMatchObject({ ms: 12, measuredAt: 1_756_000_020_012 });
+    expect(measured?.slow).toBe(false);
+
+    const [unmeasured] = serverRows(stateFrom(hubFrames.machineStateJustPaired));
+    expect(unmeasured?.roundTrip).toBeNull();
+    expect(unmeasured?.slow).toBe(false);
+  });
+
+  it('calls a round trip past the threshold slow, and one at it not', () => {
+    const captured = stateFrom(hubFrames.machineStateMeasured);
+    const row = captured.servers[0];
+    expect(row?.roundTrip).not.toBeNull();
+    if (row === undefined || row.roundTrip === null) return;
+
+    const reading = row.roundTrip;
+    const at = (ms: number) =>
+      serverRows({ ...captured, servers: [{ ...row, roundTrip: { ...reading, ms } }] })[0]?.slow;
+    expect(at(SLOW_ROUND_TRIP_MS)).toBe(false);
+    expect(at(SLOW_ROUND_TRIP_MS + 1)).toBe(true);
+    expect(at(410)).toBe(true);
+  });
+});
+
+describe('a round trip in words', () => {
+  const reading = { ms: 12, load: null, measuredAt: 1_756_000_020_012 };
+
+  it('is the figure alone while it is fresh', () => {
+    expect(roundTripWords(reading, reading.measuredAt)).toBe('12ms');
+    expect(roundTripWords(reading, reading.measuredAt + ROUND_TRIP_FRESH_MS)).toBe('12ms');
+  });
+
+  it('carries its age once it is older than the heartbeat keeps a live link', () => {
+    // Never shown as current: a figure a minute past its pong is a figure for
+    // a link nobody has timed since, and the age is what says so.
+    expect(roundTripWords(reading, reading.measuredAt + ROUND_TRIP_FRESH_MS + 1)).toBe(
+      '12ms · 1m ago',
+    );
+    expect(roundTripWords(reading, reading.measuredAt + 3 * 60_000)).toBe('12ms · 3m ago');
+    expect(roundTripWords(reading, reading.measuredAt + 2 * 3_600_000)).toBe('12ms · 2h ago');
+  });
+
+  it('is nothing at all before a pong has been timed, rather than a zero', () => {
+    expect(roundTripWords(null, reading.measuredAt)).toBeNull();
   });
 });
