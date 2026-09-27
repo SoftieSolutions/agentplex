@@ -6,7 +6,13 @@ import { terminalKey } from '../store/terminals.js';
 import type { TerminalWatchView } from '../store/views.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Group, Stack, Text, useComputedColorScheme } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
+import {
+  colorForRole,
+  colorForTone,
+  colorForToneText,
+  type Scheme,
+  type Tone,
+} from '../ui/tokens.js';
 import type { EmulatorFactory } from './emulator.js';
 import { pendingWords, type PendingWords } from './pending-pane-model.js';
 import { terminalInputNotice, terminalScopeNotice } from './presentation.js';
@@ -98,7 +104,7 @@ export function PendingPane({ startId, store: hub, emulators }: PendingPaneProps
     <Stack gap={0} style={{ height: '100%' }}>
       <Group gap={10} px={18} py={10} style={{ borderBottom: border }} wrap="nowrap">
         <Box w={6} h={6} style={{ borderRadius: '50%', background: colorForTone(tone, scheme) }} />
-        <Text fz={13} role="status" style={{ color: colorForTone(tone, scheme) }}>
+        <Text fz={13} role="status" style={{ color: colorForToneText(tone, scheme) }}>
           {words.words}
         </Text>
       </Group>
@@ -139,7 +145,7 @@ export function PendingPane({ startId, store: hub, emulators }: PendingPaneProps
       )}
 
       {notice !== null && (
-        <Text fz={11} px={18} py={6} style={{ color: colorForTone('blocked', scheme) }}>
+        <Text fz={11} px={18} py={6} style={{ color: colorForToneText('blocked', scheme) }}>
           {notice}
         </Text>
       )}

@@ -11,7 +11,7 @@ import {
   Title,
 } from '../ui/components.js';
 import { ToneDot } from '../ui/tone-dot.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import {
   parsePairingForm,
   prefillFromCandidate,
@@ -159,7 +159,7 @@ export function PairingPanel({
             {outcome.words}
           </Text>
         ) : (
-          <Text size="md" style={{ color: colorForTone('blocked', scheme) }}>
+          <Text size="md" style={{ color: colorForToneText('blocked', scheme) }}>
             {outcome.words}
           </Text>
         ))}
@@ -210,7 +210,7 @@ function CandidateRow({
             {candidate.host}:{candidate.port} · server protocol {candidate.protocolVersion}
           </Text>
           {candidate.unusable !== null && (
-            <Text size="sm" style={{ color: colorForTone('blocked', scheme) }}>
+            <Text size="sm" style={{ color: colorForToneText('blocked', scheme) }}>
               {candidate.unusable}
             </Text>
           )}

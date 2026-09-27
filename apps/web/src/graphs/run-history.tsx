@@ -1,7 +1,7 @@
 import type { JSX } from 'react';
 import type { GraphRunId, GraphRunSummary } from '@agentplex/protocol';
 import { Box, Stack, Text, UnstyledButton } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForTone, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { historyRows } from './run-history-model.js';
 
 /**
@@ -79,7 +79,7 @@ export function RunHistory({ runs, selected, scheme, onSelect }: RunHistoryProps
             </Text>
           </Box>
           {row.reason === null ? null : (
-            <Text fz={11} pl={14} style={{ color: colorForTone(row.tone, scheme) }} truncate>
+            <Text fz={11} pl={14} style={{ color: colorForToneText(row.tone, scheme) }} truncate>
               {row.reason}
             </Text>
           )}

@@ -1,7 +1,7 @@
 import type { JSX } from 'react';
 import type { GraphRunState } from '@agentplex/protocol';
 import { Button, Group, Text } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForTone, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { isRunOpen, runStripText, runTone } from './run-model.js';
 
 /**
@@ -31,7 +31,8 @@ const MONO = { fontFamily: 'var(--mantine-font-family-monospace)' } as const;
 
 export function RunStrip({ run, scheme, cancelling, stale, onCancel }: RunStripProps): JSX.Element {
   const toneName = runTone(run.status, stale);
-  const tone = colorForTone(toneName, scheme);
+  const dot = colorForTone(toneName, scheme);
+  const word = colorForToneText(toneName, scheme);
   return (
     <Group
       data-run-strip={run.runId}
@@ -50,7 +51,7 @@ export function RunStrip({ run, scheme, cancelling, stale, onCancel }: RunStripP
           width: 8,
           height: 8,
           borderRadius: 4,
-          background: tone,
+          background: dot,
           flexShrink: 0,
         }}
       />
@@ -58,7 +59,7 @@ export function RunStrip({ run, scheme, cancelling, stale, onCancel }: RunStripP
         {runStripText(run, stale)}
       </Text>
       {run.reason === null ? null : (
-        <Text fz={12} style={{ color: tone, minWidth: 0 }} truncate>
+        <Text fz={12} style={{ color: word, minWidth: 0 }} truncate>
           {run.reason}
         </Text>
       )}

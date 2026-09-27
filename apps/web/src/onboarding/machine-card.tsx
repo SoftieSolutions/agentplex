@@ -4,7 +4,13 @@ import { ageLabel } from '../sessions/session-list-model.js';
 import { Group, Paper, Stack, Text } from '../ui/components.js';
 import { ProviderLine } from '../ui/provider-line.js';
 import { ToneDot } from '../ui/tone-dot.js';
-import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
+import {
+  colorForRole,
+  colorForTone,
+  colorForToneText,
+  type Scheme,
+  type Tone,
+} from '../ui/tokens.js';
 import { AdoptedSessions } from './adopted-sessions.js';
 import type { AdoptedSession } from './adopted-sessions-model.js';
 import type { PairProgress } from './pair-progress-model.js';
@@ -138,7 +144,7 @@ export function MachineCard({
         <CardFrame tone="blocked" scheme={scheme} headline={`${progress.label} ${progress.words}`}>
           <DetailLine scheme={scheme} text={progress.address} />
           {progress.problem !== null && (
-            <Text fz={13} lh={1.6} style={{ color: colorForTone('blocked', scheme) }}>
+            <Text fz={13} lh={1.6} style={{ color: colorForToneText('blocked', scheme) }}>
               {progress.problem}
             </Text>
           )}

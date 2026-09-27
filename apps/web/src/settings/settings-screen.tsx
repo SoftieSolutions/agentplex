@@ -22,7 +22,7 @@ import {
 } from '../ui/components.js';
 import { ProviderLine } from '../ui/provider-line.js';
 import { ToneDot } from '../ui/tone-dot.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { useMockSwitch } from '../mock/use-mock-mode.js';
 import { ColorSchemeControl } from './color-scheme-control.js';
 import { DeveloperSection } from './developer-section.js';
@@ -210,12 +210,12 @@ function HubAccessSection({
         </Text>
       </Group>
       {snapshot.problem !== null && (
-        <Text size="md" style={{ color: colorForTone('blocked', scheme) }}>
+        <Text size="md" style={{ color: colorForToneText('blocked', scheme) }}>
           {snapshot.problem}
         </Text>
       )}
       {refused !== null && (
-        <Text size="md" style={{ color: colorForTone('blocked', scheme) }}>
+        <Text size="md" style={{ color: colorForToneText('blocked', scheme) }}>
           The hub refused the last request: {refused.message}
         </Text>
       )}
@@ -373,7 +373,7 @@ function ServerRow({
               ` · ${String(row.stores.length)} store${row.stores.length === 1 ? '' : 's'}`}
           </Text>
           {row.problem !== null && (
-            <Text size="sm" style={{ color: colorForTone('blocked', scheme) }}>
+            <Text size="sm" style={{ color: colorForToneText('blocked', scheme) }}>
               {row.problem}
             </Text>
           )}
@@ -381,7 +381,7 @@ function ServerRow({
             <ProviderLine key={provider.name} provider={provider} scheme={scheme} />
           ))}
           {refusal !== null && (
-            <Text size="sm" style={{ color: colorForTone('blocked', scheme) }}>
+            <Text size="sm" style={{ color: colorForToneText('blocked', scheme) }}>
               {refusal}
             </Text>
           )}

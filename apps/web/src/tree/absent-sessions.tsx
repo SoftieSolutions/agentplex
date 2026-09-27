@@ -4,7 +4,7 @@ import type { CommandOutcome } from '../store/commands.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Button, Group, Stack, Text, Title } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { buildForgetRemoval, sessionsNotInTree, treeFollowUp } from './tree-model.js';
 
 /**
@@ -57,7 +57,7 @@ export function AbsentSessions({
         Not in your tree
       </Title>
       {refused === null ? null : (
-        <Text fz={12} style={{ color: colorForTone('blocked', scheme) }}>
+        <Text fz={12} style={{ color: colorForToneText('blocked', scheme) }}>
           {refused}
         </Text>
       )}

@@ -30,8 +30,9 @@ import { colorForRole, hues, shadows } from './tokens.js';
  *
  * Fonts are self-hosted through the fontsource imports above — Manrope for
  * UI, Fira Code for code and metadata — so nothing is fetched from a font CDN
- * at runtime. Components that color a status still call colorForTone rather
- * than reaching into a palette.
+ * at runtime. Components that color a status still ask tokens.ts for a tone
+ * (colorForTone for a dot, colorForToneText for a word) rather than reaching
+ * into a palette.
  */
 
 /**

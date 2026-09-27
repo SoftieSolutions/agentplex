@@ -4,7 +4,7 @@ import type { ServerRegistrationId } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Button, Group, Modal, Select, Stack, Text, TextInput } from '../ui/components.js';
-import { colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForToneText, type Scheme } from '../ui/tokens.js';
 import { DirectoryPicker } from './directory-picker.js';
 import {
   browsableServers,
@@ -140,17 +140,17 @@ export function NewProjectForm({
           </Text>
         )}
         {rejected === null ? null : (
-          <Text fz={13} style={{ color: colorForTone('blocked', scheme) }}>
+          <Text fz={13} style={{ color: colorForToneText('blocked', scheme) }}>
             {rejected}
           </Text>
         )}
         {refused === null ? null : (
-          <Text fz={13} style={{ color: colorForTone('blocked', scheme) }}>
+          <Text fz={13} style={{ color: colorForToneText('blocked', scheme) }}>
             {refused}
           </Text>
         )}
         {made === null ? null : (
-          <Text fz={13} style={{ color: colorForTone('running', scheme) }}>
+          <Text fz={13} style={{ color: colorForToneText('running', scheme) }}>
             {made}
           </Text>
         )}

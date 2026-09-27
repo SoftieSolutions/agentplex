@@ -726,6 +726,24 @@ export default tseslint.config(
           message:
             'Color literals live in apps/web/src/ui/tokens.ts and nowhere else. Name the hue there, or ask for a semantic tone via colorForTone.',
         },
+        // A tone has two hues: the dot's and the word's (AGX-357). The light
+        // dots fail AA as text on paper, so a word coloured with the dot hue
+        // is unreadable in exactly the scheme nobody tests by eye. Every
+        // place a colour reaches text -- a `color` style, Mantine's `c`, a
+        // `color` prop -- takes colorForToneText. A dot hue kept in a local
+        // and then used as text escapes this; name that local for what it
+        // paints.
+        {
+          selector: 'Property[key.name="color"] CallExpression[callee.name="colorForTone"]',
+          message:
+            'Text takes colorForToneText; colorForTone is the dot hue and fails AA as text on paper.',
+        },
+        {
+          selector:
+            'JSXAttribute[name.name=/^(c|color)$/] CallExpression[callee.name="colorForTone"]',
+          message:
+            'Text takes colorForToneText; colorForTone is the dot hue and fails AA as text on paper.',
+        },
       ],
     },
   },

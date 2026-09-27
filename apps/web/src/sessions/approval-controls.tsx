@@ -3,7 +3,7 @@ import type { ApprovalDecision, ApprovalId, ApprovalOutcome, FrameId } from '@ag
 import type { HubStore } from '../store/hub-store.js';
 import { shallowEqual, useHubSelector } from '../store/use-hub-store.js';
 import { Box, Button, Group, Text } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { approvalFollowUp, decideCommand } from './approval-model.js';
 import {
   allowAlwaysCommand,
@@ -399,7 +399,9 @@ export function ApprovalControls({
         fz={11}
         style={{
           color:
-            refused === null ? colorForRole('textMuted', scheme) : colorForTone('blocked', scheme),
+            refused === null
+              ? colorForRole('textMuted', scheme)
+              : colorForToneText('blocked', scheme),
         }}
       >
         {refused ??
@@ -421,7 +423,7 @@ export function ApprovalControls({
           fz={11}
           style={{
             color: ruleWords.startsWith('the rule was not added')
-              ? colorForTone('blocked', scheme)
+              ? colorForToneText('blocked', scheme)
               : colorForRole('textMuted', scheme),
           }}
         >

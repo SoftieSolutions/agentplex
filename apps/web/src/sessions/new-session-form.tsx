@@ -5,7 +5,7 @@ import { projectChoices } from '../projects/new-project-model.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import { Button, Group, Modal, Select, Stack, Text, Textarea } from '../ui/components.js';
-import { colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForToneText, type Scheme } from '../ui/tokens.js';
 import { StopButton } from './stop-button.js';
 import {
   buildStart,
@@ -249,7 +249,7 @@ export function NewSessionForm({
         {caveat === null ? null : (
           // Startable, and something about it could not be read. Beside the
           // control it concerns, in the tone that means look rather than stop.
-          <Text fz={12} style={{ color: colorForTone('needs-you', scheme) }}>
+          <Text fz={12} style={{ color: colorForToneText('needs-you', scheme) }}>
             {caveat}
           </Text>
         )}
@@ -312,13 +312,13 @@ export function NewSessionForm({
           </Text>
         )}
         {rejected === null ? null : (
-          <Text fz={13} style={{ color: colorForTone('blocked', scheme) }}>
+          <Text fz={13} style={{ color: colorForToneText('blocked', scheme) }}>
             {rejected}
           </Text>
         )}
         {refusal === null ? null : (
           <Stack gap={6}>
-            <Text fz={13} style={{ color: colorForTone('blocked', scheme) }}>
+            <Text fz={13} style={{ color: colorForToneText('blocked', scheme) }}>
               {refusal.words}
             </Text>
             {refusal.held === null ? null : (
@@ -342,7 +342,7 @@ export function NewSessionForm({
           </Stack>
         )}
         {started === null ? null : (
-          <Text fz={13} style={{ color: colorForTone('running', scheme) }}>
+          <Text fz={13} style={{ color: colorForToneText('running', scheme) }}>
             {started}
           </Text>
         )}

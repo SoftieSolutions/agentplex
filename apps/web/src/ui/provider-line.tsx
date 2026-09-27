@@ -1,7 +1,7 @@
 import type { JSX } from 'react';
 import { Group, Stack, Text } from './components.js';
 import { ToneDot } from './tone-dot.js';
-import { colorForTone, type Scheme, type Tone } from './tokens.js';
+import { colorForToneText, type Scheme, type Tone } from './tokens.js';
 
 /**
  * One agent a machine can, or cannot, start: a tone dot, the provider and its
@@ -31,7 +31,7 @@ export function ProviderLine({ provider, scheme }: ProviderLineProps): JSX.Eleme
         </Text>
       </Group>
       {provider.problem !== null && (
-        <Text size="sm" style={{ color: colorForTone(provider.tone, scheme) }}>
+        <Text size="sm" style={{ color: colorForToneText(provider.tone, scheme) }}>
           {provider.problem}
         </Text>
       )}

@@ -3,7 +3,7 @@ import type { FrameId } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Button, Group, Stack, Text, Title, useComputedColorScheme } from '../ui/components.js';
-import { colorForTone } from '../ui/tokens.js';
+import { colorForToneText } from '../ui/tokens.js';
 import { Section } from './settings-section.js';
 import type { PushBrowserState, PushOperations } from './push-operations.js';
 import {
@@ -285,7 +285,7 @@ export function PushControl({ store, push }: PushControlProps): JSX.Element | nu
         <Text
           size="md"
           role="status"
-          style={alarming ? { color: colorForTone('blocked', scheme) } : undefined}
+          style={alarming ? { color: colorForToneText('blocked', scheme) } : undefined}
         >
           {status ?? ''}
         </Text>

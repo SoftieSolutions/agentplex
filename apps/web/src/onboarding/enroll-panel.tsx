@@ -2,7 +2,7 @@ import { useState, type JSX } from 'react';
 import { browserClipboard, clipboardProblem, type Clipboard } from '../terminal/clipboard.js';
 import { Button, Code, Group, Stack, Tabs, Text, Title } from '../ui/components.js';
 import { ToneDot } from '../ui/tone-dot.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { installCommand, targetNotes, type InstallTarget } from './install-command.js';
 
 /**
@@ -252,7 +252,7 @@ function CopyLine({ outcome, scheme }: CopyLineProps): JSX.Element | null {
   return (
     <Group gap={8} align="center" wrap="nowrap">
       <ToneDot tone={copied ? 'running' : 'blocked'} scheme={scheme} />
-      <Text fz={12} c={colorForTone(copied ? 'running' : 'blocked', scheme)}>
+      <Text fz={12} c={colorForToneText(copied ? 'running' : 'blocked', scheme)}>
         {copied ? 'Copied. Run it on the machine you want to add.' : outcome.sentence}
       </Text>
     </Group>

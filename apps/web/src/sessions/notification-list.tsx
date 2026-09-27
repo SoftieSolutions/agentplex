@@ -1,7 +1,7 @@
 import { useId, type JSX, type MouseEvent } from 'react';
 import { Box, Text } from '../ui/components.js';
 import { ToneDot } from '../ui/tone-dot.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import type { NotificationList, NotificationRow } from './notification-model.js';
 
 /**
@@ -110,7 +110,7 @@ export function NotificationListView({
             // section under a mark has to add up to the mark, and this is the
             // one place the number is drawn rather than implied.
             words={`NEEDS YOU · ${list.needsYou.length}`}
-            color={colorForTone('needs-you', scheme)}
+            color={colorForToneText('needs-you', scheme)}
             scheme={scheme}
           />
           {list.needsYou.map((row) => (

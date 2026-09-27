@@ -3,7 +3,7 @@ import type { FrameId, SessionHolder, SessionRef } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { shallowEqual, useHubSelector } from '../store/use-hub-store.js';
 import { Button, Group, Text } from '../ui/components.js';
-import { colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForToneText, type Scheme } from '../ui/tokens.js';
 import { offersStop, stopCommand, stopFollowUp } from './stop-model.js';
 
 /**
@@ -82,7 +82,7 @@ export function StopButton({
         // Beside the button and not in place of it: the session is still
         // running, and the sentence is why this attempt was not what stopped
         // it.
-        <Text fz={11} role="status" style={{ color: colorForTone('blocked', scheme) }}>
+        <Text fz={11} role="status" style={{ color: colorForToneText('blocked', scheme) }}>
           {refused}
         </Text>
       )}

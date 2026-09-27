@@ -824,7 +824,7 @@ export function SessionPane({
                 fz={11}
                 px={18}
                 py={6}
-                style={{ color: colorForTone('blocked', scheme), borderTop: border }}
+                style={{ color: colorForToneText('blocked', scheme), borderTop: border }}
               >
                 {feed}
               </Text>
@@ -842,7 +842,7 @@ export function SessionPane({
             )}
 
             {notice !== null && (
-              <Text fz={11} px={18} py={6} style={{ color: colorForTone('blocked', scheme) }}>
+              <Text fz={11} px={18} py={6} style={{ color: colorForToneText('blocked', scheme) }}>
                 {notice}
               </Text>
             )}
@@ -1094,7 +1094,7 @@ export function SessionPane({
               px={18}
               py={6}
               role="alert"
-              style={{ color: colorForTone('blocked', scheme), borderBottom: border }}
+              style={{ color: colorForToneText('blocked', scheme), borderBottom: border }}
             >
               {clipboardNotice}
             </Text>

@@ -9,7 +9,7 @@ import {
 import type { HubStore } from '../store/hub-store.js';
 import { Box, Drawer, Group, Popover, Text, UnstyledButton } from '../ui/components.js';
 import { ToneDot } from '../ui/tone-dot.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import type { ShellForm } from './shell-form.js';
 
 /**
@@ -423,7 +423,7 @@ function PanelHeader({ rows, store, scheme }: PanelHeaderProps): JSX.Element {
         role="status"
         fz={11}
         style={{
-          color: colorForTone('blocked', scheme),
+          color: colorForToneText('blocked', scheme),
           padding: refused === null ? 0 : '0 14px 8px',
         }}
       >
