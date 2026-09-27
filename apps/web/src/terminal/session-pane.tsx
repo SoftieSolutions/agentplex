@@ -30,7 +30,7 @@ import {
   TextInput,
   useComputedColorScheme,
 } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForTone, colorForToneText, type Scheme } from '../ui/tokens.js';
 import {
   browserClipboard,
   clipboardProblem,
@@ -937,7 +937,9 @@ export function SessionPane({
         </Box>
         <Group gap={5} wrap="nowrap" data-status style={{ flex: 'none' }}>
           <ToneDot tone={tone} scheme={scheme} live={live} />
-          <Text fz={10} fw={500} style={{ ...MONO_META, color: colorForTone(tone, scheme) }}>
+          {/* The word's hue, not the dot's: the light running and blocked dots
+              do not read as text on paper (tokens.ts, toneTextHues). */}
+          <Text fz="2xs" fw={500} style={{ ...MONO_META, color: colorForToneText(tone, scheme) }}>
             {word}
           </Text>
         </Group>

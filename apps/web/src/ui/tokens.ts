@@ -167,6 +167,11 @@ export interface SchemeRoles {
   primaryButton: HueName;
   /** The word on the primary action. */
   onPrimaryButton: HueName;
+  /**
+   * The top bar. The page itself in dark, and paper in light, where the mock
+   * lifts the bar off the parchment page (7b, 7d).
+   */
+  chrome: HueName;
 }
 
 export const roles = {
@@ -194,6 +199,7 @@ export const roles = {
     onBrand: 'char',
     primaryButton: 'amber',
     onPrimaryButton: 'char',
+    chrome: 'char',
   },
   light: {
     background: 'parchment',
@@ -223,6 +229,7 @@ export const roles = {
     onBrand: 'amber',
     primaryButton: 'ink',
     onPrimaryButton: 'paper',
+    chrome: 'paper',
   },
 } as const satisfies Record<Scheme, SchemeRoles>;
 

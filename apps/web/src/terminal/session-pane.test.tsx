@@ -18,7 +18,7 @@ import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
-import { colorForTone } from '../ui/tokens.js';
+import { colorForTone, colorForToneText } from '../ui/tokens.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { NO_CLIPBOARD_HERE, type Clipboard } from './clipboard.js';
 import { createFakeClipboard, createRefusingClipboard } from './fake-clipboard.js';
@@ -183,24 +183,25 @@ afterEach(async () => {
   container.remove();
 });
 
-function withProvider(element: JSX.Element): JSX.Element {
+function withProvider(element: JSX.Element, scheme?: 'light'): JSX.Element {
   return (
     <MantineProvider
       theme={theme}
       cssVariablesResolver={cssVariablesResolver}
       defaultColorScheme="dark"
+      {...(scheme === undefined ? {} : { forceColorScheme: scheme })}
     >
       {element}
     </MantineProvider>
   );
 }
 
-async function mount(element: JSX.Element): Promise<void> {
+async function mount(element: JSX.Element, scheme?: 'light'): Promise<void> {
   await act(async () => {
     root = createRoot(container);
     // No StrictMode: its simulated remount would build a second emulator
     // and the count of what the bar asked the first one is the assertion.
-    root.render(withProvider(element));
+    root.render(withProvider(element, scheme));
   });
   await act(settle);
 }
@@ -773,6 +774,7 @@ describe('the pause in a session pane header', () => {
   async function mountPaneOn(
     sessionId: string,
     state: string = hubFrames.machineStatePaused,
+    scheme?: 'light',
   ): Promise<void> {
     const hub = buildStore();
     await mount(
@@ -781,6 +783,7 @@ describe('the pause in a session pane header', () => {
         store={hub.store}
         emulators={emulators}
       />,
+      scheme,
     );
     const socket = hub.socket();
     await act(async () => {
@@ -825,6 +828,15 @@ describe('the pause in a session pane header', () => {
     await mountPaneOn('session-spike-wasm', hubFrames.machineStatePopulated);
 
     expect(pauseButton()).toBeNull();
+  });
+
+  it('writes the status word in the tone text hue, which reads on paper where the dot hue would not', async () => {
+    await mountPaneOn('session-fix-auth', hubFrames.machineStatePopulated, 'light');
+
+    const word = container.querySelector<HTMLElement>('[data-status] > p');
+    expect(word?.textContent).toBe('working');
+    expect(word?.style.color).toBe(rgb(colorForToneText('running', 'light')));
+    expect(word?.style.color).not.toBe(rgb(colorForTone('running', 'light')));
   });
 });
 

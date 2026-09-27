@@ -333,6 +333,8 @@ describe('the attention bell', () => {
     await press();
 
     expect(panel().style.width).toBe(`${PANEL_WIDTH}px`);
+    // Inside the border, as the mock measures it.
+    expect(panel().style.boxSizing).toBe('content-box');
     expect(rows()).toHaveLength(2);
   });
 

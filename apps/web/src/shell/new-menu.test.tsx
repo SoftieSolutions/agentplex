@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
+import { colorForRole, roles, shadows, translucent, type Scheme } from '../ui/tokens.js';
 import { NEW_NODE_KINDS, newMenu, type NewMenu, type NewNodeKind } from './new-menu-model.js';
-import { NewMenuButton } from './new-menu.js';
+import { MENU_WIDTH, NewMenuButton } from './new-menu.js';
 
 /**
  * The New button and what it opens.
@@ -98,7 +99,7 @@ describe('the New menu', () => {
     window.location.hash = '';
   });
 
-  function draw(menu: NewMenu): void {
+  function draw(menu: NewMenu, scheme: Scheme = 'dark'): void {
     const element: JSX.Element = (
       <MantineProvider
         theme={theme}
@@ -117,7 +118,7 @@ describe('the New menu', () => {
           onPick={(kind) => {
             picked.push(kind);
           }}
-          scheme="dark"
+          scheme={scheme}
         />
       </MantineProvider>
     );
@@ -324,6 +325,55 @@ describe('the New menu', () => {
 
     expect(dropdown()).toBeNull();
     expect(picked).toEqual(['session']);
+  });
+
+  /** A colour as jsdom writes it back, so a token and a style compare alike. */
+  function normal(property: 'background' | 'color' | 'boxShadow', value: string): string {
+    const probe = document.createElement('div');
+    probe.style[property] = value;
+    return probe.style[property];
+  }
+
+  it('wears the primary button roles: amber on char in dark, paper on ink in light (7a, 7b)', () => {
+    for (const scheme of ['dark', 'light'] as const) {
+      draw(everything, scheme);
+      expect(trigger().style.background, scheme).toBe(
+        normal('background', colorForRole('primaryButton', scheme)),
+      );
+      expect(trigger().style.color, scheme).toBe(
+        normal('color', colorForRole('onPrimaryButton', scheme)),
+      );
+    }
+  });
+
+  it('divides the caret off in the word hue at a fifth, as the mock writes it', () => {
+    for (const scheme of ['dark', 'light'] as const) {
+      draw(everything, scheme);
+      const divider = container.querySelector<HTMLElement>('[data-new-menu-divider]');
+      expect(divider?.style.background, scheme).toBe(
+        normal('background', translucent(roles[scheme].onPrimaryButton, 0x33)),
+      );
+    }
+  });
+
+  it('opens a card the mock width inside its padding, so the longest description fits (7a)', async () => {
+    draw(everything);
+    act(() => {
+      trigger().click();
+    });
+    await flush();
+    expect(openedDropdown().style.width).toBe(`${String(MENU_WIDTH)}px`);
+    expect(openedDropdown().style.boxSizing).toBe('content-box');
+  });
+
+  it('rings itself in the accent while its menu is up, and not before', async () => {
+    draw(everything);
+    expect(trigger().style.boxShadow).toBe('');
+    act(() => {
+      trigger().click();
+    });
+    await flush();
+    expect(trigger().style.boxShadow).toBe(normal('boxShadow', shadows.dark.focusRing));
   });
 
   it('draws no button at all when nothing can be made', () => {

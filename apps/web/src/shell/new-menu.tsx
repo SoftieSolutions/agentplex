@@ -2,7 +2,7 @@ import { Fragment, useState, type CSSProperties, type JSX, type MouseEvent } fro
 import { opensElsewhere } from '../sessions/notification-list.js';
 import { Box, Popover, Text, UnstyledButton } from '../ui/components.js';
 import { ShortcutHint } from '../ui/shortcut-hint.js';
-import { colorForRole, type Scheme } from '../ui/tokens.js';
+import { colorForRole, roles, shadows, translucent, type Scheme } from '../ui/tokens.js';
 import type { NewMenu, NewMenuEntry, NewNodeKind } from './new-menu-model.js';
 
 /**
@@ -52,25 +52,45 @@ import type { NewMenu, NewMenuEntry, NewNodeKind } from './new-menu-model.js';
  * a promise.
  */
 
-/** The popover's width, as mockup 7a draws the card. */
+/**
+ * The popover's width, as mockup 7a draws the card: the width of what is
+ * inside it, with the padding and the border outside, the way the mock's own
+ * box model measures it. Taken as the border box it came out 14px narrow, and
+ * Enroll machine's description wrapped where the mock's fits on one line.
+ */
 export const MENU_WIDTH = 250;
 
-/** The accent pill in the chrome, which both shapes of the button wear. */
-function pillStyle(scheme: Scheme): CSSProperties {
+/**
+ * The primary pill in the chrome, which both shapes of the button wear: amber
+ * in dark and ink in light, as mocks 7a and 7b draw it, because white on the
+ * light accent is 2.5:1. Held open, it wears the accent ring 7a draws around
+ * it while its menu is up.
+ *
+ * The right padding is the mock's 6px: the caret's divider carries its own 6px
+ * inside, so the one-kind shape, which has no caret, pads both sides alike.
+ */
+function pillStyle(scheme: Scheme, shape: 'menu' | 'direct', opened = false): CSSProperties {
   return {
     display: 'flex',
     alignItems: 'center',
     gap: 6,
-    padding: '6px 10px',
+    padding: shape === 'menu' ? '6px 6px 6px 12px' : '6px 12px',
     borderRadius: 7,
-    background: colorForRole('accent', scheme),
-    color: colorForRole('onAccent', scheme),
+    background: colorForRole('primaryButton', scheme),
+    color: colorForRole('onPrimaryButton', scheme),
     fontWeight: 700,
-    fontSize: 13,
-    lineHeight: 1.2,
+    fontSize: 'var(--mantine-font-size-md)',
+    lineHeight: 'normal',
     textDecoration: 'none',
+    boxShadow: opened ? shadows[scheme].focusRing : undefined,
   };
 }
+
+/**
+ * A row's two lines, as mock 7a sets them. On each Text rather than on the box
+ * around them, because a Text sets its own line height and would not inherit.
+ */
+const ROW_LINE_HEIGHT = 1.25;
 
 /** One row of the popover, as the mockup spaces them. */
 function rowStyle(scheme: Scheme): CSSProperties {
@@ -135,6 +155,8 @@ export function NewMenuButton({ menu, onPick, scheme }: NewMenuButtonProps): JSX
       trapFocus
       returnFocus
       position="bottom-end"
+      // The mock's gap under the button (7a): the card's top edge at 50px.
+      offset={11}
       shadow="md"
     >
       <Popover.Target>
@@ -143,27 +165,31 @@ export function NewMenuButton({ menu, onPick, scheme }: NewMenuButtonProps): JSX
           aria-haspopup="dialog"
           aria-expanded={opened}
           onClick={() => setOpened(!opened)}
-          style={pillStyle(scheme)}
+          style={pillStyle(scheme, 'menu', opened)}
         >
           New
           <Box
             aria-hidden
+            data-new-menu-divider
             style={{
               alignSelf: 'stretch',
               width: 1,
-              background: colorForRole('onAccent', scheme),
-              opacity: 0.2,
+              // The word's own hue at a fifth, as the mock writes it (#14131133
+              // on amber, #ffffff33 on ink).
+              background: translucent(roles[scheme].onPrimaryButton, 0x33),
             }}
           />
-          <Text component="span" aria-hidden fz={10} lh={1.2}>
+          {/* At the word's size, as the mock sets it: the caret is text. */}
+          <Box component="span" aria-hidden>
             {opened ? '▴' : '▾'}
-          </Text>
+          </Box>
         </UnstyledButton>
       </Popover.Target>
       <Popover.Dropdown
         data-new-menu-dropdown
         style={{
           width: MENU_WIDTH,
+          boxSizing: 'content-box',
           padding: 6,
           borderRadius: 10,
           background: colorForRole('surface', scheme),
@@ -231,13 +257,17 @@ interface DirectButtonProps {
 function DirectButton({ entry, onPick, scheme }: DirectButtonProps): JSX.Element {
   if (entry.href !== undefined) {
     return (
-      <Box component="a" data-new-menu href={entry.href} style={pillStyle(scheme)}>
+      <Box component="a" data-new-menu href={entry.href} style={pillStyle(scheme, 'direct')}>
         {entry.label}
       </Box>
     );
   }
   return (
-    <UnstyledButton data-new-menu onClick={() => onPick(entry.kind)} style={pillStyle(scheme)}>
+    <UnstyledButton
+      data-new-menu
+      onClick={() => onPick(entry.kind)}
+      style={pillStyle(scheme, 'direct')}
+    >
       {entry.label}
     </UnstyledButton>
   );
@@ -255,11 +285,11 @@ function EntryRow({ entry, onPick, onClose, scheme }: EntryRowProps): JSX.Elemen
   const body = (
     <>
       <Glyph kind={entry.kind} scheme={scheme} />
-      <Box style={{ flex: 1, minWidth: 0, lineHeight: 1.25 }}>
-        <Text fz={12.5} fw={600} c={colorForRole('text', scheme)}>
+      <Box style={{ flex: 1, minWidth: 0 }}>
+        <Text fz="row" fw={600} lh={ROW_LINE_HEIGHT} c={colorForRole('text', scheme)}>
           {entry.label}
         </Text>
-        <Text fz={11} c={colorForRole('textMuted', scheme)}>
+        <Text fz="xs" lh={ROW_LINE_HEIGHT} c={colorForRole('textMuted', scheme)}>
           {entry.description}
         </Text>
       </Box>

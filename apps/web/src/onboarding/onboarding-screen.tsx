@@ -139,7 +139,15 @@ function WizardHero({ step, onSkip }: WizardHeroProps): JSX.Element {
         {/* The installed app's own icon, so the wizard and the home screen
             shortcut are visibly the same thing. */}
         <img src="/icons/icon-192.png" alt="agentplex" width={40} height={40} />
-        <Title order={1} fz={30} lh={1.15} maw={420} c={colorForRole('text', HERO)}>
+        <Title
+          order={1}
+          fz="display"
+          fw={800}
+          lh={1.15}
+          maw={420}
+          c={colorForRole('text', HERO)}
+          style={{ letterSpacing: '-.01em' }}
+        >
           Every agent session, every machine, one place.
         </Title>
         <Stepper
