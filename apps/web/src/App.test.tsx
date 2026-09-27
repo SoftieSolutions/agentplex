@@ -7,6 +7,7 @@ import { App } from './App.js';
 import { fakeStorage } from './auth/fake-storage.js';
 import { createTokenStore, type TokenStore } from './auth/token.js';
 import { docHash } from './docs/doc-route.js';
+import { createMockSwitch, type MockSwitch } from './mock/mock-switch.js';
 import { createBrowserDependencies } from './store/browser.js';
 import { createOnboardingDismissal, type OnboardingDismissal } from './onboarding/dismissal.js';
 import { ONBOARDING_HASH } from './onboarding/onboarding-route.js';
@@ -75,14 +76,16 @@ interface Page {
   readonly tokens: TokenStore;
   readonly hub: HubStore;
   readonly dismissal: OnboardingDismissal;
+  readonly mock: MockSwitch;
+  /** The one storage every per-device store on this page writes to. */
+  readonly storage: Storage;
   readonly sockets: FakeSocketFactory;
   /** The Authorization header of each ticket exchange, in order. */
   readonly exchanges: readonly string[];
 }
 
 /** The page's store, composed the way `main.tsx` composes it. */
-function buildPage(): Page {
-  const storage = fakeStorage();
+function buildPage({ search = '', storage = fakeStorage() } = {}): Page {
   const tokens = createTokenStore(() => storage);
   const sockets = createFakeSocketFactory();
   const exchanges: string[] = [];
@@ -99,9 +102,16 @@ function buildPage(): Page {
     tokens,
     hub,
     dismissal: createOnboardingDismissal(() => storage),
+    mock: createMockSwitch({ storage: () => storage, search: () => search }),
+    storage,
     sockets,
     exchanges,
   };
+}
+
+/** Settings' Developer toggle, the one switch the page draws. */
+function mockToggle(): HTMLInputElement | null {
+  return document.querySelector<HTMLInputElement>('input[role="switch"]');
 }
 
 /** Lets the ticket promise inside `connect` settle. */
@@ -135,7 +145,9 @@ describe('the page', () => {
       root = createRoot(container);
       // No StrictMode: its simulated remount would subscribe, hang up and
       // dial again, and the count of dials is part of what is asserted.
-      root.render(<App hub={page.hub} tokens={page.tokens} dismissal={page.dismissal} />);
+      root.render(
+        <App hub={page.hub} tokens={page.tokens} dismissal={page.dismissal} mock={page.mock} />,
+      );
     });
     await act(settle);
   }
@@ -235,6 +247,32 @@ describe('the page', () => {
     // wants to add a machine already is.
     const link = container.querySelector('a[href="#/onboarding"]');
     expect(link?.textContent).toBe('Open the first-run guide');
+  });
+
+  it('opens with ?mock=1 showing sample data on, and keeps it on for a page without it', async () => {
+    const first = buildPage({ search: '?mock=1' });
+    first.tokens.write(STORED_TOKEN);
+    window.location.hash = destinationHash('settings');
+    await mount(first);
+    await hubAnswers(first, hubFrames.machineStateWithServer);
+    expect(mockToggle()?.checked).toBe(true);
+
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+
+    // The reload: a new page on the same device, with no parameter.
+    const second = buildPage({ storage: first.storage });
+    await mount(second);
+    await hubAnswers(second, hubFrames.machineStateWithServer);
+    expect(mockToggle()?.checked).toBe(true);
+
+    await act(async () => {
+      mockToggle()?.click();
+    });
+    expect(mockToggle()?.checked).toBe(false);
+    expect(second.mock.read()).toBe(false);
   });
 
   it('yields to a session address on a fleet the wizard would otherwise open for', async () => {

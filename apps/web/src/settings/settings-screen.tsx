@@ -23,7 +23,9 @@ import {
 import { ProviderLine } from '../ui/provider-line.js';
 import { ToneDot } from '../ui/tone-dot.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { useMockSwitch } from '../mock/use-mock-mode.js';
 import { ColorSchemeControl } from './color-scheme-control.js';
+import { DeveloperSection } from './developer-section.js';
 import { Section } from './settings-section.js';
 import type { DiscoveredCandidate } from './pairing-form.js';
 import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
@@ -95,6 +97,9 @@ export function SettingsScreen({
   candidates,
 }: SettingsScreenProps): JSX.Element {
   const scheme = useComputedColorScheme('dark');
+  // From context, not a prop: the route that draws this screen has no reason
+  // to know sample data exists (see src/mock/use-mock-mode.tsx).
+  const mock = useMockSwitch();
   return (
     <Stack gap="md" maw={720}>
       <Title order={2}>Settings</Title>
@@ -114,6 +119,13 @@ export function SettingsScreen({
       <Section scheme={scheme}>
         <ColorSchemeControl />
       </Section>
+      {/* Absent rather than inert with no switch provided: a toggle wired to
+          nothing would be a control that claims to do something. */}
+      {mock !== null && (
+        <Section scheme={scheme}>
+          <DeveloperSection mock={mock} />
+        </Section>
+      )}
     </Stack>
   );
 }
