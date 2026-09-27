@@ -26,12 +26,12 @@ export function ProviderLine({ provider, scheme }: ProviderLineProps): JSX.Eleme
     <Stack gap={0}>
       <Group gap={6} align="center">
         <ToneDot tone={provider.tone} scheme={scheme} />
-        <Text size="xs" ff="monospace" c="dimmed">
+        <Text size="sm" ff="monospace" c="dimmed">
           {provider.words}
         </Text>
       </Group>
       {provider.problem !== null && (
-        <Text size="xs" style={{ color: colorForTone(provider.tone, scheme) }}>
+        <Text size="sm" style={{ color: colorForTone(provider.tone, scheme) }}>
           {provider.problem}
         </Text>
       )}

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { colorForRole, hues } from './tokens.js';
-import { cssVariablesResolver, theme } from './theme.js';
+import { relativeLuminance } from './contrast.js';
+import { colorForRole, hues, shadows } from './tokens.js';
+import { SECTION_LABEL, cssVariablesResolver, theme } from './theme.js';
+
+/** A theme size in rem back to the pixels the mock writes. */
+function pixels(value: string | undefined): number {
+  const match = /^(\d+(?:\.\d+)?)rem$/.exec(value ?? '');
+  if (match === null) throw new Error(`${value} is not a rem size`);
+  return Number(match[1]) * 16;
+}
 
 describe('theme', () => {
   it('leads with Manrope for UI text and Fira Code for monospace', () => {
@@ -17,18 +25,10 @@ describe('theme', () => {
   });
 
   it('splits autoContrast between the two accents: dark text on amber, white on ochre', () => {
-    // Relative luminance of an sRGB hex, per WCAG.
-    function luminance(hex: string): number {
-      const channel = (at: number): number => {
-        const c = Number.parseInt(hex.slice(at, at + 2), 16) / 255;
-        return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-      };
-      return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
-    }
     expect(theme.autoContrast).toBe(true);
     const threshold = theme.luminanceThreshold ?? 0;
-    expect(luminance(colorForRole('accent', 'dark'))).toBeGreaterThan(threshold);
-    expect(luminance(colorForRole('accent', 'light'))).toBeLessThan(threshold);
+    expect(relativeLuminance(colorForRole('accent', 'dark'))).toBeGreaterThan(threshold);
+    expect(relativeLuminance(colorForRole('accent', 'light'))).toBeLessThan(threshold);
   });
 
   it('fills every dark-tuple slot from tokens, so no stock blue-gray survives', () => {
@@ -37,6 +37,48 @@ describe('theme', () => {
     for (const shade of theme.colors?.dark ?? []) {
       expect(named.has(shade), shade).toBe(true);
     }
+  });
+});
+
+describe('the type scale', () => {
+  it('maps xs..lg to the mock scale 11/12/13/14, with md the 13px body', () => {
+    const sizes = theme.fontSizes ?? {};
+    expect(pixels(sizes.xs)).toBe(11);
+    expect(pixels(sizes.sm)).toBe(12);
+    expect(pixels(sizes.md)).toBe(13);
+    expect(pixels(sizes.lg)).toBe(14);
+    expect(pixels(sizes.xl)).toBe(16);
+  });
+
+  it('names the sizes between and around them that the mock uses: 9, 10, 12.5, 15, 26', () => {
+    const sizes = theme.fontSizes ?? {};
+    expect(pixels(sizes['3xs'])).toBe(9);
+    expect(pixels(sizes['2xs'])).toBe(10);
+    expect(pixels(sizes.row)).toBe(12.5);
+    expect(pixels(sizes.title)).toBe(15);
+    expect(pixels(sizes.display)).toBe(26);
+  });
+
+  it('leaves the body line height to the font, as every mock screen does', () => {
+    expect(theme.lineHeights?.md).toBe('normal');
+  });
+
+  it('sizes the headings h1 20, h2 18, h3 16, h4 14', () => {
+    const headings = theme.headings?.sizes;
+    expect(pixels(headings?.h1?.fontSize)).toBe(20);
+    expect(pixels(headings?.h2?.fontSize)).toBe(18);
+    expect(pixels(headings?.h3?.fontSize)).toBe(16);
+    expect(pixels(headings?.h4?.fontSize)).toBe(14);
+  });
+
+  it('exports the section label as the mock draws it: 600 9px Fira Code, .08em, uppercase', () => {
+    expect(SECTION_LABEL).toEqual({
+      fontFamily: 'var(--mantine-font-family-monospace)',
+      fontSize: 'var(--mantine-font-size-3xs)',
+      fontWeight: 600,
+      letterSpacing: '.08em',
+      textTransform: 'uppercase',
+    });
   });
 });
 
@@ -51,6 +93,13 @@ describe('cssVariablesResolver', () => {
     for (const scheme of ['dark', 'light'] as const) {
       expect(resolved[scheme]['--mantine-color-body']).toBe(colorForRole('background', scheme));
       expect(resolved[scheme]['--mantine-color-text']).toBe(colorForRole('text', scheme));
+    }
+  });
+
+  it('resolves shadow md, which every shadow="md" popover and menu asks for, to each scheme popover token', () => {
+    expect(theme.shadows?.md).toBe(shadows.dark.popover);
+    for (const scheme of ['dark', 'light'] as const) {
+      expect(resolved[scheme]['--mantine-shadow-md']).toBe(shadows[scheme].popover);
     }
   });
 

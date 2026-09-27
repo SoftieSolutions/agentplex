@@ -102,14 +102,14 @@ export function PairingPanel({
   return (
     <Stack gap="sm">
       <Title order={4}>Pair a server</Title>
-      <Text size="sm" c="dimmed">
+      <Text size="md" c="dimmed">
         The address is where this hub dials out to; the token is in the server&apos;s identity file
         (~/.agentplex/server.json by default) and is never printed. Each server has its own token,
         so revoking one later touches nothing else.
       </Text>
       {candidates.length > 0 && (
         <Stack gap={6}>
-          <Text size="sm" c="dimmed">
+          <Text size="md" c="dimmed">
             Heard on the network — selecting one fills in the address and stops. You still type that
             server&apos;s token: being heard on the network is not being trusted.
           </Text>
@@ -155,11 +155,11 @@ export function PairingPanel({
       </Group>
       {outcome !== null &&
         (outcome.ok ? (
-          <Text size="sm" c="dimmed">
+          <Text size="md" c="dimmed">
             {outcome.words}
           </Text>
         ) : (
-          <Text size="sm" style={{ color: colorForTone('blocked', scheme) }}>
+          <Text size="md" style={{ color: colorForTone('blocked', scheme) }}>
             {outcome.words}
           </Text>
         ))}
@@ -203,14 +203,14 @@ function CandidateRow({
             about hearing it says anything is working. */}
         <ToneDot tone={candidate.unusable === null ? 'idle' : 'blocked'} scheme={scheme} />
         <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
-          <Text size="sm" ff="monospace">
+          <Text size="md" ff="monospace">
             {candidate.serverId}
           </Text>
-          <Text size="xs" ff="monospace" c="dimmed">
+          <Text size="sm" ff="monospace" c="dimmed">
             {candidate.host}:{candidate.port} · server protocol {candidate.protocolVersion}
           </Text>
           {candidate.unusable !== null && (
-            <Text size="xs" style={{ color: colorForTone('blocked', scheme) }}>
+            <Text size="sm" style={{ color: colorForTone('blocked', scheme) }}>
               {candidate.unusable}
             </Text>
           )}

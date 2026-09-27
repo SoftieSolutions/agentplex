@@ -256,10 +256,10 @@ export function PushControl({ store, push }: PushControlProps): JSX.Element | nu
     <Section scheme={scheme}>
       <Stack gap="sm">
         <Title order={4}>Notifications</Title>
-        <Text size="sm" c="dimmed">
+        <Text size="md" c="dimmed">
           {view.words}
         </Text>
-        <Text size="sm" c="dimmed">
+        <Text size="md" c="dimmed">
           {PUSH_SHARING_WORDS}
         </Text>
         {view.kind === 'offer' && (
@@ -283,7 +283,7 @@ export function PushControl({ store, push }: PushControlProps): JSX.Element | nu
             press produces is an update to a region a screen reader is
             already on rather than a new one it has to be told about. */}
         <Text
-          size="sm"
+          size="md"
           role="status"
           style={alarming ? { color: colorForTone('blocked', scheme) } : undefined}
         >

@@ -102,11 +102,11 @@ export function MachineCard({
             below.
           </Sentence>
           <Stack gap={4}>
-            <Text size="xs" ff="monospace" c="dimmed">
+            <Text size="sm" ff="monospace" c="dimmed">
               {storeWords(progress.stores)}
             </Text>
             {progress.providers.length === 0 ? (
-              <Text size="xs" ff="monospace" c="dimmed">
+              <Text size="sm" ff="monospace" c="dimmed">
                 no agents reported
               </Text>
             ) : (
@@ -226,7 +226,7 @@ function DetailLine({
   readonly text: string;
 }): JSX.Element {
   return (
-    <Text size="xs" ff="monospace" c={colorForRole('textMuted', scheme)}>
+    <Text size="sm" ff="monospace" c={colorForRole('textMuted', scheme)}>
       {text}
     </Text>
   );
