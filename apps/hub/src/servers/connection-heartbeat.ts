@@ -27,9 +27,15 @@ import type { Pong } from './frame-router.js';
  *
  * The same round trip is the hub's measurement of how far away the machine is,
  * and the pong that ends it carries what the machine's cpus were doing. Both
- * go up as one reading, timed by the hub's own clock: only the end that
- * dialled can time a round trip, and the load is true of the instant the pong
- * was written, so the two are one fact about one moment.
+ * go up as one reading, timed by the hub: only the end that dialled can time a
+ * round trip, and the load is true of the instant the pong was written, so the
+ * two are one fact about one moment.
+ *
+ * The interval is timed on a monotonic source and not on the wall clock. The
+ * wall clock steps -- NTP corrects it, a laptop wakes and catches up -- and a
+ * step between ping and pong would be published as the link's latency: a live
+ * machine drawn at thirty seconds, in the tone that asks for attention, until
+ * the next round. The wall clock only dates the reading.
  *
  * The pong is handed in rather than read off the socket here. It used to be
  * read here, with a parse of its own and a hand check of `type` beside the
@@ -39,7 +45,7 @@ import type { Pong } from './frame-router.js';
 
 /** One completed heartbeat: how long it took, and what the pong said. */
 export interface RoundTripReading {
-  /** Pong arrival minus ping send, by the hub's clock. Never negative. */
+  /** Pong arrival minus ping send, in whole ms by the monotonic source. Never negative. */
   readonly ms: number;
   /** The machine's load exactly as the parsed pong carried it. */
   readonly load: MachineLoad | null;
@@ -49,8 +55,14 @@ export interface RoundTripReading {
 
 export interface HeartbeatDependencies {
   readonly timers: Timers;
-  /** What a round trip is timed with. Injected, so a test can say how long one took. */
+  /** What a reading is dated with. Never what it is timed with: this one steps. */
   readonly clock: Clock;
+  /**
+   * What a round trip is timed with: milliseconds from an arbitrary origin that
+   * never goes backwards and is not corrected, as `performance.now()` is.
+   * Injected, so a test can say how long one took.
+   */
+  readonly monotonic: () => number;
   readonly logger: Logger;
   /**
    * The connection's frame id counter, continued rather than restarted.
@@ -96,7 +108,7 @@ export function startHeartbeat(
   socket: MessageSocket,
   dependencies: HeartbeatDependencies,
 ): Heartbeat {
-  const { timers, clock, logger, nextFrameId, onRoundTrip } = dependencies;
+  const { timers, clock, monotonic, logger, nextFrameId, onRoundTrip } = dependencies;
   const intervalMs = dependencies.intervalMs ?? DEFAULT_INTERVAL_MS;
   const timeoutMs = dependencies.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
@@ -118,7 +130,7 @@ export function startHeartbeat(
     cancel = timers.schedule(intervalMs, () => {
       if (stopped) return;
       const id = nextFrameId();
-      outstanding = { id, sentAt: clock.now() };
+      outstanding = { id, sentAt: monotonic() };
       send({ type: 'ping', id });
       cancel = timers.schedule(timeoutMs, () => {
         if (stopped) return;
@@ -136,18 +148,18 @@ export function startHeartbeat(
   const pong = (frame: Pong): void => {
     if (stopped || outstanding === null || frame.replyTo !== outstanding.id) return;
 
-    const at = clock.now();
-    const ms = at - outstanding.sentAt;
+    const ms = Math.round(monotonic() - outstanding.sentAt);
     outstanding = null;
     cancel?.();
     scheduleNextPing();
 
-    // A pong that arrived before its ping left is a clock that stepped, not a
-    // link that answered early. The pong still proves the peer is there, so the
-    // round is complete; what is dropped is the figure, because zero would
-    // claim the fastest link in the fleet.
+    // A monotonic source does not run backwards, so this is a broken one. The
+    // pong still proves the peer is there, so the round is complete; what is
+    // dropped is the figure, because the client's parser would refuse the whole
+    // state frame carrying a negative one and zero would claim the fastest link
+    // in the fleet.
     if (ms < 0) return;
-    onRoundTrip({ ms, load: frame.load, at });
+    onRoundTrip({ ms, load: frame.load, at: clock.now() });
   };
 
   scheduleNextPing();

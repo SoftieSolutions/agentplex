@@ -375,6 +375,12 @@ export interface ServersDependencies {
   readonly hubId: HubId;
   readonly timers: Timers;
   readonly clock: Clock;
+  /**
+   * What a heartbeat's round trip is timed with, never the wall clock, which
+   * steps. Defaults to `performance.now()`, beside the transport that uses it;
+   * a test that asserts a figure passes its own.
+   */
+  readonly monotonic?: () => number;
   readonly logger: Logger;
   /** Shared by every connection: it is a schedule, and it holds no state. */
   readonly backoff?: BackoffPolicy;
@@ -515,6 +521,7 @@ export function createServers(dependencies: ServersDependencies): Servers {
       hubId,
       timers,
       clock,
+      monotonic: dependencies.monotonic ?? (() => performance.now()),
       logger,
       ...(dependencies.handshakeTimeoutMs === undefined
         ? {}

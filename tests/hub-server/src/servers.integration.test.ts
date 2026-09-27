@@ -147,6 +147,9 @@ async function startAll(): Promise<Servers> {
     hubId,
     timers,
     clock,
+    // The same fake as the wall clock: this suite moves time, and steps of the
+    // wall clock alone are `connection-heartbeat.test.ts`'s subject.
+    monotonic: clock.now,
     logger,
     backoff: createExponentialBackoff({ baseMs: 500, maxMs: 8000, random: () => 0 }),
   });

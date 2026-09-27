@@ -50,11 +50,15 @@ function beating() {
   const socket = createFakeMessageSocket();
   const timers = createFakeTimers();
   let now = T0;
+  // Deliberately nowhere near the wall clock: `performance.now()` counts from
+  // process start, so the two share nothing but the unit.
+  let elapsed = 1_000.25;
   const clock = { now: () => now };
   const readings: RoundTripReading[] = [];
   const heartbeat = startHeartbeat(socket, {
     timers,
     clock,
+    monotonic: () => elapsed,
     logger,
     nextFrameId: createFrameIdCounter(),
     onRoundTrip: (reading) => readings.push(reading),
@@ -66,8 +70,15 @@ function beating() {
     timers,
     heartbeat,
     readings,
-    /** Moves the hub's clock on, which is all a round trip is measured with. */
-    advance: (ms: number) => void (now += ms),
+    /** Time passing: both the wall clock and the interval source move on. */
+    advance: (ms: number) => {
+      now += ms;
+      elapsed += ms;
+    },
+    /** The wall clock stepping (NTP, a wake from sleep) while no time passes. */
+    stepWallClock: (ms: number) => void (now += ms),
+    /** The interval source alone moving, which a real one only ever does forwards. */
+    stepMonotonic: (ms: number) => void (elapsed += ms),
     now: () => now,
   };
 }
@@ -210,13 +221,51 @@ describe('startHeartbeat', () => {
     expect(readings).toEqual([]);
   });
 
-  it('keeps the connection but publishes no figure across a clock that stepped backwards', () => {
-    // A negative round trip is a clock that moved, not a link that answered
-    // before it was asked. Zero would claim a perfect link, so no figure is
-    // the reading that does not over-claim; the pong still proves the peer.
-    const { socket, timers, heartbeat, readings, advance } = beating();
+  it('times the true interval across a wall clock that jumped forward mid-round', () => {
+    // An NTP step or a wake from sleep moves the wall clock by seconds while
+    // the link took milliseconds. Timed by the wall clock, a healthy link would
+    // publish as thirty seconds in the needs-you tone until the next round.
+    const { socket, timers, heartbeat, readings, advance, stepWallClock, now } = beating();
     timers.fireAll();
-    advance(-1_000);
+    stepWallClock(30_000);
+    advance(12);
+
+    heartbeat.pong(pong(pings(socket.sent)[0] ?? 0, LOAD));
+
+    // The interval from the interval source; the arrival from the wall clock,
+    // which is what every other time a client is shown is dated by.
+    expect(readings).toEqual([{ ms: 12, load: LOAD, at: now() }]);
+  });
+
+  it('times the true interval across a wall clock that stepped backwards mid-round', () => {
+    const { socket, timers, heartbeat, readings, advance, stepWallClock } = beating();
+    timers.fireAll();
+    stepWallClock(-1_000);
+    advance(7);
+
+    heartbeat.pong(pong(pings(socket.sent)[0] ?? 0));
+
+    expect(readings.map((reading) => reading.ms)).toEqual([7]);
+    expect(socket.closure).toBeNull();
+  });
+
+  it('publishes whole milliseconds, because the interval source counts in fractions', () => {
+    const { socket, timers, heartbeat, readings, stepMonotonic } = beating();
+    timers.fireAll();
+    stepMonotonic(12.6);
+
+    heartbeat.pong(pong(pings(socket.sent)[0] ?? 0));
+
+    expect(readings.map((reading) => reading.ms)).toEqual([13]);
+  });
+
+  it('keeps the connection but publishes no figure from an interval source that ran backwards', () => {
+    // No real one does. A negative figure is still refused here rather than
+    // downstream, where the client's parser would reject the whole state frame
+    // carrying it; the pong proves the peer either way.
+    const { socket, timers, heartbeat, readings, stepMonotonic } = beating();
+    timers.fireAll();
+    stepMonotonic(-1_000);
 
     heartbeat.pong(pong(pings(socket.sent)[0] ?? 0));
 

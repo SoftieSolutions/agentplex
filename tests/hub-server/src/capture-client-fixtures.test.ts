@@ -818,13 +818,19 @@ async function startFleetHub(
   /** How to block a hook, for the one capture whose subject is an approval. */
   blocks: Map<string, () => void> = new Map(),
   /**
-   * The hub's clock and timers, for the one capture whose subject is time
-   * passing: a round trip is the hub's clock read at a ping and again at its
-   * pong, and the ping leaves when the heartbeat's timer fires. Every other
-   * capture wants the clock standing at `START` and timers nothing fires.
+   * The hub's clocks and timers, for the one capture whose subject is time
+   * passing: a round trip is the hub's interval source read at a ping and
+   * again at its pong, dated by its clock, and the ping leaves when the
+   * heartbeat's timer fires. Every other capture wants both standing at
+   * `START` and timers nothing fires.
    */
-  time: { readonly clock: Clock; readonly timers: Timers } = {
+  time: {
+    readonly clock: Clock;
+    readonly monotonic: () => number;
+    readonly timers: Timers;
+  } = {
     clock: { now: () => START },
+    monotonic: () => START,
     timers: createFakeTimers(),
   },
 ): Promise<{ hub: Hub; cleanup: () => Promise<void> }> {
@@ -854,6 +860,7 @@ async function startFleetHub(
     logger,
     ids: { newId: newRegistrationId },
     clock: time.clock,
+    monotonic: time.monotonic,
     clientToken: CLIENT_TOKEN,
     tokens: { newToken: () => `fleet-ticket-${(nextTicket += 1)}` },
     dialer: fleetDialer(machines, live, served, blocks),
@@ -2793,7 +2800,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
 
     // A machine the hub has timed. The heartbeat's own timer sends the ping,
     // the real server end answers with the pong and the load its reader took,
-    // and the hub's clock is read at both ends: the interval has passed when
+    // and the hub's clocks are read at both ends: the interval has passed when
     // the ping leaves, and 12 ms more when the pong is read. This is the state
     // the machine selector's latency and a settings row's figure are drawn
     // from. One machine, because what differs between a fast row and a slow
@@ -2808,7 +2815,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       countingHubIds(),
       new Map(),
       new Map(),
-      { clock: { now: () => measuredNow }, timers: measuredTimers },
+      { clock: { now: () => measuredNow }, monotonic: () => measuredNow, timers: measuredTimers },
     );
     await until(
       () =>

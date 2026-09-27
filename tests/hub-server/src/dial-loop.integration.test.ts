@@ -214,6 +214,9 @@ function start(
       hubId,
       timers,
       clock: { now: options.now ?? (() => START) },
+      // One fake for both: steps of the wall clock alone are the heartbeat
+      // unit test's subject, not this suite's.
+      monotonic: options.now ?? (() => START),
       logger,
       ...(options.heartbeatIntervalMs === undefined
         ? {}
@@ -619,6 +622,7 @@ describe('startDialLoop', () => {
         hubId,
         timers,
         clock: { now: () => START },
+        monotonic: () => START,
         logger,
       }),
       timers,

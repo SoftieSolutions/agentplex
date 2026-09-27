@@ -91,6 +91,11 @@ export interface HubDependencies {
    */
   readonly clock: Clock;
   /**
+   * What a server's round trip is timed with. Absent, the servers feature uses
+   * `performance.now()`; only a test that asserts the figure supplies one.
+   */
+  readonly monotonic?: () => number;
+  /**
    * Where beacons are heard.
    *
    * Required rather than optional, because listening is unconditional:
@@ -418,6 +423,7 @@ async function composeHub(
     hubId,
     timers,
     clock,
+    ...(dependencies.monotonic === undefined ? {} : { monotonic: dependencies.monotonic }),
     logger,
     onChange: (report) => {
       state.applyConnection(report);

@@ -164,8 +164,10 @@ export interface MessageSocketTransportDependencies {
   /** Which hub is dialling. The server cannot tell two of them apart otherwise. */
   readonly hubId: HubId;
   readonly timers: Timers;
-  /** What the heartbeat times a round trip with. */
+  /** What the heartbeat dates a round trip with. */
   readonly clock: Clock;
+  /** What the heartbeat times a round trip with; see `connection-heartbeat.ts`. */
+  readonly monotonic: () => number;
   readonly logger: Logger;
   readonly handshakeTimeoutMs?: number;
   readonly heartbeatIntervalMs?: number;
@@ -208,7 +210,7 @@ function overSocket(
   nextFrameId: () => number,
   dependencies: MessageSocketTransportDependencies,
 ): ServerTransport {
-  const { timers, clock, logger } = dependencies;
+  const { timers, clock, monotonic, logger } = dependencies;
 
   const channel = createInstructionChannel({
     timers,
@@ -235,6 +237,7 @@ function overSocket(
   const heartbeat = startHeartbeat(socket, {
     timers,
     clock,
+    monotonic,
     logger,
     nextFrameId,
     onRoundTrip: (reading) => handlers?.onRoundTrip(reading),
