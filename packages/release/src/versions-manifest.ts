@@ -64,7 +64,7 @@ import { compareVersions } from './version-order.js';
  * to the newest `1.3.x` needs the set of `1.3.x` releases to choose from. The
  * alternative was the GitHub releases API, which is deeply nested JSON that
  * `install.sh` has no parser for -- it reads this file with a bash grammar,
- * because `resolve_component_versions` runs before there is a Node on the
+ * because `resolve_cli_version` runs before there is a Node on the
  * machine -- and which is rate limited to sixty unauthenticated requests an
  * hour and paginated past a hundred releases, a number four independent
  * release trains reach quickly.

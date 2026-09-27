@@ -148,8 +148,8 @@ export function renderUnit(daemon: Daemon, layout: Layout, nodeDirectory: string
 /**
  * The unit's PATH: the prefix's bin, then the node directory when it is
  * neither that nor somewhere a service already searches, then the machine's
- * own directories. `unit_search_path`, for the processes the daemon starts --
- * the coding agents in the prefix's bin are scripts looking for `node`.
+ * own directories. It is for the processes the daemon starts: the coding
+ * agents in the prefix's bin are scripts looking for `node`.
  */
 export function unitSearchPath(layout: Layout, nodeDirectory: string): string {
   const bin = binDirectory(layout);

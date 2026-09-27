@@ -222,8 +222,9 @@ function releasePlan({ request, layout, release }: InstallPlanInput): {
 }
 
 /**
- * `resolve_component_versions` for one component: `read_pinned_release` when it
- * is pinned and `read_versions_entry` when it is not.
+ * One component's version and the legs that release records: the release its
+ * pin names when it is pinned, and the manifest's current one when it is not.
+ * The legs are always the chosen release's, never the current one's.
  *
  * With no manifest read, an exact pin is still an answer -- it names the tag
  * outright and only its protocol went unread -- and a series is not, because
@@ -299,7 +300,7 @@ function checkProtocolAgreement(resolved: readonly Resolved[]): void {
   );
 }
 
-/** `report_leg`: the number, and which of the components installed here agree on it. */
+/** One leg's line: the number, and which of the components installed here agree on it. */
 function legLine(
   leg: 'client' | 'server',
   resolved: readonly Resolved[],
