@@ -16,7 +16,7 @@ import { useHubSnapshot } from './store/use-hub-store.js';
 import { useSessionRoute } from './terminal/session-route.js';
 import { colorSchemeManager } from './ui/color-scheme.js';
 import { MantineProvider } from './ui/components.js';
-import { cssVariablesResolver, phoneTypeRule, theme } from './ui/theme.js';
+import { cssVariablesResolver, phoneTypeRule, theme, themeRules } from './ui/theme.js';
 
 export interface AppProps {
   /**
@@ -62,6 +62,10 @@ export function App({ hub, tokens, dismissal, mock }: AppProps): JSX.Element {
       colorSchemeManager={colorSchemeManager}
       defaultColorScheme="dark"
     >
+      {/* Hoisted to the head and deduplicated by React under its href. */}
+      <style href="agx-theme" precedence="default">
+        {themeRules()}
+      </style>
       <PhoneType />
       <MockModeProvider mock={mock}>
         <OnboardingGate hub={hub} tokens={tokens} dismissal={dismissal} />

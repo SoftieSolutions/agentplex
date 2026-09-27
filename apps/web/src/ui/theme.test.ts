@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { relativeLuminance } from './contrast.js';
 import { colorForRole, hues, shadows } from './tokens.js';
-import { SECTION_LABEL, cssVariablesResolver, phoneTypeRule, theme } from './theme.js';
+import { SECTION_LABEL, cssVariablesResolver, phoneTypeRule, theme, themeRules } from './theme.js';
 
 /** A theme size in rem back to the pixels the mock writes. */
 function pixels(value: string | undefined): number {
@@ -37,6 +37,17 @@ describe('theme', () => {
     for (const shade of theme.colors?.dark ?? []) {
       expect(named.has(shade), shade).toBe(true);
     }
+  });
+
+  it('fills every gray slot from tokens too, which the light scheme draws its stock chrome in', () => {
+    expect(theme.colors?.gray).toHaveLength(10);
+    const named = new Set<string>(Object.values(hues));
+    for (const shade of theme.colors?.gray ?? []) {
+      expect(named.has(shade), shade).toBe(true);
+    }
+    // Mantine writes an idle segment's word in gray-7 on paper; the mock
+    // writes it in shale (7b).
+    expect(theme.colors?.gray?.[7]).toBe(hues.shale);
   });
 });
 
@@ -116,6 +127,44 @@ describe('cssVariablesResolver', () => {
     }
   });
 
+  it('writes a placeholder in the muted text hue in both schemes, as every mock field does', () => {
+    for (const scheme of ['dark', 'light'] as const) {
+      expect(resolved[scheme]['--mantine-color-placeholder']).toBe(
+        colorForRole('textMuted', scheme),
+      );
+    }
+  });
+
+  it('names the control hues each scheme draws, transcribed from the mocks', () => {
+    // Allow and Send: amber under char in dark, ink under white in light (7a, 7b, 7d).
+    expect(resolved.dark['--agx-primary-button']).toBe(hues.amber);
+    expect(resolved.dark['--agx-on-primary-button']).toBe(hues.char);
+    expect(resolved.light['--agx-primary-button']).toBe(hues.ink);
+    expect(resolved.light['--agx-on-primary-button']).toBe(hues.paper);
+    // Deny, Pause, Copy: no fill, a ridge edge and oat words in dark, sand and
+    // ink in light (7a, 7c, 7f, 7b, 7d).
+    expect(resolved.dark['--agx-control-border']).toBe(hues.ridge);
+    expect(resolved.dark['--agx-control-text']).toBe(hues.oat);
+    expect(resolved.light['--agx-control-border']).toBe(hues.sand);
+    expect(resolved.light['--agx-control-text']).toBe(hues.ink);
+    // A field sits in the page's own hue in dark and on paper in light (6d, 7b).
+    expect(resolved.dark['--agx-input-bg']).toBe(hues.char);
+    expect(resolved.light['--agx-input-bg']).toBe(hues.paper);
+  });
+
+  it('names the segmented control the mocks draw (7a, 7b)', () => {
+    expect(resolved.dark['--agx-segment-track']).toBe(hues.umber);
+    expect(resolved.dark['--agx-segment-border']).toBe(`1px solid ${hues.seam}`);
+    expect(resolved.dark['--agx-segment-active']).toBe(hues.walnut);
+    expect(resolved.dark['--agx-segment-shadow']).toBe(shadows.dark.raised);
+    expect(resolved.dark['--agx-segment-idle']).toBe(hues.stone);
+    expect(resolved.light['--agx-segment-track']).toBe(hues.dune);
+    expect(resolved.light['--agx-segment-border']).toBe('none');
+    expect(resolved.light['--agx-segment-active']).toBe(hues.paper);
+    expect(resolved.light['--agx-segment-shadow']).toBe(shadows.light.raised);
+    expect(resolved.light['--agx-segment-idle']).toBe(hues.shale);
+  });
+
   it('gives the light scheme the paper background, not stock white', () => {
     expect(resolved.light['--mantine-color-body']).toBe(hues.parchment);
     expect(resolved.light['--mantine-color-body']).not.toBe(hues.paper);
@@ -136,6 +185,56 @@ function controlVars(
   if (extension?.vars === undefined) throw new Error(`${component} has no vars resolver`);
   return extension.vars({} as never, props as never);
 }
+
+/** The word weight the theme gives a button of these props. */
+function buttonWeight(props: Record<string, unknown>): unknown {
+  const extension = theme.components?.Button as
+    { styles?: (theme: never, props: never) => { root?: { fontWeight?: unknown } } } | undefined;
+  if (typeof extension?.styles !== 'function') throw new Error('Button has no styles resolver');
+  return extension.styles({} as never, props as never).root?.fontWeight;
+}
+
+describe('control styles', () => {
+  it('fills a primary button with the scheme primary and sets its word at 700', () => {
+    const vars = controlVars('Button').root ?? {};
+    expect(vars['--button-bg']).toBe('var(--agx-primary-button)');
+    expect(vars['--button-color']).toBe('var(--agx-on-primary-button)');
+    expect(buttonWeight({})).toBe(700);
+  });
+
+  it('draws a default button unfilled with a hairline edge, its word at 400', () => {
+    const vars = controlVars('Button', { variant: 'default' }).root ?? {};
+    expect(vars['--button-bg']).toBe('transparent');
+    expect(vars['--button-bd']).toBe('1px solid var(--agx-control-border)');
+    expect(vars['--button-color']).toBe('var(--agx-control-text)');
+    expect(buttonWeight({ variant: 'default' })).toBe(400);
+  });
+
+  it('writes a subtle button in the muted hue at 400, as the mock draws Clear all (6b)', () => {
+    const vars = controlVars('Button', { variant: 'subtle' }).root ?? {};
+    expect(vars['--button-color']).toBe('var(--mantine-color-dimmed)');
+    expect(buttonWeight({ variant: 'subtle' })).toBe(400);
+  });
+
+  it('leaves a button that names its own colour to Mantine', () => {
+    const vars = controlVars('Button', { color: 'red' }).root ?? {};
+    expect(vars['--button-bg']).toBeUndefined();
+    expect(vars['--button-color']).toBeUndefined();
+  });
+
+  it('sets a field in the scheme field hue', () => {
+    const wrapper = controlVars('Input').wrapper ?? {};
+    expect(wrapper['--input-bg']).toBe('var(--agx-input-bg)');
+  });
+
+  it('carries the segmented states Mantine has no variable for in the theme rules', () => {
+    const rules = themeRules();
+    expect(rules).toContain('background: var(--agx-segment-track)');
+    expect(rules).toContain('border: var(--agx-segment-border)');
+    expect(rules).toMatch(/\[data-active\][^}]*font-weight: 600/);
+    expect(rules).toMatch(/SegmentedControl-label \{[^}]*font-weight: 400/);
+  });
+});
 
 describe('control sizes', () => {
   // Measured with getBoundingClientRect off the mocks: the header and toolbar

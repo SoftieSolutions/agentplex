@@ -20,7 +20,7 @@ import {
   type MantineThemeOverride,
 } from '@mantine/core';
 
-import { colorForRole, hues, shadows } from './tokens.js';
+import { colorForRole, hues, shadows, type Scheme } from './tokens.js';
 
 /**
  * The mockup palette (tokens.ts) wired into Mantine. Dark-first: the provider
@@ -71,6 +71,28 @@ const dark: MantineColorsTuple = [
   hues.char,
   hues.soot,
   hues.pitch,
+];
+
+/**
+ * Mantine draws its light-scheme chrome in this tuple the way it draws the
+ * dark one in `dark`: the segmented track, an idle segment's word, a code
+ * chip, a hover wash, a disabled field. Left stock, those are Bootstrap's
+ * blue-grays on warm paper. 0-4 are the light surfaces and borders from the
+ * page back, 5-7 the muted and faint text, 8-9 the ink. Stone stands in for
+ * 5 as well as 6: the mock has no hue between pumice and stone, and Mantine
+ * reads 5 only for a light placeholder, which the resolver sets anyway.
+ */
+const gray: MantineColorsTuple = [
+  hues.parchment,
+  hues.linen,
+  hues.dune,
+  hues.sand,
+  hues.pumice,
+  hues.stone,
+  hues.stone,
+  hues.shale,
+  hues.ridge,
+  hues.ink,
 ];
 
 /** A pixel size from the mock as the rem Mantine's own scale is written in. */
@@ -187,6 +209,81 @@ const CONTROL_HEIGHT = { xs: rem(29), sm: rem(31), md: rem(36) };
 /** The inline padding the mock gives a button's word at each height. */
 const BUTTON_PADDING_X = { xs: rem(10), sm: rem(12), md: rem(16) };
 
+/**
+ * A button's colours by variant, as scheme-resolved variables the resolver
+ * below defines. Mantine's own filled button is the accent under white, and
+ * its default a filled umber with white words; the mocks draw neither.
+ *
+ * - filled (the default variant): amber under char in dark, and ink under
+ *   white in light, as Allow and Send are (7a, 7b, 7d). White on ochre is
+ *   2.5:1; ink is what the light mock reaches for every time.
+ * - default: no fill and a hairline edge, oat words in dark and ink in light
+ *   (Deny, Pause, Copy, Publish in 7a-7f and 6d).
+ * - subtle: the muted hue, as the mock writes Clear all (6b).
+ *
+ * A button that names its own colour asked Mantine for that colour and gets
+ * it: undefined leaves Mantine's answer.
+ */
+function buttonColours(
+  variant: string | undefined,
+  color: string | undefined,
+): Record<string, string | undefined> {
+  if (color !== undefined) return {};
+  switch (variant ?? 'filled') {
+    case 'filled':
+      return {
+        '--button-bg': 'var(--agx-primary-button)',
+        '--button-hover': 'var(--agx-primary-button-hover)',
+        '--button-color': 'var(--agx-on-primary-button)',
+      };
+    case 'default':
+      return {
+        '--button-bg': 'transparent',
+        '--button-hover': 'var(--agx-control-hover)',
+        '--button-bd': '1px solid var(--agx-control-border)',
+        '--button-color': 'var(--agx-control-text)',
+      };
+    case 'subtle':
+      return {
+        '--button-hover': 'var(--agx-control-hover)',
+        '--button-color': 'var(--mantine-color-dimmed)',
+      };
+    default:
+      return {};
+  }
+}
+
+/**
+ * The weight of a button's word: 700 on a filled button and 400 on the rest,
+ * as every button in the mocks is set. Mantine sets them all at 600.
+ */
+function buttonWeight(variant: string | undefined): number {
+  return (variant ?? 'filled') === 'filled' ? 700 : 400;
+}
+
+/**
+ * The few theme rules Mantine offers no variable or prop for, rendered once by
+ * the root (App.tsx). A segmented control's word changes weight and colour
+ * with its state, 600 in the text hue when chosen and 400 in the idle hue
+ * when not (7a, 7b), and a style prop cannot tell a chosen segment from the
+ * others. Every value is a variable the resolver sets per scheme; the class
+ * names are Mantine's static ones, and each selector is weighted to outrank
+ * Mantine's own rule whichever stylesheet came first.
+ */
+export function themeRules(): string {
+  // Doubled: Mantine's own track rule is one class behind a zero-weight
+  // :where, the same weight as a single class here, and would win on order.
+  const root = '.mantine-SegmentedControl-root.mantine-SegmentedControl-root';
+  const label = `${root} .mantine-SegmentedControl-label`;
+  return [
+    `${root} { background: var(--agx-segment-track); border: var(--agx-segment-border); padding: 3px; }`,
+    `${root} .mantine-SegmentedControl-indicator { background: var(--agx-segment-active); box-shadow: var(--agx-segment-shadow); border-radius: var(--mantine-radius-xs); }`,
+    `${label} { font-weight: 400; color: var(--agx-segment-idle); }`,
+    `${label}:not([data-active]):hover { color: var(--mantine-color-text); }`,
+    `${label}[data-active] { font-weight: 600; color: var(--mantine-color-text); }`,
+  ].join('\n');
+}
+
 export const theme: MantineThemeOverride = createTheme({
   fontFamily:
     'Manrope, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
@@ -213,7 +310,7 @@ export const theme: MantineThemeOverride = createTheme({
    * popover draws the mock's shadow in whichever scheme is showing.
    */
   shadows: { md: shadows.dark.popover },
-  colors: { amber, dark },
+  colors: { amber, dark, gray },
   primaryColor: 'amber',
   primaryShade: { light: 6, dark: 5 },
   /**
@@ -232,6 +329,7 @@ export const theme: MantineThemeOverride = createTheme({
     Button: Button.extend({
       vars: (_theme, props) => ({
         root: {
+          ...buttonColours(props.variant, props.color),
           '--button-fz': controlFontSize(props.size),
           '--button-height-xs': CONTROL_HEIGHT.xs,
           '--button-height-sm': CONTROL_HEIGHT.sm,
@@ -241,21 +339,23 @@ export const theme: MantineThemeOverride = createTheme({
           '--button-padding-x-md': BUTTON_PADDING_X.md,
         },
       }),
+      styles: (_theme, props) => ({ root: { fontWeight: buttonWeight(props.variant) } }),
     }),
     Input: Input.extend({
       vars: (_theme, props) => ({
         wrapper: {
           '--input-fz': controlFontSize(props.size),
+          '--input-bg': 'var(--agx-input-bg)',
           '--input-height-xs': CONTROL_HEIGHT.xs,
           '--input-height-sm': CONTROL_HEIGHT.sm,
           '--input-height-md': CONTROL_HEIGHT.md,
         },
       }),
     }),
-    // The Projects/Sessions switch (7a, 6b): a 3px track around 25px
-    // segments, 12px words with 4px above and below. Mantine's track is 4px
-    // and its segment padding 3px, which draws the same control two pixels
-    // shorter and a pixel further in.
+    // The Projects/Sessions switch (7a, 6b): 25px segments, 12px words with
+    // 4px above and below, in the 3px track `themeRules` draws. Mantine's
+    // segment padding is 3px, which draws the same control two pixels
+    // shorter.
     SegmentedControl: SegmentedControl.extend({
       vars: (_theme, props) => ({
         root: {
@@ -264,7 +364,6 @@ export const theme: MantineThemeOverride = createTheme({
           '--sc-padding-sm': '4px 10px',
         },
       }),
-      styles: { root: { padding: 3 } },
     }),
     Combobox: Combobox.extend({
       vars: (_theme, props) => ({
@@ -284,6 +383,32 @@ export const theme: MantineThemeOverride = createTheme({
  * light scheme's body would be stock white and dark borders would come from
  * the dark tuple's slot 4 alone.
  */
+/**
+ * The control hues the theme's components and `themeRules` read, per scheme.
+ * Named variables rather than hues written into the components, because a
+ * component's theme resolver does not know the scheme and the page switches
+ * it without a re-render.
+ */
+function controlVariables(scheme: Scheme): Record<string, string> {
+  const dark = scheme === 'dark';
+  return {
+    '--agx-primary-button': colorForRole('primaryButton', scheme),
+    '--agx-primary-button-hover': dark ? hues.ochre : hues.ridge,
+    '--agx-on-primary-button': colorForRole('onPrimaryButton', scheme),
+    '--agx-control-border': colorForRole('borderStrong', scheme),
+    '--agx-control-text': colorForRole(dark ? 'textSecondary' : 'text', scheme),
+    '--agx-control-hover': colorForRole('raised', scheme),
+    '--agx-input-bg': colorForRole(dark ? 'background' : 'surface', scheme),
+    // The dark track is the inset hue with a hairline; the light one is the
+    // chip hue with none, and its chosen segment is lifted on paper (7a, 7b).
+    '--agx-segment-track': dark ? hues.umber : hues.dune,
+    '--agx-segment-border': dark ? `1px solid ${colorForRole('border', scheme)}` : 'none',
+    '--agx-segment-active': dark ? hues.walnut : hues.paper,
+    '--agx-segment-shadow': shadows[scheme].raised,
+    '--agx-segment-idle': colorForRole(dark ? 'textMuted' : 'textFaint', scheme),
+  };
+}
+
 export const cssVariablesResolver: CSSVariablesResolver = () => ({
   variables: {},
   dark: {
@@ -293,6 +418,8 @@ export const cssVariablesResolver: CSSVariablesResolver = () => ({
     '--mantine-color-default-border': colorForRole('border', 'dark'),
     '--mantine-color-anchor': colorForRole('link', 'dark'),
     '--mantine-shadow-md': shadows.dark.popover,
+    '--mantine-color-placeholder': colorForRole('textMuted', 'dark'),
+    ...controlVariables('dark'),
   },
   light: {
     '--mantine-color-body': colorForRole('background', 'light'),
@@ -301,5 +428,7 @@ export const cssVariablesResolver: CSSVariablesResolver = () => ({
     '--mantine-color-default-border': colorForRole('border', 'light'),
     '--mantine-color-anchor': colorForRole('link', 'light'),
     '--mantine-shadow-md': shadows.light.popover,
+    '--mantine-color-placeholder': colorForRole('textMuted', 'light'),
+    ...controlVariables('light'),
   },
 });
