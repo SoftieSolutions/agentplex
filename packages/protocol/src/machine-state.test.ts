@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { displayableApprovalText } from './displayable-text.js';
 import {
   SESSION_TASK_MAX_CHARS,
   machineLoadSchema,
@@ -235,6 +236,23 @@ describe('serverViewSchema', () => {
     expect(serverViewSchema.safeParse({ ...A_SERVER, daemonVersion: 'y'.repeat(33) }).success).toBe(
       false,
     );
+  });
+
+  it('refuses an os or daemon version holding a character the approval text removes', () => {
+    // One alphabet for both: an isolate and a C1 control are what
+    // `displayableApprovalText` strips from prose, and the same two are what
+    // make a label something other than the name it claims to be.
+    for (const shared of ['⁧', '\u0085']) {
+      expect(displayableApprovalText(`macOS${shared}26`), JSON.stringify(shared)).toBe('macOS26');
+      expect(
+        serverViewSchema.safeParse({ ...A_SERVER, os: `macOS${shared}26` }).success,
+        JSON.stringify(shared),
+      ).toBe(false);
+      expect(
+        serverViewSchema.safeParse({ ...A_SERVER, daemonVersion: `2.0.3${shared}` }).success,
+        JSON.stringify(shared),
+      ).toBe(false);
+    }
   });
 
   it('accepts a measured round trip, with the load the pong carried', () => {

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { graphRunApprovalSubjectSchema, pendingApprovalSchema } from './approval.js';
+import { isDisplayableLabel } from './displayable-text.js';
 import { GRAPH_LABEL_MAX_CHARS } from './graph.js';
 import {
   nodeIdSchema,
@@ -188,18 +189,6 @@ export const machineLoadSchema = z.object({
 export type MachineLoad = z.infer<typeof machineLoadSchema>;
 
 /**
- * The characters no label a machine gives about itself may carry: the C0 and
- * C1 controls, and the bidirectional marks, embeddings, overrides and
- * isolates. The same two classes `displayableApprovalText` removes, refused
- * here rather than removed, because this string is not an agent's prose
- * that has to be shown whatever it holds: it is a name the server composed
- * from its own probe, and one that holds an escape sequence is a server
- * reporting something other than an operating system.
- */
-// eslint-disable-next-line no-control-regex -- the point is the control characters.
-const UNREADABLE = /[\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/;
-
-/**
  * What a machine calls its operating system, e.g. `macOS 26.6.2` or
  * `Debian GNU/Linux 12 (bookworm)`, as the server read it at boot.
  *
@@ -207,12 +196,17 @@ const UNREADABLE = /[\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/;
  * downstream may parse it, which is why it is one string and not a family and
  * a version. The bound is the machine card's, not any distribution's -- a
  * `PRETTY_NAME` longer than this is not a name that fits beside a label.
+ *
+ * A control character or a bidirectional mark is refused here rather than
+ * removed, as `displayableApprovalText` would from prose: this is a name the
+ * server composed from its own probe, and one that holds an escape sequence is
+ * a server reporting something other than an operating system.
  */
 export const machineOsSchema = z
   .string()
   .min(1)
   .max(64)
-  .refine((text) => !UNREADABLE.test(text), 'not text a person can read')
+  .refine(isDisplayableLabel, 'not text a person can read')
   .refine((text) => text.trim() === text, 'padded with whitespace');
 
 /**
@@ -228,7 +222,7 @@ export const daemonVersionSchema = z
   .string()
   .min(1)
   .max(32)
-  .refine((text) => !UNREADABLE.test(text) && !/\s/.test(text), 'not a version');
+  .refine((text) => isDisplayableLabel(text) && !/\s/.test(text), 'not a version');
 
 /**
  * A shutdown a server announced, as the hub holds it.

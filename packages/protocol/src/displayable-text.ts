@@ -1,6 +1,6 @@
 /**
- * The one text-cleaning function two modules share, in a file of its own so
- * that neither has to import the other.
+ * The one alphabet of unreadable characters the modules that show text share,
+ * in a file of its own so that none of them has to import another.
  *
  * It was born in `approval.ts`, and its argument for living in this package
  * still stands there: the proposal a person is shown and the rule compared
@@ -50,4 +50,18 @@ export function displayableApprovalText(text: string): string {
       .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
       .replace(/[؜‎‏‪-‮⁦-⁩]/g, '')
   );
+}
+
+/**
+ * Whether a one-line label is text a person can read as it stands: nothing in
+ * it that `displayableApprovalText` would remove, and no tab or newline.
+ *
+ * Defined through that function rather than beside it with a class of its own,
+ * because a label a machine gives about itself is refused for the same
+ * characters prose is cleaned of, and two copies of the alphabet are the
+ * drift the comment above warns about. The tab and the newline are the only
+ * difference: prose keeps them as layout, and a label is one line.
+ */
+export function isDisplayableLabel(text: string): boolean {
+  return !/[\t\n]/.test(text) && displayableApprovalText(text) === text;
 }
