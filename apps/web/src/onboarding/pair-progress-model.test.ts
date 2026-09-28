@@ -176,6 +176,38 @@ describe('a registration the hub cannot reach', () => {
       problem: 'connection refused',
       nextAction:
         'Check the server is running and its port is reachable from the hub; Settings can unpair it.',
+      os: null,
+      daemonVersion: null,
+    });
+  });
+
+  it('keeps what the machine said it runs after it goes quiet', () => {
+    // The hub keeps both across a close: they are facts about the box, and the
+    // box is the one that went quiet. The captured connected row re-read as
+    // the stale row that follows it, with only the phase fields varied, so the
+    // wizard's card says what Settings says about the same machine.
+    const captured = stateFrom(hubFrames.machineStateJustPaired);
+    const row = captured.servers[0];
+    if (row === undefined) throw new Error('the fixture carries no server');
+    const rows = serverRows({
+      ...captured,
+      servers: [
+        {
+          ...row,
+          phase: 'stale',
+          staleReason: 'unreachable',
+          connectedSince: null,
+          staleSince: 1_756_000_015_000,
+          roundTrip: null,
+          problem: 'connection refused',
+        },
+      ],
+    });
+
+    expect(pairProgress(rows, row.registrationId)).toMatchObject({
+      kind: 'unreachable',
+      os: 'macOS 26.6.2',
+      daemonVersion: '2.0.3',
     });
   });
 

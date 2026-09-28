@@ -92,6 +92,17 @@ export type PairProgress =
       /** The hub's own sentence, or `null` when it published none. */
       readonly problem: string | null;
       readonly nextAction: string;
+      /**
+       * What the machine last said it runs, or `null` when it never said.
+       *
+       * The hub keeps both across a close, because they are facts about the
+       * box and the box is the one that went quiet; Settings draws them on the
+       * same stale row, so the wizard dropping them would be two screens
+       * disagreeing about one machine.
+       */
+      readonly os: string | null;
+      /** Which daemon build last answered, kept and `null` as `os` is. */
+      readonly daemonVersion: string | null;
     };
 
 /**
@@ -188,6 +199,8 @@ export function pairProgress(
         words: row.phase,
         problem: row.problem,
         nextAction: nextActionFor(row.staleReason),
+        os: row.os,
+        daemonVersion: row.daemonVersion,
       };
     default:
       return assertNever(row.tone, 'server row tone');

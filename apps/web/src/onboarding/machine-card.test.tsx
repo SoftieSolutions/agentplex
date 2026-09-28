@@ -348,6 +348,49 @@ describe('the wizard machine card', () => {
     expect(said).toContain('Settings can unpair it');
   });
 
+  it('still says what an unreachable machine runs, as the online card did', async () => {
+    // The hub keeps both facts while the row is stale and Settings draws them,
+    // so the wizard's card must not lose them the moment the machine goes
+    // quiet. The captured connected row re-read as the stale row after it.
+    const captured = stateFrom(hubFrames.machineStateJustPaired);
+    const row = captured.servers[0];
+    expect(row).toBeDefined();
+    if (row === undefined) return;
+    const rows = serverRows({
+      ...captured,
+      servers: [
+        {
+          ...row,
+          phase: 'stale',
+          staleReason: 'unreachable',
+          connectedSince: null,
+          staleSince: 1_756_000_015_000,
+          roundTrip: null,
+          problem: 'connection refused',
+        },
+      ],
+    });
+
+    await draw(pairProgress(rows, row.registrationId));
+
+    const group = headlineGroup('mbp-robert unreachable');
+    const about = [...group.children].find(
+      (child) => child.textContent === 'macOS 26.6.2 · daemon 2.0.3',
+    );
+    expect(about).toBeInstanceOf(HTMLElement);
+    if (!(about instanceof HTMLElement)) return;
+    expect(about.style.fontFamily).toContain('monospace');
+    expect(about.style.fontSize).toContain('0.6875rem');
+    expect(about.style.color).toBe(asDrawn(colorForRole('textMuted', 'dark')));
+  });
+
+  it('draws nothing beside an unreachable machine that never said what it runs', async () => {
+    await draw(progressFrom(hubFrames.machineStateWithServer));
+
+    expect(besideHeadline('gpu-box-01 unreachable')).toEqual([]);
+    expect(copy()).not.toMatch(/daemon|unknown/i);
+  });
+
   it('spins at nobody: an unreachable machine is an ending, not a wait', async () => {
     await draw(progressFrom(hubFrames.machineStateWithServer));
 

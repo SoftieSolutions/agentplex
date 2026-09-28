@@ -146,7 +146,12 @@ export function MachineCard({
          state rather than a second reading of the row -- every row that gets
          here is one. */
       return (
-        <CardFrame tone="blocked" scheme={scheme} headline={`${progress.label} ${progress.words}`}>
+        <CardFrame
+          tone="blocked"
+          scheme={scheme}
+          headline={`${progress.label} ${progress.words}`}
+          about={aboutWords(progress.os, progress.daemonVersion)}
+        >
           <DetailLine scheme={scheme} text={progress.address} />
           {progress.problem !== null && (
             <Text fz={13} lh="prose" style={{ color: colorForToneText('blocked', scheme) }}>
