@@ -1574,6 +1574,84 @@ describe('a retake of a session a claude outside agentplex is running', () => {
     expect(signaller.sent).toEqual([]);
   });
 
+  describe('while a retake waits for the process it signalled to go', () => {
+    // The signalled claude has dropped its entry and its pid may already be
+    // dead while it flushes, so a scan in that window sees nothing running the
+    // session. Only this server knows a takeover is in flight.
+    function resume(sessions: SessionController) {
+      return sessions.start({
+        storeId: WORK,
+        sessionId: session(SESSION),
+        provider: 'claude',
+        prompt: null,
+        directory: null,
+      });
+    }
+
+    it('refuses a start of that session, and launches nothing', async () => {
+      const { sessions, ptys, timers } = await outsideClaude({ status: 'idle' });
+
+      const pending = retake(sessions);
+      await settle();
+      const started = await resume(sessions);
+
+      expect(started).toMatchObject({ ok: false, code: 'refused', hold: null });
+      expect(refusal(started)).toContain('agentplex is taking that session over');
+      expect(ptys.opened).toEqual([]);
+
+      await poll(timers);
+      expect(await pending).toMatchObject({ ok: true, sessionId: SESSION });
+      expect(ptys.opened).toHaveLength(1);
+    });
+
+    it('refuses a second retake of that session, and signals nothing more', async () => {
+      const { sessions, signaller, ptys, timers } = await outsideClaude({ status: 'idle' });
+
+      const pending = retake(sessions);
+      await settle();
+      const second = await retake(sessions);
+
+      expect(refusal(second)).toContain('agentplex is taking that session over');
+      expect(signaller.sent).toEqual([{ pid: OUTSIDE_PID, signal: 'SIGHUP' }]);
+
+      await poll(timers);
+      expect(await pending).toMatchObject({ ok: true, sessionId: SESSION });
+      expect(ptys.opened).toHaveLength(1);
+    });
+
+    it('lets a start through once a retake has resumed the session, to the hold rule', async () => {
+      const { sessions, timers } = await outsideClaude({ status: 'idle' });
+
+      const pending = retake(sessions);
+      await settle();
+      await poll(timers);
+      expect((await pending).ok).toBe(true);
+
+      const started = await resume(sessions);
+      expect(started).toMatchObject({ ok: false, hold: { sessionId: SESSION } });
+      expect(refusal(started)).toContain('already running');
+    });
+
+    it('lets a start through once a retake has been refused at the bound', async () => {
+      const { sessions, ptys, probe, timers, transcripts } = await outsideClaude(
+        { status: 'idle' },
+        { obeys: 'nothing' },
+      );
+
+      const pending = retake(sessions);
+      await settle();
+      await poll(timers, RETAKE_BOUND_MS / RETAKE_POLL_MS);
+      expect(refusal(await pending)).toContain('did not end');
+
+      // The outside claude ends on its own afterwards.
+      probe.exit(OUTSIDE_PID);
+      delete transcripts[ENTRY];
+
+      expect(await resume(sessions)).toMatchObject({ ok: true, sessionId: SESSION });
+      expect(ptys.opened).toHaveLength(1);
+    });
+  });
+
   it('refuses a store it does not have and a provider it cannot drive', async () => {
     const { sessions, signaller } = await outsideClaude({ status: 'idle' });
 
