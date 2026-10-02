@@ -39,6 +39,8 @@ import { newMenu, type NewNodeKind } from './new-menu-model.js';
 import { NewMenuButton } from './new-menu.js';
 import { withSafeArea } from './safe-area.js';
 import { useShellForm, type ShellForm } from './shell-form.js';
+import { SidebarFrame } from './sidebar-frame.js';
+import { browserSidebarWidth, type SidebarWidth } from './sidebar-width.js';
 import { Sidebar } from './sidebar.js';
 import { TopBar } from './top-bar.js';
 
@@ -96,6 +98,13 @@ export interface AppShellProps {
    * off a frame.
    */
   readonly now?: () => number;
+  /**
+   * Where the sidebar's chosen width is kept, injected so a test can supply the
+   * storage: the browser's own is the one thing here a test must not share
+   * with the next test, or one suite's drag would be another's starting width.
+   * The page's is this device's, and the wide frame is the only reader.
+   */
+  readonly sidebarWidth?: SidebarWidth;
 }
 
 /**
@@ -105,7 +114,12 @@ export interface AppShellProps {
  */
 const NEW_MENU = newMenu();
 
-export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.Element {
+export function AppShell({
+  hub,
+  tokens,
+  now = Date.now,
+  sidebarWidth = browserSidebarWidth,
+}: AppShellProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
   const snapshot = useHubSnapshot(hub);
   // Declaring interest in the tree here rather than in the sidebar, because
@@ -327,18 +341,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
     >
       <TopBar scheme={scheme} search={palette} status={status} actions={actions} />
       <Box style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        <Box
-          component="aside"
-          w={240}
-          style={{
-            flexShrink: 0,
-            minWidth: 0,
-            borderRight: `1px solid ${colorForRole('border', scheme)}`,
-            // A notched phone in landscape is wider than the breakpoint, so
-            // this chrome is what it draws and these two are its outer edges.
-            paddingLeft: withSafeArea(0, 'left'),
-          }}
-        >
+        <SidebarFrame store={sidebarWidth} scheme={scheme}>
           <Sidebar
             store={hub}
             state={state}
@@ -350,7 +353,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
             address={destination}
             scheme={scheme}
           />
-        </Box>
+        </SidebarFrame>
         <Box
           component="main"
           style={{
