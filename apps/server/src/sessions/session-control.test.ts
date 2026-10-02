@@ -1545,6 +1545,33 @@ describe('a retake of a session a claude outside agentplex is running', () => {
     expect(problem).toContain('posix_spawnp failed.');
   });
 
+  it('says the process was stopped when the session is gone from the store after it', async () => {
+    // Its files removed while it went. Saying only that the session cannot
+    // be found would leave the reader thinking it runs on where it was.
+    const { sessions, signaller, ptys, timers } = await outsideClaude(
+      { status: 'idle' },
+      {
+        onSignal: (pid, _signal, { probe, transcripts }) => {
+          delete transcripts[ENTRY];
+          delete transcripts[TRANSCRIPT];
+          probe.exit(pid);
+        },
+      },
+    );
+
+    const pending = retake(sessions);
+    await settle();
+    await poll(timers);
+    const problem = refusal(await pending);
+
+    expect(signaller.sent).toEqual([{ pid: OUTSIDE_PID, signal: 'SIGHUP' }]);
+    expect(problem).toBe(
+      'that session was stopped, but it could not be started here: ' +
+        'this server cannot find that session in that store',
+    );
+    expect(ptys.opened).toEqual([]);
+  });
+
   it('refuses in words when the process belongs to another account', async () => {
     const { sessions, ptys, timers } = await outsideClaude(
       { status: 'idle' },
