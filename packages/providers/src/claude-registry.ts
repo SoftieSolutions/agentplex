@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { sessionIdSchema, type SessionId } from '@agentplex/protocol';
 import { z } from 'zod';
 import type { ProcessProbe } from './process-probe.js';
-import type { DiscoveryProblem, TranscriptSignal } from './provider-adapter.js';
+import type { DiscoveryProblem, ProcessPhase, TranscriptSignal } from './provider-adapter.js';
 import type { ProviderFiles } from './provider-files.js';
 
 /**
@@ -60,6 +60,33 @@ export type ClaudeRegistryStatus = (typeof CLAUDE_REGISTRY_STATUSES)[number];
  * slip through — tens of thousands of pids of churn in that window.
  */
 export const PID_RECYCLE_TOLERANCE_MS = 2_000;
+
+/**
+ * How long before its entry's `startedAt` a process may have started and still
+ * be the one that wrote the entry, for a caller about to signal it.
+ *
+ * Discovery bounds a start only from above (`PID_RECYCLE_TOLERANCE_MS`), which
+ * is enough to refuse a recycled pid and not enough to refuse a process that
+ * has held the same pid since *before* the entry was written: on a store two
+ * machines share, the other machine's entries name pids this machine's own
+ * unrelated processes may hold. Reading such a process as the session's costs
+ * a status; signalling it would end somebody's editor. So a signal also needs
+ * the process to have started in the beat before it registered.
+ *
+ * Measured rather than guessed. Claude Code 2.1.287, started nine times on a
+ * developer's Mac, wrote `startedAt` 754 to 959 ms after its process was
+ * forked, and `ps` dates a process to the whole second below, so a genuine
+ * entry reads at most about two seconds after its process here (the captured
+ * fixture reads 1669 ms). Ten seconds is five times that, for a start on a
+ * loaded machine; it still refuses any process older than ten seconds before
+ * the entry, which is where an unrelated holder of the pid would sit.
+ *
+ * Only `liveProcess` applies it, and deliberately not the scan in
+ * `readClaudeRegistry`: there, a real claude that registered late reading as no
+ * process would invite a resume onto a transcript it is still writing, which is
+ * the unsafe direction for that caller.
+ */
+export const CLAUDE_REGISTRATION_WINDOW_MS = 10_000;
 
 /**
  * Only the fields agentplex acts on.
@@ -224,6 +251,53 @@ async function whichProcessItIs(
   if (startedAt === null) return 'undatable';
 
   return startedAt <= entry.startedAt + PID_RECYCLE_TOLERANCE_MS ? 'registered' : 'gone';
+}
+
+/**
+ * Whether the process holding an entry's pid right now is the one that wrote
+ * it, bounded from both sides: no later than the entry allows a genuine
+ * process to have started, and no earlier than `CLAUDE_REGISTRATION_WINDOW_MS`
+ * before it registered.
+ *
+ * Asked fresh, liveness first and date second for the reason
+ * `whichProcessItIs` gives, so a process that exits between the two answers
+ * `false`. Any doubt is `false`: this is the check a signal waits on.
+ */
+export async function registeredJustAfterStarting(
+  entry: Pick<ClaudeRegistryEntry, 'pid' | 'startedAt'>,
+  probe: ProcessProbe,
+): Promise<boolean> {
+  if (!(await probe.isAlive(entry.pid))) return false;
+  const startedAt = await probe.startedAt(entry.pid);
+  if (startedAt === null) return false;
+  return (
+    startedAt <= entry.startedAt + PID_RECYCLE_TOLERANCE_MS &&
+    startedAt >= entry.startedAt - CLAUDE_REGISTRATION_WINDOW_MS
+  );
+}
+
+/**
+ * A registry status in the words a retake decides on.
+ *
+ * `shell` is a `!` command the human typed, still running, and it is
+ * `working` here though `resolveWithRegistry` reads it as not running: status
+ * follows Claude Code's own reduction of it to idle, and a retake must not,
+ * because ending the process ends the command. Claude Code 2.1.287 was seen to
+ * report such a command as `busy`, which reads the same. A status this build
+ * does not know, or none, is `unknown`, which no caller may take as leave.
+ */
+export function phaseOf(status: ClaudeRegistryStatus | undefined): ProcessPhase {
+  switch (status) {
+    case 'busy':
+    case 'shell':
+      return 'working';
+    case 'idle':
+      return 'idle';
+    case 'waiting':
+      return 'waiting';
+    case undefined:
+      return 'unknown';
+  }
 }
 
 /**

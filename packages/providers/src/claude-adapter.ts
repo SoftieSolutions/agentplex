@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import {
   SESSION_CWD_MAX_CHARS,
   sessionIdSchema,
+  type SessionRef,
   type SessionStatus,
   type StoreDescriptor,
 } from '@agentplex/protocol';
@@ -14,7 +15,9 @@ import {
 import { createClaudeProvisioning } from './claude-provisioning.js';
 import {
   CLAUDE_SESSIONS_DIRECTORY,
+  phaseOf,
   readClaudeRegistry,
+  registeredJustAfterStarting,
   resolveWithRegistry,
   type ClaudeRegistry,
 } from './claude-registry.js';
@@ -29,6 +32,7 @@ import {
   type DiscoveredSession,
   type DiscoveryProblem,
   type Launch,
+  type LiveProcess,
   type ProviderAdapter,
   type ProviderDiscovery,
   type ResumeRequest,
@@ -192,6 +196,31 @@ export function createClaudeAdapter({
         return { ok: true, transcript: { activities: [], olderExist: false } };
       }
       return { ok: false, problem: 'this store holds no claude transcript for that session' };
+    },
+
+    /**
+     * The registry read again, whole, at the moment of asking, and the one
+     * entry for this session held to the two-sided check a signal needs.
+     *
+     * Every doubt is `null`. A registry with an entry that would not read
+     * could be hiding this session's current pid behind the one `live` holds;
+     * an entry for it under a pid this machine cannot date might be the
+     * process that is really running it. Either way the pid in hand is not
+     * proven to be the one to signal.
+     */
+    async liveProcess(store: StoreDescriptor, session: SessionRef): Promise<LiveProcess | null> {
+      const registry = await readClaudeRegistry(
+        join(store.path, CLAUDE_SESSIONS_DIRECTORY),
+        files,
+        probe,
+      );
+      if (!registry.readable || registry.inDoubt.has(session.sessionId)) return null;
+
+      const entry = registry.live.get(session.sessionId);
+      if (entry === undefined) return null;
+      if (!(await registeredJustAfterStarting(entry, probe))) return null;
+
+      return { pid: entry.pid, phase: phaseOf(entry.status) };
     },
 
     // Provisioning holds no store and no filesystem, so it is built once here
