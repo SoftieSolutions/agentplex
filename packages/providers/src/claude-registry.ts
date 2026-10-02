@@ -74,6 +74,12 @@ export const PID_RECYCLE_TOLERANCE_MS = 2_000;
 const entrySchema = z.object({
   pid: z.number().int().positive(),
   sessionId: sessionIdSchema,
+  /**
+   * Where the process was started, verbatim. Read only to list a session no
+   * transcript describes yet, and optional for the reason `status` is: an
+   * entry that cannot say where still names a process and a session.
+   */
+  cwd: z.string().min(1).optional().catch(undefined),
   /** Epoch ms at which this entry was written, a beat after its process began. */
   startedAt: z.number().int().positive(),
   status: z.enum(CLAUDE_REGISTRY_STATUSES).optional().catch(undefined),
@@ -84,6 +90,7 @@ const entrySchema = z.object({
 export interface ClaudeRegistryEntry {
   readonly pid: number;
   readonly sessionId: SessionId;
+  readonly cwd?: string | undefined;
   readonly startedAt: number;
   readonly status?: ClaudeRegistryStatus | undefined;
   readonly statusUpdatedAt?: number | undefined;

@@ -1,5 +1,10 @@
 import { join } from 'node:path';
-import { sessionIdSchema, type SessionStatus, type StoreDescriptor } from '@agentplex/protocol';
+import {
+  SESSION_CWD_MAX_CHARS,
+  sessionIdSchema,
+  type SessionStatus,
+  type StoreDescriptor,
+} from '@agentplex/protocol';
 import type { ProcessProbe } from './process-probe.js';
 import {
   claudePermissionHook,
@@ -119,7 +124,10 @@ export function createClaudeAdapter({
       );
       scan.finish();
 
-      return { sessions: found.sessions, problems: [...registry.problems, ...found.problems] };
+      return {
+        sessions: [...found.sessions, ...registryOnlySessions(registry, found.sessions)],
+        problems: [...registry.problems, ...found.problems],
+      };
     },
 
     spawn(request: SpawnRequest): Launch {
@@ -182,6 +190,59 @@ export function createClaudeAdapter({
     // is the server's.
     permissionHook: claudePermissionHook,
   };
+}
+
+/**
+ * A Claude Code that is running and has not typed yet: listed off its verified
+ * registry entry alone.
+ *
+ * Claude Code registers `sessions/<pid>.json`, session id included, within
+ * seconds of starting, and writes no transcript until a turn lands. Without
+ * this a claude somebody opened and has not spoken to yet is invisible, and a
+ * terminal this server spawned with no prompt cannot be joined to its session
+ * until someone types into it. The entry is verified, so the row claims a live
+ * process and nothing else: it has no title, spend, model or activity, because
+ * a transcript is the only place those are written, and its status is the
+ * registry's alone.
+ *
+ * Once a turn lands, the transcript-derived session replaces it: an id already
+ * found among the transcripts is never listed twice. A transcript that is there
+ * and has no turn, is damaged, or cannot be read did not produce a session, so
+ * its live process still does -- the transcript's own problem is reported
+ * beside it all the same.
+ */
+function registryOnlySessions(
+  registry: ClaudeRegistry,
+  found: readonly DiscoveredSession[],
+): DiscoveredSession[] {
+  const described = new Set<string>(found.map((session) => session.sessionId));
+  const sessions: DiscoveredSession[] = [];
+
+  for (const [sessionId, entry] of registry.live) {
+    if (described.has(sessionId)) continue;
+
+    // Nothing written means nothing pending, so the transcript's answer is
+    // `quiet` and the registry's status decides the rest.
+    const resolved = resolveWithRegistry('quiet', entry);
+    sessions.push({
+      sessionId: entry.sessionId,
+      signal: resolved.signal,
+      createdAt: entry.startedAt,
+      updatedAt: entry.statusUpdatedAt ?? entry.startedAt,
+      running: resolved.running,
+      pid: entry.pid,
+      process: 'verified',
+      // The wire refuses a longer cwd outright, and a session is worth more
+      // listed without one than refused for it.
+      cwd: entry.cwd !== undefined && entry.cwd.length <= SESSION_CWD_MAX_CHARS ? entry.cwd : null,
+      title: null,
+      usage: null,
+      model: null,
+      activity: null,
+    });
+  }
+
+  return sessions;
 }
 
 async function discoverSessions(
