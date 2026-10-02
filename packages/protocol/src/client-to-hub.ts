@@ -6,13 +6,7 @@ import {
   approvalPolicyRuleSchema,
   approvalSubjectSchema,
 } from './approval.js';
-import {
-  catalogueCursorSchema,
-  catalogueFilterSchema,
-  catalogueGroupBySchema,
-  catalogueSortSchema,
-  catalogueViewSchema,
-} from './catalogue.js';
+import { catalogueQuerySchema } from './catalogue.js';
 import { directorySchema } from './directory.js';
 import { docContentSchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema } from './frames.js';
@@ -506,16 +500,16 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
    * handed out. It is refused when it was minted before a change to the tree:
    * `catalogue-changed` has already told this client the version moved, and a
    * page resumed across a change would skip or repeat rows without saying so.
+   *
+   * The fields are `catalogueQuerySchema`'s, spread rather than restated. A
+   * restatement is a second list that a field added to the query can be missing
+   * from, and the frame would then strip on the wire what the type says a
+   * client sent.
    */
   z.object({
     type: z.literal('catalogue-query'),
     id: frameIdSchema,
-    view: catalogueViewSchema,
-    groupBy: catalogueGroupBySchema,
-    sort: catalogueSortSchema,
-    filter: catalogueFilterSchema,
-    cursor: catalogueCursorSchema.nullable(),
-    limit: z.int().positive(),
+    ...catalogueQuerySchema.shape,
   }),
   /**
    * Makes a document in a project, on one machine, with its first content.

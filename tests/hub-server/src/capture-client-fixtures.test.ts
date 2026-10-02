@@ -1926,6 +1926,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       sort: { key: 'name', direction: 'asc' },
       filter: {},
       limit: 1,
+      openProjects: null,
     };
     starter.send({ ...catalogueQuery, id: 14, cursor: null });
     await until(
@@ -1982,6 +1983,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       groupBy: 'none',
       sort: { key: 'name', direction: 'asc' },
       filter: {},
+      openProjects: null,
     };
     starter.send({ ...treeQuery, id: 18, cursor: null, limit: 2 });
     await until(
@@ -2704,6 +2706,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       filter: {},
       cursor: null,
       limit: 50,
+      openProjects: null,
     });
     await until(
       () => stopper.received.some((text) => labelFor(text) === 'cataloguePage'),

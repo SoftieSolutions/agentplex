@@ -604,6 +604,7 @@ describe('paging the catalogue of a reporting fleet', () => {
       filter: {},
       cursor: null,
       limit: 10,
+      openProjects: null,
       ...query,
     });
   }
@@ -818,6 +819,7 @@ describe('a flat catalogue search over the kinds a client names', () => {
       filter,
       cursor: null,
       limit: 10,
+      openProjects: null,
     });
   }
 

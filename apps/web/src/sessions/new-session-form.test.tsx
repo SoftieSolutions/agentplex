@@ -127,6 +127,7 @@ describe('the new-session form meeting a holder', () => {
     filter: {},
     cursor: null,
     limit: 50,
+    openProjects: null,
   };
 
   /**

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOGUE_FILTER_MAX_KINDS,
+  CATALOGUE_MAX_OPEN_PROJECTS,
   CATALOGUE_SEARCH_MAX_CHARS,
   catalogueFilterSchema,
   catalogueItemSchema,
@@ -33,6 +34,7 @@ const QUERY = {
   filter: {},
   cursor: null,
   limit: 50,
+  openProjects: null,
 };
 
 const ITEM = {
@@ -149,6 +151,57 @@ describe('a catalogue query', () => {
         kinds: Array.from({ length: CATALOGUE_FILTER_MAX_KINDS + 1 }, () => 'session'),
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('the open projects a tree query names', () => {
+  /**
+   * Required and nullable, never optional. `null` is "draw the tree whole", the
+   * question every client asked before this field existed; a list is "only
+   * these projects are open". An absent field would be a third answer meaning
+   * one of those two by convention, and a client that forgot to send it would
+   * be answered as though it had decided something.
+   */
+  it('requires the field, and takes null as the whole tree', () => {
+    const { openProjects: _omitted, ...without } = QUERY;
+    expect(catalogueQuerySchema.safeParse(without).success).toBe(false);
+    expect(catalogueQuerySchema.parse(QUERY).openProjects).toBeNull();
+  });
+
+  it('accepts an empty list, which is every project closed', () => {
+    expect(catalogueQuerySchema.parse({ ...QUERY, openProjects: [] }).openProjects).toEqual([]);
+  });
+
+  it('parses each entry as a node id', () => {
+    expect(
+      catalogueQuerySchema.parse({ ...QUERY, openProjects: ['home', 'project-1'] }).openProjects,
+    ).toEqual(['home', 'project-1']);
+    expect(catalogueQuerySchema.safeParse({ ...QUERY, openProjects: [''] }).success).toBe(false);
+    expect(catalogueQuerySchema.safeParse({ ...QUERY, openProjects: [7] }).success).toBe(false);
+    expect(catalogueQuerySchema.safeParse({ ...QUERY, openProjects: 'home' }).success).toBe(false);
+  });
+
+  it('bounds the list, so a bug cannot fill one without anything objecting', () => {
+    const ids = (count: number): readonly string[] =>
+      Array.from({ length: count }, (_, index) => `project-${String(index)}`);
+    expect(
+      catalogueQuerySchema.safeParse({ ...QUERY, openProjects: ids(CATALOGUE_MAX_OPEN_PROJECTS) })
+        .success,
+    ).toBe(true);
+    expect(
+      catalogueQuerySchema.safeParse({
+        ...QUERY,
+        openProjects: ids(CATALOGUE_MAX_OPEN_PROJECTS + 1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rides on the client frame', () => {
+    expect(
+      parseClientFrame({ type: 'catalogue-query', id: 1, ...QUERY, openProjects: ['home'] }).ok,
+    ).toBe(true);
+    const { openProjects: _omitted, ...without } = QUERY;
+    expect(parseClientFrame({ type: 'catalogue-query', id: 1, ...without }).ok).toBe(false);
   });
 });
 

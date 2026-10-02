@@ -146,6 +146,13 @@ function shapeOf(query: CatalogueQuery): string {
     // another order has not moved a row, and refusing its cursor would be
     // refusing something that is still exactly true.
     query.filter.kinds === undefined ? null : [...query.filter.kinds].sort(),
+    // A set as well, and deduplicated for the same reason. In the tree view
+    // only: the list view draws no containers to open, so its order is the same
+    // whatever the open set says, and a cursor carried across a change to it is
+    // still exactly true.
+    query.view === 'tree' && query.openProjects !== null
+      ? [...new Set(query.openProjects)].sort()
+      : null,
   ]);
 }
 
@@ -219,8 +226,9 @@ export async function queryCatalogue(
         ok: false,
         code: 'bad-request',
         problem:
-          'that cursor belongs to a different query: the view, grouping, sort or filter ' +
-          'has changed, and a position in the old order means nothing in the new one',
+          'that cursor belongs to a different query: the view, grouping, sort, filter or ' +
+          'open projects have changed, and a position in the old order means nothing in ' +
+          'the new one',
       };
     }
     offset = position.o;
@@ -585,16 +593,31 @@ function treeOrder(
 
   const ordered: Resolved[] = [];
   const seen = new Set<NodeId>();
+  // What the walk leaves out on purpose is marked seen, so the append below
+  // does not bring it back as though it were unreachable.
+  const pass = (parentId: NodeId): void => {
+    for (const child of children.get(parentId) ?? []) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      pass(child.id);
+    }
+  };
   const visit = (parentId: NodeId | null): void => {
     for (const node of [...(children.get(parentId) ?? [])].sort(bySiblings)) {
       // A cycle cannot be written through this feature; if one exists anyway,
       // this is what stops the walk rather than recursing forever.
       if (seen.has(node.id)) continue;
       seen.add(node.id);
+      const reach = reachOf(node, query.openProjects);
+      if (reach === 'none') {
+        pass(node.id);
+        continue;
+      }
       if (!survives(node, new Set())) continue;
       const item = resolved.get(node.id);
       if (item !== undefined) ordered.push(item);
-      visit(node.id);
+      if (reach === 'row') pass(node.id);
+      else visit(node.id);
     }
   };
   visit(null);
@@ -607,6 +630,27 @@ function treeOrder(
     (item) => !seen.has(item.node.id) && passes(item, query),
   );
   return [...ordered, ...unreachable.sort(compare)];
+}
+
+/**
+ * How much of a node the tree walk draws, under the query's open set.
+ *
+ * `null` is the tree whole, as it was before the open set existed. A list makes
+ * the top of the tree projects only -- a root folder or a loose session is not
+ * drawn, nor anything under it -- and a project not named in it is one row with
+ * its contents left out. An id in the list that is not a project, or not in the
+ * tree, opens nothing: it is a client a move behind, and it costs only itself.
+ *
+ * Survival is untouched by this. A closed project with a hit under it is still
+ * drawn, as the row a person opens to find the hit.
+ */
+function reachOf(
+  node: TreeNode,
+  openProjects: CatalogueQuery['openProjects'],
+): 'whole' | 'row' | 'none' {
+  if (openProjects === null) return 'whole';
+  if (node.kind !== PROJECT_KIND) return node.parentId === null ? 'none' : 'whole';
+  return openProjects.includes(node.id) ? 'whole' : 'row';
 }
 
 /**

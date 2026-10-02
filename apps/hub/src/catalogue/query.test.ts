@@ -190,6 +190,7 @@ const BASE: CatalogueQuery = {
   filter: {},
   cursor: null,
   limit: 50,
+  openProjects: null,
 };
 
 interface Answered {
@@ -798,6 +799,175 @@ describe('the catalogue cursor', () => {
     if (refused.ok) return;
     expect(refused.code).toBe('bad-request');
     expect(refused.problem).toContain('not a cursor this hub minted');
+  });
+});
+
+/**
+ * The tree drawn with only some projects open.
+ *
+ * What these hold the hub to is that the answer is what a screen draws: a
+ * closed project is one row, its contents are not counted, and the cursor is a
+ * position among the rows that are there. HOME's place among the projects is
+ * deliberately not asserted -- where it sits at the root is another rule's --
+ * so every order below is read with HOME taken out, and HOME is closed in all
+ * of them.
+ */
+describe('the catalogue query, with only some projects open', () => {
+  function openCatalogue(): { readonly rows: NodeRow[]; readonly readings: Reading[] } {
+    const rows: NodeRow[] = [project('home', null, 0, 'HOME')];
+    const readings: Reading[] = [];
+    for (let index = 0; index < 120; index += 1) {
+      const label = String(index).padStart(3, '0');
+      rows.push(session(`home-${label}`, 'home', index, `session-home-${label}`, `home ${label}`));
+      readings.push({ sessionId: `session-home-${label}` });
+    }
+    rows.push(
+      project('alpha', null, 1, 'alpha'),
+      session('alpha-1', 'alpha', 0, 'session-alpha-1', 'alpha one'),
+      project('bravo', null, 2, 'bravo'),
+      folder('bravo-notes', 'bravo', 0, 'notes'),
+      session('bravo-deep', 'bravo-notes', 0, 'session-bravo-deep', 'deep'),
+      session('bravo-1', 'bravo', 1, 'session-bravo-1', 'bravo one'),
+      project('charlie', null, 3, 'charlie'),
+      session('charlie-1', 'charlie', 0, 'session-charlie-1', 'charlie one'),
+    );
+    readings.push(
+      { sessionId: 'session-alpha-1', status: 'awaiting-permission' },
+      { sessionId: 'session-bravo-deep' },
+      { sessionId: 'session-bravo-1' },
+      { sessionId: 'session-charlie-1' },
+    );
+    return { rows, readings };
+  }
+
+  const tree = (openProjects: readonly string[] | null): Partial<CatalogueQuery> => ({
+    view: 'tree',
+    openProjects: openProjects === null ? null : openProjects.map((id) => nodeIdSchema.parse(id)),
+  });
+
+  const withoutHome = (items: readonly CatalogueItem[]): readonly string[] =>
+    idsOf(items).filter((id) => id !== 'home');
+
+  it('answers every project closed as the projects alone, counted as the rows drawn', async () => {
+    const { rows, readings } = openCatalogue();
+
+    const answered = await over(rows, readings).page({ ...tree([]), limit: 50 });
+
+    expect([...idsOf(answered.items)].sort()).toEqual(['alpha', 'bravo', 'charlie', 'home']);
+    expect(answered.total).toBe(4);
+    expect(answered.nextCursor).toBeNull();
+  });
+
+  it('draws an open project whole, depth first, and leaves the others closed', async () => {
+    const { rows, readings } = openCatalogue();
+
+    const answered = await over(rows, readings).page({ ...tree(['bravo']), limit: 50 });
+
+    expect(withoutHome(answered.items)).toEqual([
+      'alpha',
+      'bravo',
+      'bravo-1',
+      'bravo-notes',
+      'bravo-deep',
+      'charlie',
+    ]);
+    expect(answered.total).toBe(7);
+    const depths = new Map(answered.items.map((item) => [item.id, item.depth]));
+    expect(depths.get(nodeIdSchema.parse('bravo-deep'))).toBe(2);
+  });
+
+  it('answers the tree whole, as it always did, when no open set is named', async () => {
+    const { rows, readings } = openCatalogue();
+
+    const answered = await over(rows, readings).page({ ...tree(null), limit: 200 });
+
+    expect(answered.total).toBe(rows.length);
+  });
+
+  it('leaves a root folder and a loose session out once an open set is named', async () => {
+    // The top of the tree is projects only, and it is the hub that holds that
+    // rather than the client: a client that hid the root folder itself would
+    // be paging through rows it never draws.
+    const { rows, readings } = openCatalogue();
+    rows.push(
+      folder('loose-folder', null, 4, 'drafts'),
+      session('in-loose-folder', 'loose-folder', 0, 'session-in-loose-folder', 'draft'),
+      session('loose', null, 5, 'session-loose', 'loose'),
+    );
+    readings.push({ sessionId: 'session-in-loose-folder' }, { sessionId: 'session-loose' });
+
+    const closed = await over(rows, readings).page({ ...tree([]), limit: 50 });
+    expect([...idsOf(closed.items)].sort()).toEqual(['alpha', 'bravo', 'charlie', 'home']);
+    expect(closed.total).toBe(4);
+
+    const whole = await over(rows, readings).page({ ...tree(null), limit: 200 });
+    expect(idsOf(whole.items)).toEqual(
+      expect.arrayContaining(['loose-folder', 'in-loose-folder', 'loose']),
+    );
+  });
+
+  it('keeps a closed project with a hit under it and drops one without', async () => {
+    const { rows, readings } = openCatalogue();
+
+    const answered = await over(rows, readings).page({
+      ...tree([]),
+      filter: { status: 'awaiting-permission' },
+    });
+
+    expect(idsOf(answered.items)).toEqual(['alpha']);
+    expect(answered.total).toBe(1);
+  });
+
+  it('refuses a cursor minted with another open set, and takes one listed in another order', async () => {
+    const { rows, readings } = openCatalogue();
+    const catalogue = over(rows, readings);
+
+    const first = await catalogue.page({ ...tree(['alpha', 'bravo']), limit: 1 });
+    const cursor = first.nextCursor;
+    if (cursor === null) throw new Error('the first page ended the answer');
+
+    const other = await catalogue.ask({ ...tree(['charlie']), limit: 1, cursor });
+    expect(other.ok).toBe(false);
+    if (other.ok) return;
+    expect(other.code).toBe('bad-request');
+    expect(other.problem).toContain('different query');
+
+    const reordered = await catalogue.page({ ...tree(['bravo', 'alpha']), limit: 200, cursor });
+    const straight = await catalogue.page({ ...tree(['alpha', 'bravo']), limit: 200, cursor });
+    expect(idsOf(reordered.items)).toEqual(idsOf(straight.items));
+  });
+
+  it('answers the list view the same whatever the open set, and takes its cursors across them', async () => {
+    const { rows, readings } = openCatalogue();
+    const catalogue = over(rows, readings);
+
+    const unset = await catalogue.page({ openProjects: null, limit: 50 });
+    const none = await catalogue.page({ openProjects: [], limit: 50 });
+    const one = await catalogue.page({ openProjects: [nodeIdSchema.parse('bravo')], limit: 50 });
+
+    expect(idsOf(none.items)).toEqual(idsOf(unset.items));
+    expect(idsOf(one.items)).toEqual(idsOf(unset.items));
+    expect(none.total).toBe(unset.total);
+    expect(one.total).toBe(unset.total);
+
+    const cursor = unset.nextCursor;
+    if (cursor === null) throw new Error('the first page ended the answer');
+    const resumed = await catalogue.ask({ openProjects: [], limit: 50, cursor });
+    expect(resumed.ok).toBe(true);
+  });
+
+  it('opens nothing for an id that is not a project or is not in the tree', async () => {
+    const { rows, readings } = openCatalogue();
+    const catalogue = over(rows, readings);
+
+    const closed = await catalogue.page({ ...tree([]), limit: 50 });
+    const stale = await catalogue.page({
+      ...tree(['bravo-notes', 'bravo-1', 'no-such-node']),
+      limit: 50,
+    });
+
+    expect(idsOf(stale.items)).toEqual(idsOf(closed.items));
+    expect(stale.total).toBe(closed.total);
   });
 });
 

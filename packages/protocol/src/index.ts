@@ -21,7 +21,11 @@ export {
 } from './activity.js';
 export type { Activity, ActivityKind } from './activity.js';
 
-export { CATALOGUE_PAGE_MAX_LIMIT, CATALOGUE_SEARCH_MAX_CHARS } from './catalogue.js';
+export {
+  CATALOGUE_MAX_OPEN_PROJECTS,
+  CATALOGUE_PAGE_MAX_LIMIT,
+  CATALOGUE_SEARCH_MAX_CHARS,
+} from './catalogue.js';
 export type {
   CatalogueFilter,
   CatalogueGroup,
