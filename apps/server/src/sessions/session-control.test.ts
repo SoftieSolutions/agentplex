@@ -451,6 +451,103 @@ describe('a start this server runs', () => {
   });
 });
 
+describe('a resume of a session something else is running', () => {
+  const SESSIONS_AT = '/volumes/work/claude/sessions';
+  const OUTSIDE_PID = 4242;
+
+  function transcript(fields: Readonly<Record<string, unknown>>): string {
+    return JSON.stringify({
+      signal: 'awaiting-input',
+      updatedAt: START - 1_000,
+      cwd: '/volumes/work/project',
+      ...fields,
+    });
+  }
+
+  function resume(sessions: SessionController, id: string) {
+    return sessions.start({
+      storeId: WORK,
+      sessionId: session(id),
+      provider: 'claude',
+      prompt: null,
+      directory: null,
+    });
+  }
+
+  it('refuses a session a verified process outside agentplex runs, in words and with no pid', async () => {
+    // A second process on one transcript interleaves its writes with the
+    // first and damages the session for both. Somebody's own terminal is
+    // running this one; this server holds nothing, so the answer carries no
+    // hold, and the pid stays on this machine.
+    const { sessions, ptys } = machine({
+      files: {
+        [`${SESSIONS_AT}/session-outside.json`]: transcript({
+          running: true,
+          pid: OUTSIDE_PID,
+          process: 'verified',
+        }),
+      },
+    });
+
+    const outcome = await resume(sessions, 'session-outside');
+
+    expect(outcome).toMatchObject({ ok: false, code: 'refused', hold: null });
+    if (outcome.ok) return;
+    expect(outcome.problem).toContain('outside agentplex');
+    expect(outcome.problem).not.toMatch(/\d/);
+    expect(ptys.opened).toEqual([]);
+  });
+
+  it('never calls its own spawn outside agentplex before a report has bound it', async () => {
+    // The provider registered the process this server forked, and no report
+    // has run since, so the terminal holds no session id yet. A resume of
+    // that session is the second start the hold rule refuses, and it names
+    // the hold rather than blaming somebody else's terminal.
+    const { sessions, ptys } = machine({
+      pids: [OUTSIDE_PID],
+      files: {
+        [`${SESSIONS_AT}/session-ours.json`]: transcript({
+          createdAt: START,
+          running: true,
+          pid: OUTSIDE_PID,
+        }),
+      },
+    });
+    const spawned = await sessions.start({
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      directory: null,
+    });
+    expect(spawned.ok).toBe(true);
+
+    const outcome = await resume(sessions, 'session-ours');
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'refused',
+      hold: { sessionId: 'session-ours', stoppable: true, pause: 'none' },
+    });
+    if (outcome.ok) return;
+    expect(outcome.problem).not.toContain('outside agentplex');
+    expect(ptys.opened).toHaveLength(1);
+  });
+
+  it('resumes a session no process was seen running, even when nobody could look', async () => {
+    // `unknown` is not a sighting. Refusing on it would make every codex
+    // session, and every Claude store this server cannot list, unresumable.
+    const { sessions, ptys } = machine({
+      files: { [`${SESSIONS_AT}/session-unseen.json`]: transcript({ process: 'unknown' }) },
+    });
+
+    const outcome = await resume(sessions, 'session-unseen');
+
+    expect(outcome).toMatchObject({ ok: true, sessionId: 'session-unseen' });
+    expect(ptys.opened).toHaveLength(1);
+  });
+});
+
 /**
  * A start that names no project, against the real Claude adapter.
  *
