@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from 'node:path';
 import type { StoreDescriptor } from '@agentplex/protocol';
 import { CLAUDE_PERMISSION_HOOK_EVENT } from './claude-permission.js';
 import type {
@@ -43,15 +44,30 @@ export const CLAUDE_COMMAND = 'claude';
 export const CLAUDE_SCRUB_PREFIXES: readonly string[] = ['CLAUDE', 'AI_AGENT'];
 
 /**
- * Where Claude Code keeps the state this adapter reads.
+ * Where Claude Code keeps the state this adapter reads, when the store is not
+ * the one it would find on its own.
  *
- * The store *is* the config directory — `<store>/projects` and
- * `<store>/sessions` are exactly the layout of a `~/.claude` — so a child that
- * is not told about it writes its transcript into whichever home directory
- * agentplex is running as, and the store the session was started in never
- * hears about it. Set after the scrub, deliberately: `CLAUDE_CONFIG_DIR` is
- * inside a scrubbed prefix, and the supervisor applying a plan's variables
- * last is what makes an adapter able to state one on purpose.
+ * The store *is* the config directory -- `<store>/projects` and
+ * `<store>/sessions` are exactly the layout of a `~/.claude` -- so a child
+ * started in a store anywhere but the account's `~/.claude` has to be told
+ * where it is, or it writes its transcript under `~/.claude` and the store the
+ * session was started in never hears about it. Set after the scrub,
+ * deliberately: `CLAUDE_CONFIG_DIR` is inside a scrubbed prefix, and the
+ * supervisor applying a plan's variables last is what makes an adapter able to
+ * state one on purpose.
+ *
+ * It is *not* set for the default store, and that is not an optimisation. The
+ * variable means more to Claude Code than "where the transcripts go". Run at
+ * the origin, on 2.1.287 under macOS: unset, the global config is
+ * `~/.claude.json` and the credentials are the keychain item `Claude
+ * Code-credentials`; set to `~/.claude` -- the very same directory -- the
+ * global config becomes `~/.claude/.claude.json` and the keychain item one
+ * suffixed with a hash of the directory. `claude auth status` says logged in
+ * the first way and logged out the second. A session started that way opens
+ * on the onboarding screen, with none of the account's theme, trust or login,
+ * while its transcript and its `sessions/<pid>.json` land under `~/.claude`
+ * exactly as they do when the variable is unset. Naming the default store
+ * gains nothing and costs the account its own Claude Code.
  */
 export const CLAUDE_CONFIG_DIR = 'CLAUDE_CONFIG_DIR';
 
@@ -62,8 +78,9 @@ export const CLAUDE_CONFIG_DIR = 'CLAUDE_CONFIG_DIR';
  * Beside the variable that overrides it, because the two are one fact. This is
  * the store an operator installing agentplex on their own machine already has,
  * with every session they have already run in it, so it is the store setup can
- * offer them instead of asking for a path. Nothing at runtime reads it: where a
- * store is stays configuration.
+ * offer them instead of asking for a path. A launch reads it for one thing
+ * only: to recognise that store and leave the variable unset (see above).
+ * Where a store is stays configuration.
  */
 export const CLAUDE_DEFAULT_STORE_DIRECTORY = '.claude';
 
@@ -157,12 +174,18 @@ function shellQuoted(argument: string): string {
  * about the launch travels in the environment, where `ps` cannot read it. See
  * `claudePermissionHook` above for what is in that file, and for what happens
  * when the operator has a `PermissionRequest` hook of their own.
+ *
+ * `homeDirectory` is the home of the account the child runs as, injected by the
+ * entrypoint that read it: it decides whether the store is the one Claude Code
+ * finds unaided, and a builder that looked the home up itself would answer for
+ * whatever account a test happened to run under.
  */
 export function planClaudeLaunch(
   store: StoreDescriptor,
   cwd: string | null,
   args: readonly string[],
   approval: LaunchApproval | null,
+  homeDirectory: string,
 ): Launch {
   const workingDirectory = parseWorkingDirectory(cwd, store);
   if (!workingDirectory.ok) return { ok: false, problem: workingDirectory.problem };
@@ -178,10 +201,29 @@ export function planClaudeLaunch(
       args: approval === null ? args : [CLAUDE_SETTINGS_FLAG, approval.settingsFile, ...args],
       cwd: workingDirectory.cwd,
       // The store last, so that a launch cannot lose `CLAUDE_CONFIG_DIR` to a
-      // variable the approval brought: a child that writes its transcript into
-      // the server's own home is a session this store never hears about again.
-      env: { ...approval?.env, [CLAUDE_CONFIG_DIR]: store.path },
+      // variable the approval brought: a child in a store outside the home
+      // that writes its transcript under `~/.claude` is a session this store
+      // never hears about again. Absent for the default store, where naming
+      // it would move the child's global config and credentials elsewhere.
+      env: isDefaultStore(store, homeDirectory)
+        ? { ...approval?.env }
+        : { ...approval?.env, [CLAUDE_CONFIG_DIR]: store.path },
       scrubEnvPrefixes: CLAUDE_SCRUB_PREFIXES,
     },
   };
+}
+
+/**
+ * Whether a store is the directory Claude Code would use with no
+ * `CLAUDE_CONFIG_DIR` at all.
+ *
+ * Only for an absolute home. The server starts without one, and an empty or
+ * relative home is not a place a store can be under: the launch then names the
+ * store, which is the answer that cannot lose a transcript. Both sides are
+ * resolved so that a trailing slash, or a `..` in configuration, compares as
+ * the directory it names.
+ */
+function isDefaultStore(store: StoreDescriptor, homeDirectory: string): boolean {
+  if (!isAbsolute(homeDirectory)) return false;
+  return resolve(store.path) === resolve(homeDirectory, CLAUDE_DEFAULT_STORE_DIRECTORY);
 }

@@ -94,7 +94,18 @@ const VERSION_TIMEOUT_MS = 10_000;
  */
 const AUTH_TIMEOUT_MS = 10_000;
 
-export function createClaudeProvisioning(): ProviderProvisioning {
+export interface ClaudeProvisioningDependencies {
+  /**
+   * The home of the account a login runs as. A login builds the launch a
+   * session does, and that launch needs the home to know whether the store is
+   * the account's own `~/.claude`.
+   */
+  readonly homeDirectory: string;
+}
+
+export function createClaudeProvisioning({
+  homeDirectory,
+}: ClaudeProvisioningDependencies): ProviderProvisioning {
   return {
     install(request: InstallRequest): InstallPlan {
       const prefix = parseNpmPrefix(request.prefix);
@@ -184,13 +195,15 @@ export function createClaudeProvisioning(): ProviderProvisioning {
 
     login(request: LoginRequest): Launch {
       // The same launch a session gets, with different argv. That is the point
-      // of sharing the builder: the login lands its credentials in this store
-      // because `CLAUDE_CONFIG_DIR` is set the one way it is ever set, and it
-      // is scrubbed of the nested-run markers for the same reason a session is.
+      // of sharing the builder: the login lands its credentials where a session
+      // in this store will look for them, because `CLAUDE_CONFIG_DIR` is set --
+      // or, for the account's default store, left unset -- the one way it ever
+      // is, and it is scrubbed of the nested-run markers for the same reason a
+      // session is.
       // No approval, and it is not an omission: a login is a person at a
       // terminal answering a browser, not an agent proposing a tool call, and a
       // hook pointed at the gate here would admit a launch that never asks.
-      return planClaudeLaunch(request.store, request.cwd, CLAUDE_LOGIN_ARGS, null);
+      return planClaudeLaunch(request.store, request.cwd, CLAUDE_LOGIN_ARGS, null, homeDirectory);
     },
   };
 }

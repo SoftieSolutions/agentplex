@@ -164,7 +164,11 @@ async function start(transcripts: Readonly<Record<string, string>>): Promise<Har
       // about -- a tool name becoming a command, a redacted payload becoming
       // nothing -- are that adapter's, and a fake with its own vocabulary
       // would be a suite asserting against itself.
-      const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe({}) });
+      const adapter = createClaudeAdapter({
+        files,
+        probe: createFakeProcessProbe({}),
+        homeDirectory: '/home/agentplex',
+      });
       serveServerEnd(serverEnd, {
         identity: { serverId: serverIdSchema.parse('server-attic'), token: 'tok-attic' },
         stores: [STORE],

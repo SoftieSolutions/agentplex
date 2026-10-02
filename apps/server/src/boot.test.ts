@@ -195,7 +195,11 @@ describe('startRuntime', () => {
       ...dependencies(),
       logger: createLogger('info', (record) => records.push(record)),
       providers: createProviderRegistry([
-        createClaudeAdapter({ files: createFakeProviderFiles(), probe: createFakeProcessProbe() }),
+        createClaudeAdapter({
+          files: createFakeProviderFiles(),
+          probe: createFakeProcessProbe(),
+          homeDirectory: '/home/agentplex',
+        }),
       ]),
     });
 

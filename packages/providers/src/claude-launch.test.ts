@@ -4,6 +4,7 @@ import {
   claudePermissionHook,
   planClaudeLaunch,
   CLAUDE_CONFIG_DIR,
+  CLAUDE_SCRUB_PREFIXES,
   CLAUDE_SETTINGS_FILE_NAME,
 } from './claude-launch.js';
 import { planCodexLaunch } from './codex-launch.js';
@@ -24,6 +25,12 @@ const STORE: StoreDescriptor = {
   path: '/Users/dev/.claude',
 };
 const CWD = '/Users/dev/Code/agentplex';
+/**
+ * The account the server runs as, chosen so that `STORE` is *not* its default
+ * store: every case above the default-store ones is about a store Claude Code
+ * would not find on its own, which is the case `CLAUDE_CONFIG_DIR` is for.
+ */
+const SERVER_HOME = '/home/agentplex';
 
 const APPROVAL: LaunchApproval = {
   settingsFile: '/var/lib/agentplex/approvals/launch-7.settings.json',
@@ -34,7 +41,7 @@ const APPROVAL: LaunchApproval = {
 };
 
 function plan(approval: LaunchApproval | null, args: readonly string[] = []) {
-  const launch = planClaudeLaunch(STORE, CWD, args, approval);
+  const launch = planClaudeLaunch(STORE, CWD, args, approval, SERVER_HOME);
   if (!launch.ok) throw new Error(launch.problem);
   return launch.plan;
 }
@@ -73,8 +80,9 @@ describe('planning a claude launch that can ask', () => {
 
   it('still points the child at the store it was started in', () => {
     // The approval variables are additions and never a replacement: a launch
-    // that lost `CLAUDE_CONFIG_DIR` would write its transcript into whichever
-    // home the server runs as, and the store would never hear about it.
+    // into a store outside the server's home that lost `CLAUDE_CONFIG_DIR`
+    // would write its transcript under `~/.claude`, and the store would never
+    // hear about it.
     expect(plan(APPROVAL, [])[`env`][CLAUDE_CONFIG_DIR]).toBe(STORE.path);
   });
 
@@ -87,7 +95,7 @@ describe('planning a claude launch that can ask', () => {
   it('refuses a working directory the store owns, hook or no hook', () => {
     // The approval is an addition to a launch and not a way around one of its
     // rules: everything a launch can be refused for is still the directory.
-    const launch = planClaudeLaunch(STORE, `${STORE.path}/projects`, [], APPROVAL);
+    const launch = planClaudeLaunch(STORE, `${STORE.path}/projects`, [], APPROVAL, SERVER_HOME);
     expect(launch.ok).toBe(false);
   });
 
@@ -100,6 +108,72 @@ describe('planning a claude launch that can ask', () => {
     if (!launch.ok) return;
     expect(launch.plan.args).toEqual(['resume', 'session-a']);
     expect(Object.keys(launch.plan.env)).toEqual(['CODEX_HOME']);
+  });
+});
+
+describe("planning a claude launch in the account's own default store", () => {
+  // Claude Code 2.1.287, run at the origin: with `CLAUDE_CONFIG_DIR` unset the
+  // global config is `~/.claude.json` and the keychain item is `Claude
+  // Code-credentials`; set to `~/.claude` -- the same directory -- the global
+  // config moves to `~/.claude/.claude.json` and the keychain item to one
+  // suffixed with a hash of the directory. A launch that names the default
+  // store therefore starts on the onboarding screen, logged out, while the
+  // transcript and the registry land in the same place either way.
+  const HOME = '/home/dev';
+  const store = (path: string): StoreDescriptor => ({
+    storeId: storeIdSchema.parse('store-a'),
+    path,
+  });
+  const envOf = (path: string, approval: LaunchApproval | null, home = HOME) => {
+    const launch = planClaudeLaunch(store(path), '/home/dev/Code/agentplex', [], approval, home);
+    if (!launch.ok) throw new Error(launch.problem);
+    return launch.plan.env;
+  };
+
+  it('leaves the config directory unset for the store under the home', () => {
+    expect(envOf('/home/dev/.claude', null)).not.toHaveProperty(CLAUDE_CONFIG_DIR);
+    expect(envOf('/home/dev/.claude', null)).toEqual({});
+  });
+
+  it('leaves it unset when the launch can ask, and keeps the approval variables', () => {
+    const env = envOf('/home/dev/.claude', APPROVAL);
+    expect(env).not.toHaveProperty(CLAUDE_CONFIG_DIR);
+    expect(env).toEqual(APPROVAL.env);
+  });
+
+  it('reads a trailing slash as the same directory', () => {
+    expect(envOf('/home/dev/.claude/', null)).not.toHaveProperty(CLAUDE_CONFIG_DIR);
+    expect(envOf('/home/dev/.claude/', APPROVAL)).not.toHaveProperty(CLAUDE_CONFIG_DIR);
+  });
+
+  it('names a store outside the home', () => {
+    expect(envOf('/volumes/store', null)).toEqual({ [CLAUDE_CONFIG_DIR]: '/volumes/store' });
+  });
+
+  it("names another account's default store", () => {
+    // `/home/other/.claude` is a default store, but not this account's: the
+    // child would never find it without being told.
+    expect(envOf('/home/other/.claude', null)).toEqual({
+      [CLAUDE_CONFIG_DIR]: '/home/other/.claude',
+    });
+  });
+
+  it('names the store when the home is not an absolute path', () => {
+    // An account with no home is allowed (the server starts without one), and
+    // a relative path is not a place; neither can be the default store, so the
+    // launch keeps the variable rather than guess.
+    expect(envOf('/home/dev/.claude', null, '')).toEqual({
+      [CLAUDE_CONFIG_DIR]: '/home/dev/.claude',
+    });
+    expect(envOf('/home/dev/.claude', null, 'home/dev')).toEqual({
+      [CLAUDE_CONFIG_DIR]: '/home/dev/.claude',
+    });
+  });
+
+  it('still scrubs every inherited CLAUDE variable', () => {
+    // Omitting the key only leaves it unset because the supervisor scrubs an
+    // inherited `CLAUDE_CONFIG_DIR` before applying the plan's variables.
+    expect(CLAUDE_SCRUB_PREFIXES).toContain('CLAUDE');
   });
 });
 

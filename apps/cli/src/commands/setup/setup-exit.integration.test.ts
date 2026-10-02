@@ -178,9 +178,11 @@ function fixture(name: string): string {
  * secret in it. What matters here is that it reads a line from the terminal
  * before it will finish, which is the property that makes it a login at all.
  *
- * `CLAUDE_CONFIG_DIR` is where the signed-in marker lands, so the login writes
- * into the store setup told it about and the probe afterwards reads the same
- * place — which is what makes the probe's answer change at all.
+ * The marker lands where the real one keeps its config: `CLAUDE_CONFIG_DIR`
+ * when set, `$HOME/.claude` otherwise. The store here is that home's own
+ * `.claude`, so the login runs with the variable unset and the fake falls back
+ * exactly as Claude Code does; the probe afterwards reads the same place, which
+ * is what makes the probe's answer change at all.
  */
 async function installFakeClaude(): Promise<void> {
   await writeFile(

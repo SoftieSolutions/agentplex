@@ -189,7 +189,12 @@ function machine(options: MachineOptions = {}): Machine {
   const workingTree = options.workingTree ?? createFakeWorkingTree();
   const adapter =
     options.realAdapter === true
-      ? createClaudeAdapter({ files, probe: createFakeProcessProbe() })
+      ? createClaudeAdapter({
+          files,
+          probe: createFakeProcessProbe(),
+          // The controller's home, so the two answer for one account.
+          homeDirectory: options.homeDirectory ?? HOME,
+        })
       : createFakeProviderAdapter({ provider: 'claude', files });
 
   return {
@@ -479,6 +484,30 @@ describe('a start with no project', () => {
 
     expect(outcome).toMatchObject({ ok: true, sessionId: null });
     expect(ptys.opened[0]?.cwd).toBe(HOME);
+  });
+
+  it("leaves the child on the account's own Claude config in its default store", async () => {
+    // The store is `~/.claude`, which is where Claude Code looks with no
+    // `CLAUDE_CONFIG_DIR` at all. Naming it would move the child's global
+    // config and keychain item, and the session would open on onboarding,
+    // logged out. The supervisor scrubs an inherited one, so absent here is
+    // absent in the child.
+    const { sessions, ptys } = machine({
+      realAdapter: true,
+      store: CLAUDE_HOME,
+      homeDirectory: HOME,
+    });
+
+    const outcome = await sessions.start({
+      storeId: CLAUDE_HOME.storeId,
+      sessionId: null,
+      provider: 'claude',
+      prompt: 'hi',
+      directory: null,
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(ptys.opened[0]?.env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
   });
 
   it('refuses, naming the store, when the home directory is the store', async () => {

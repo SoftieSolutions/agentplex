@@ -72,6 +72,16 @@ export async function main(): Promise<void> {
 
   const terminal = createNodeSetupTerminal({ input: process.stdin, output: process.stdout });
 
+  // `os.homedir()` is deliberately not the fallback. It reads the passwd entry,
+  // so under `sudo` it answers with the invoking user's home while `$HOME`
+  // answers root's -- two different directories, and the provider state that
+  // matters is in whichever one the operator's shell was using. A missing
+  // `$HOME` is a machine to say something about, not to guess at. Read once:
+  // the survey, the units and a login's launch must agree on whose home it is,
+  // and a login into that home's `~/.claude` leaves `CLAUDE_CONFIG_DIR` unset
+  // so it lands where the account's own `claude` looks.
+  const home = process.env['HOME'] ?? '';
+
   // What a child that is not a provider inherits: this process's environment
   // with no `binPath` in front of it. `systemctl` is the machine's own program
   // and must resolve as the machine resolves it, where a provider is looked for
@@ -86,13 +96,7 @@ export async function main(): Promise<void> {
     process.exitCode = await runSetupCommand(process.argv.slice(2), {
       terminal,
       machine: createNodeSetupMachine({
-        // `os.homedir()` is deliberately not the fallback. It reads the passwd
-        // entry, so under `sudo` it answers with the invoking user's home while
-        // `$HOME` answers root's -- two different directories, and the provider
-        // state that matters is in whichever one the operator's shell was
-        // using. A missing `$HOME` is a machine to say something about, not to
-        // guess at.
-        home: process.env['HOME'] ?? '',
+        home,
         path: process.env['PATH'],
       }),
       runnerFor: (binPath) =>
@@ -116,7 +120,8 @@ export async function main(): Promise<void> {
       // the runner is what is genuinely setup's own: one per recorded
       // `binPath`, so a replay probes the copy of the binary those directories
       // resolve.
-      providersFor: (runner) => createRegisteredProviders({ files: nodeProviderFiles, runner }),
+      providersFor: (runner) =>
+        createRegisteredProviders({ files: nodeProviderFiles, runner, homeDirectory: home }),
       files: nodeStoreFileSystem,
       // The one step that runs after everything else, and the reason it is
       // setup's rather than the installer's is in `start-after-setup.ts`. It is
@@ -124,7 +129,7 @@ export async function main(): Promise<void> {
       // get, because "where would a bare `systemctl` come from" has one answer
       // per machine and should not have two per program.
       units: createUnitsAfterSetup({
-        home: process.env['HOME'] ?? '',
+        home,
         files: nodeInstallationFiles,
         systemd: createSystemd({
           runner: createNodeProcessRunner({ environment: machineEnvironment }),

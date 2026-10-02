@@ -42,7 +42,11 @@ const NPM_ADDED = readFileSync(
 /** The providers a real setup run would have: this build's own adapters. */
 function claudeOnly(): ProviderRegistry {
   return createProviderRegistry([
-    createClaudeAdapter({ files: createFakeProviderFiles(), probe: createFakeProcessProbe({}) }),
+    createClaudeAdapter({
+      files: createFakeProviderFiles(),
+      probe: createFakeProcessProbe({}),
+      homeDirectory: '/home/dev',
+    }),
   ]);
 }
 

@@ -61,6 +61,8 @@ const STORE = storeDescriptorSchema.parse({ storeId: 'store-a', path: '/volumes/
 const CWD = '/Users/dev/Code/agentplex';
 const PREFIX = '/Users/dev/.agentplex';
 const VERSION = '2.1.259';
+/** The server account's home; `STORE` is not under it. */
+const HOME = '/home/dev';
 
 function exited(exitCode: number, stdout: string, stderr = ''): CompletedProcess {
   return { exitCode, stdout, stderr };
@@ -74,7 +76,12 @@ function planned(install: InstallPlan): OneShotPlan<{ package: string; version: 
 
 describe('createClaudeProvisioning.install', () => {
   it('installs the pinned version into the prefix, as one argv and nothing else', () => {
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({
+        prefix: PREFIX,
+        version: VERSION,
+      }),
+    );
 
     // Spelled out rather than derived from the code under test: a test that
     // asks the implementation what it does and then agrees checks nothing.
@@ -108,20 +115,32 @@ describe('createClaudeProvisioning.install', () => {
     // user's npmrc is a reasonable hardening choice, and it turns this install
     // into a silent success with a binary that will not start. The flag on the
     // argv outranks every npmrc, so the answer stops depending on the machine.
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({
+        prefix: PREFIX,
+        version: VERSION,
+      }),
+    );
 
     expect(plan.argv.args).toContain('--no-ignore-scripts');
     expect(plan.argv.args).not.toContain('--ignore-scripts');
   });
 
   it('asks for the latest when the request pins no version', () => {
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: null }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({ prefix: PREFIX, version: null }),
+    );
 
     expect(plan.argv.args.at(-1)).toBe(`${CLAUDE_PACKAGE}@latest`);
   });
 
   it('carries no working directory, no environment and no shell', () => {
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({
+        prefix: PREFIX,
+        version: VERSION,
+      }),
+    );
 
     // The assertion the ticket exists for, stated as itself. The prefix is an
     // argument npm parses, so there is nothing left for a cwd to do, and a plan
@@ -133,7 +152,12 @@ describe('createClaudeProvisioning.install', () => {
   });
 
   it('passes no flag as anything but its own argv element', () => {
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({
+        prefix: PREFIX,
+        version: VERSION,
+      }),
+    );
 
     // A joined string is the shape that only works with a shell, and there is
     // no shell anywhere on this path.
@@ -143,7 +167,10 @@ describe('createClaudeProvisioning.install', () => {
   it('refuses a prefix that is not an absolute path', () => {
     // A relative prefix resolves against whatever directory setup happened to
     // start in, which is exactly the ambiguity the missing cwd removes.
-    const install = createClaudeProvisioning().install({ prefix: '.agentplex', version: null });
+    const install = createClaudeProvisioning({ homeDirectory: HOME }).install({
+      prefix: '.agentplex',
+      version: null,
+    });
 
     expect(install.ok).toBe(false);
     expect(!install.ok && install.problem).toContain('absolute path');
@@ -152,7 +179,7 @@ describe('createClaudeProvisioning.install', () => {
   it('refuses a prefix with a null byte in it', () => {
     // The NUL truncates the path at the syscall, so what npm writes into is a
     // prefix of what anybody checked.
-    const install = createClaudeProvisioning().install({
+    const install = createClaudeProvisioning({ homeDirectory: HOME }).install({
       prefix: '/Users/dev/.agentplex\0/etc',
       version: null,
     });
@@ -162,7 +189,12 @@ describe('createClaudeProvisioning.install', () => {
   });
 
   it('reads the package and version out of a real install', () => {
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({
+        prefix: PREFIX,
+        version: VERSION,
+      }),
+    );
 
     expect(plan.read(exited(0, NPM_ADDED))).toEqual({
       ok: true,
@@ -174,7 +206,12 @@ describe('createClaudeProvisioning.install', () => {
     // The captured case that a hand-written fixture would have missed: `add` is
     // empty and the package is under `change[].to`. Reporting this as a failed
     // install would make every re-run of setup look broken.
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({
+        prefix: PREFIX,
+        version: VERSION,
+      }),
+    );
 
     expect(plan.read(exited(0, NPM_UP_TO_DATE))).toEqual({
       ok: true,
@@ -183,7 +220,12 @@ describe('createClaudeProvisioning.install', () => {
   });
 
   it("refuses with npm's own words when the version does not exist", () => {
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: '0.0.0' }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({
+        prefix: PREFIX,
+        version: '0.0.0',
+      }),
+    );
 
     const read = plan.read(exited(1, NPM_NO_SUCH_VERSION, 'npm error code ETARGET\n'));
 
@@ -201,7 +243,12 @@ describe('createClaudeProvisioning.install', () => {
     // proceed. Setup passes that through verbatim, which is a better outcome
     // than agentplex quietly deciding on the operator's behalf that their
     // hardening does not apply to it.
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({
+        prefix: PREFIX,
+        version: VERSION,
+      }),
+    );
 
     const read = plan.read(
       exited(1, NPM_STRICT_ALLOW_SCRIPTS, 'npm error code ESTRICTALLOWSCRIPTS\n'),
@@ -216,7 +263,12 @@ describe('createClaudeProvisioning.install', () => {
     // A corporate npm shim or a proxy login page in front of the registry is
     // the actual thing an operator has to deal with, and an exit code alone
     // hides it.
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({
+        prefix: PREFIX,
+        version: VERSION,
+      }),
+    );
 
     const read = plan.read(exited(0, '<html>Proxy authentication required</html>\n'));
 
@@ -225,7 +277,12 @@ describe('createClaudeProvisioning.install', () => {
   });
 
   it('refuses an install that exited 0 without reporting this package', () => {
-    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+    const plan = planned(
+      createClaudeProvisioning({ homeDirectory: HOME }).install({
+        prefix: PREFIX,
+        version: VERSION,
+      }),
+    );
 
     const read = plan.read(exited(0, '{"add":[],"added":0,"change":[],"changed":0}'));
 
@@ -236,7 +293,7 @@ describe('createClaudeProvisioning.install', () => {
 
 describe('createClaudeProvisioning.version', () => {
   it('asks claude for its version, and nothing else', () => {
-    const probe = createClaudeProvisioning().version();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).version();
 
     expect(probe.argv).toEqual({ file: 'claude', args: ['--version'] });
     expect(Object.keys(probe).sort()).toEqual(['argv', 'read', 'timeoutMs']);
@@ -246,13 +303,13 @@ describe('createClaudeProvisioning.version', () => {
   it('takes the version out of what claude actually prints', () => {
     // `2.1.259 (Claude Code)`. The parenthesised name is not a promise, so only
     // the first word is read and the rest is left alone.
-    const probe = createClaudeProvisioning().version();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).version();
 
     expect(probe.read(exited(0, CLAUDE_VERSION))).toEqual({ ok: true, result: '2.1.259' });
   });
 
   it('refuses output whose first word is not a version', () => {
-    const probe = createClaudeProvisioning().version();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).version();
 
     const read = probe.read(exited(0, 'error: unknown option --version\n'));
 
@@ -261,7 +318,7 @@ describe('createClaudeProvisioning.version', () => {
   });
 
   it("refuses with the program's own stderr when it exits nonzero", () => {
-    const probe = createClaudeProvisioning().version();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).version();
 
     const read = probe.read(exited(1, '', 'dyld: Library not loaded\n'));
 
@@ -277,7 +334,7 @@ describe('createClaudeProvisioning.version', () => {
     // back as a refusal carrying the package's own explanation, while a person
     // is still at the terminal. Silence followed by an ENOENT at the first
     // session start is the outcome this exists to prevent.
-    const probe = createClaudeProvisioning().version();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).version();
 
     const read = probe.read(exited(1, '', CLAUDE_NO_NATIVE_BINARY));
 
@@ -288,7 +345,7 @@ describe('createClaudeProvisioning.version', () => {
 
 describe('createClaudeProvisioning.authState', () => {
   it('asks the provider, with --json spelled out', () => {
-    const probe = createClaudeProvisioning().authState();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).authState();
 
     // `--json` is the documented default in 2.1.259 and is passed anyway, for
     // the reason `shell: false` is written down rather than relied on: changing
@@ -304,13 +361,13 @@ describe('createClaudeProvisioning.authState', () => {
     // where the credentials went into an OS keychain, and free to change shape
     // in any release. Nothing here reads it, and this test is what fails if
     // somebody adds it back as an optimisation.
-    const probe = createClaudeProvisioning().authState();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).authState();
 
     for (const element of probe.argv.args) expect(element).not.toContain('credentials');
   });
 
   it('reports a logged-in provider from what the provider actually printed', () => {
-    const probe = createClaudeProvisioning().authState();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).authState();
 
     expect(probe.read(exited(0, AUTH_LOGGED_IN))).toEqual({ ok: true, result: 'authenticated' });
   });
@@ -322,7 +379,7 @@ describe('createClaudeProvisioning.authState', () => {
     // provider into "the probe could not run" and lose the single fact setup
     // exists to act on. Same lesson as `git status` exiting 128 on a directory
     // that is simply not a repository.
-    const probe = createClaudeProvisioning().authState();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).authState();
 
     expect(probe.read(exited(1, AUTH_LOGGED_OUT))).toEqual({
       ok: true,
@@ -334,7 +391,7 @@ describe('createClaudeProvisioning.authState', () => {
     // The account's email, organisation and subscription are in the captured
     // output and are none of this probe's business. Reading them would also
     // make the parser refuse the next release that moves one.
-    const probe = createClaudeProvisioning().authState();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).authState();
 
     expect(probe.read(exited(0, '{"loggedIn":true,"newFieldFromAFutureRelease":42}'))).toEqual({
       ok: true,
@@ -347,7 +404,7 @@ describe('createClaudeProvisioning.authState', () => {
     // stopped printing this are different facts from "logged out", and
     // flattening them sends an operator through a login that fails for the
     // reason nobody named.
-    const probe = createClaudeProvisioning().authState();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).authState();
 
     const read = probe.read(exited(1, '', 'command not found: claude\n'));
 
@@ -356,7 +413,7 @@ describe('createClaudeProvisioning.authState', () => {
   });
 
   it('refuses output that is not the format it asked for', () => {
-    const probe = createClaudeProvisioning().authState();
+    const probe = createClaudeProvisioning({ homeDirectory: HOME }).authState();
 
     expect(probe.read(exited(0, 'Logged in as someone\n')).ok).toBe(false);
     expect(probe.read(exited(0, '{"loggedIn":"yes"}')).ok).toBe(false);
@@ -365,7 +422,10 @@ describe('createClaudeProvisioning.authState', () => {
 
 describe('createClaudeProvisioning.login', () => {
   it("runs the provider's own login, pointed at the store it must write into", () => {
-    const login = createClaudeProvisioning().login({ store: STORE, cwd: CWD });
+    const login = createClaudeProvisioning({ homeDirectory: HOME }).login({
+      store: STORE,
+      cwd: CWD,
+    });
 
     expect(login).toEqual({
       ok: true,
@@ -382,8 +442,20 @@ describe('createClaudeProvisioning.login', () => {
     });
   });
 
+  it("logs in to the account's own Claude config in its default store", () => {
+    // Pointing a login at `~/.claude` by name would write the credentials to
+    // a keychain item and global config no session started without the
+    // variable reads; unset, it lands where the account's own `claude` looks.
+    const login = createClaudeProvisioning({ homeDirectory: HOME }).login({
+      store: storeDescriptorSchema.parse({ storeId: 'store-a', path: `${HOME}/.claude` }),
+      cwd: CWD,
+    });
+
+    expect(login.ok && login.plan.env).toEqual({});
+  });
+
   it('refuses a working directory inside the store, like every other launch', () => {
-    const login = createClaudeProvisioning().login({
+    const login = createClaudeProvisioning({ homeDirectory: HOME }).login({
       store: STORE,
       cwd: `${STORE.path}/${CLAUDE_PROJECTS_DIRECTORY}`,
     });
@@ -393,7 +465,10 @@ describe('createClaudeProvisioning.login', () => {
   });
 
   it('refuses a working directory that is not an absolute path', () => {
-    const login = createClaudeProvisioning().login({ store: STORE, cwd: 'Code/agentplex' });
+    const login = createClaudeProvisioning({ homeDirectory: HOME }).login({
+      store: STORE,
+      cwd: 'Code/agentplex',
+    });
 
     expect(login.ok).toBe(false);
   });
@@ -408,6 +483,7 @@ describe('createClaudeAdapter.provisioning', () => {
     const adapter = createClaudeAdapter({
       files: createFakeProviderFiles(),
       probe: createFakeProcessProbe({}),
+      homeDirectory: HOME,
     });
 
     expect(adapter.provisioning.version().argv).toEqual({ file: 'claude', args: ['--version'] });
@@ -416,7 +492,7 @@ describe('createClaudeAdapter.provisioning', () => {
       args: ['auth', 'status', '--json'],
     });
     expect(adapter.provisioning.login({ store: STORE, cwd: CWD })).toEqual(
-      createClaudeProvisioning().login({ store: STORE, cwd: CWD }),
+      createClaudeProvisioning({ homeDirectory: HOME }).login({ store: STORE, cwd: CWD }),
     );
   });
 });
