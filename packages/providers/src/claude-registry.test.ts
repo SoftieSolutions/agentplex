@@ -146,6 +146,39 @@ describe('readClaudeRegistry', () => {
     );
 
     expect(registry.live.size).toBe(0);
+    // Refused as proof of a process, and refused as proof of none: the session
+    // it names is in doubt, and only that session.
+    expect([...registry.inDoubt]).toEqual([SESSION_ID]);
+    expect(registry.readable).toBe(true);
+  });
+
+  it('doubts nothing over a pid that is gone or recycled', async () => {
+    const gone = await registryOver({ [`${SESSIONS}/${PID}.json`]: CAPTURED }, {});
+    const recycled = await registryOver(
+      { [`${SESSIONS}/${PID}.json`]: CAPTURED },
+      { processes: { [PID]: REGISTERED_AT + 60_000 } },
+    );
+
+    expect(gone.inDoubt.size).toBe(0);
+    expect(gone.readable).toBe(true);
+    expect(recycled.inDoubt.size).toBe(0);
+    expect(recycled.readable).toBe(true);
+  });
+
+  it('is no complete look when an entry will not read', async () => {
+    // The failed file could name any session in the store, so a session
+    // missing from `live` no longer says it has no process.
+    const registry = await registryOver(
+      {
+        [`${SESSIONS}/${PID}.json`]: CAPTURED,
+        [`${SESSIONS}/901.json`]: CAPTURED,
+      },
+      THE_SAME_PROCESS,
+      [`${SESSIONS}/901.json`],
+    );
+
+    expect(registry.live.get(SESSION_ID)?.status).toBe('busy');
+    expect(registry.readable).toBe(false);
   });
 
   it('keeps the most recent entry when several claim one session', async () => {
@@ -188,7 +221,12 @@ describe('readClaudeRegistry', () => {
 
     // Absent is a look that found nothing, not a failure to look: no Claude
     // Code process has registered here, so none is running.
-    expect(registry).toEqual({ live: new Map(), problems: [], readable: true });
+    expect(registry).toEqual({
+      live: new Map(),
+      inDoubt: new Set(),
+      problems: [],
+      readable: true,
+    });
   });
 
   it('reports a registry it is not allowed to read, and keeps going', async () => {
@@ -207,8 +245,10 @@ describe('readClaudeRegistry', () => {
 
   it('drops an entry it cannot parse without complaining about it', async () => {
     // Rewritten on every status change, so a torn read is routine and transient
-    // — and costs precision on one session rather than any session at all. A
-    // problem here would flap in and out of the listing for no one's benefit.
+    // — and costs no verified session its status. A problem here would flap in
+    // and out of the listing for no one's benefit. It does cost the look its
+    // completeness: the torn file could name any session, so none of the rest
+    // can be said to have no process.
     const registry = await registryOver(
       {
         [`${SESSIONS}/${PID}.json`]: CAPTURED,
@@ -219,6 +259,7 @@ describe('readClaudeRegistry', () => {
 
     expect(registry.live.get(SESSION_ID)?.status).toBe('busy');
     expect(registry.problems).toEqual([]);
+    expect(registry.readable).toBe(false);
   });
 
   it('ignores the key files Claude Code keeps beside its entries', async () => {

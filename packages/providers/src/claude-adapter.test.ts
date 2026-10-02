@@ -397,6 +397,54 @@ describe('createClaudeAdapter.discover, against the session registry', () => {
     expect(found.status).toBe('idle');
   });
 
+  it('says no process runs a session whose registered pid was recycled', async () => {
+    // A recycled pid is verified to be some other process, which is a look
+    // that found this session's process gone.
+    const found = await discoverOne(
+      { [TRANSCRIPT]: PENDING_TOOL_USE, [ENTRY]: REGISTRY_ENTRY },
+      { processes: { [PID]: Date.parse('2026-09-04T00:00:00Z') } },
+    );
+
+    expect(found.session.process).toBe('none');
+  });
+
+  it('cannot say whether a process runs a session whose live pid it cannot date', async () => {
+    // Alive and undatable is as likely to be the session's own process as a
+    // recycled one, so it is neither `verified` nor `none`.
+    const found = await discoverOne(
+      { [TRANSCRIPT]: PENDING_TOOL_USE, [ENTRY]: REGISTRY_ENTRY },
+      { undatable: [PID] },
+    );
+
+    expect(found.session.pid).toBeNull();
+    expect(found.session.process).toBe('unknown');
+  });
+
+  it('cannot say whether a process runs a session when a registry entry will not read', async () => {
+    // The entry that failed might be this session's, and nothing short of
+    // reading it says which session it names.
+    const adapter = adapterOver(
+      {
+        files: { [TRANSCRIPT]: PENDING_TOOL_USE, [ENTRY]: REGISTRY_ENTRY },
+        unreadable: [ENTRY],
+      },
+      theSameProcess,
+    );
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(discovered.sessions.map((session) => session.process)).toEqual(['unknown']);
+  });
+
+  it('cannot say whether a process runs a session when a registry entry reads torn', async () => {
+    const found = await discoverOne(
+      { [TRANSCRIPT]: PENDING_TOOL_USE, [ENTRY]: '{"pid":71484,"sessi' },
+      theSameProcess,
+    );
+
+    expect(found.session.process).toBe('unknown');
+  });
+
   it('reports a registry it cannot read without dropping a single session', async () => {
     const adapter = adapterOver(
       { files: { [TRANSCRIPT]: PENDING_TOOL_USE }, unreadable: [SESSIONS] },
