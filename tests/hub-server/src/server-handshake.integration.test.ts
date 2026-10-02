@@ -68,6 +68,7 @@ async function startServer(storePaths: readonly string[] = []) {
     // server ships with is no roots at all.
     browseRoots: [],
     directoryReader: createFakeDirectoryReader(),
+    homeDirectory: '/home/agentplex',
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
     // The grants file lands beside the identity file, on the same fake volume.

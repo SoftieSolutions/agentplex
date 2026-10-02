@@ -195,6 +195,7 @@ async function start(
     storeWatcher: watcher,
     dataRootFileSystem: createFakeDataRoot(),
     directoryReader: createFakeDirectoryReader(),
+    homeDirectory: '/home/agentplex',
     grantFileSystem: createFakeGrantFiles(),
     projectFiles,
     tokens: { newToken: () => TOKEN },

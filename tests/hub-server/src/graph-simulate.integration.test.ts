@@ -171,6 +171,7 @@ function serveMachine(machine: Machine): DialResult {
       providers: createProviderRegistry([adapter]),
       terminals: machine.terminals,
       workingTree: createFakeWorkingTree(),
+      homeDirectory: '/home/agentplex',
       browse: directoryBrowser(),
       approvals: null,
       clock,

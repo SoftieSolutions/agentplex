@@ -78,6 +78,14 @@ export interface RuntimeDependencies {
    */
   readonly directoryReader: DirectoryReader;
   /**
+   * The home directory of the account this process runs as, where a session
+   * started with no project runs.
+   *
+   * A dependency rather than a setting: an operator does not choose it, the
+   * process has it. `main` reads it once and a test names one.
+   */
+  readonly homeDirectory: string;
+  /**
    * Where a secret comes from when nothing supplied one: the pairing token on
    * a first start.
    *
@@ -211,6 +219,7 @@ export async function startRuntime(
     grantFileSystem,
     projectFiles,
     directoryReader,
+    homeDirectory,
     tokens,
     providers,
     preflight,
@@ -248,6 +257,7 @@ export async function startRuntime(
     // gave a root to browses nothing and says so.
     browseRoots: config.browseRoots,
     directoryReader,
+    homeDirectory,
     identityPath: config.identityPath,
     grantFileSystem,
     tokens,

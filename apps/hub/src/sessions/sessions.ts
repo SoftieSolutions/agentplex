@@ -115,7 +115,8 @@ export interface StartSessionRequest {
   /** The user's override, or `null` to let the hub schedule it. */
   readonly server: ServerRegistrationId | null;
   /**
-   * The project to start in, or `null` for the store's own directory.
+   * The project to start in, or `null` for the home directory of the account
+   * the server runs as.
    *
    * An id, never a path. The directory is resolved here, out of this hub's own
    * rows, which is what makes the value that eventually reaches a server one

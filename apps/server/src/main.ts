@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
-import { release, type } from 'node:os';
+import { homedir, release, type } from 'node:os';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
@@ -239,6 +239,16 @@ async function main(): Promise<void> {
       // than reading a provider's volume, and the rule that bounds where it may
       // walk is `directory-browse.ts` over the configured roots.
       directoryReader: nodeDirectoryReader,
+      // The one place this process reads its home directory, where a session
+      // started with no project runs. Not a `ServerConfig` setting: an operator
+      // does not choose it, and a required setting would refuse to boot a
+      // server that has a data path but no `HOME`. Not parsed here either: the
+      // adapters' `parseWorkingDirectory` is the one parser that judges it, at
+      // each start, and an empty one is refused there as no directory at all.
+      // The setup command argues against `os.homedir()` because under `sudo`
+      // it and `$HOME` name different accounts; a daemon is started by its
+      // unit and has no `sudo` to disagree with.
+      homeDirectory: homedir(),
       grantFileSystem: nodeGrantFileSystem,
       // The only place a secret is generated, and the CSPRNG is the whole
       // implementation: the server's pairing token, once, on its first start.

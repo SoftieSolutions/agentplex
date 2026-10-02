@@ -176,6 +176,7 @@ async function start(transcripts: Readonly<Record<string, string>>): Promise<Har
           providers: createProviderRegistry([adapter]),
           terminals: createFakeTerminals().terminals,
           workingTree: createFakeWorkingTree(),
+          homeDirectory: '/home/agentplex',
           browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
           // No hook socket in this suite: a transcript is a file this
           // controller reads, and nothing here starts anything to ask about.

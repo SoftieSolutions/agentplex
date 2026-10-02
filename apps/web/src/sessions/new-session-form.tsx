@@ -264,8 +264,9 @@ export function NewSessionForm({
 
         {projects.length === 0 ? null : (
           // Drawn from the first project onwards, because "in this project" and
-          // "wherever the store is" are two different starts. Clearable, and
-          // empty is the second of them rather than a missing answer.
+          // "in the server account's home directory" are two different starts.
+          // Clearable, and empty is the second of them rather than a missing
+          // answer.
           <Select
             label="Project"
             aria-label="Project"

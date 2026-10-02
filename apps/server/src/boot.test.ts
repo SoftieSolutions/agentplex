@@ -43,6 +43,7 @@ function dependencies(
     // this seam is never reached and a reader that could be is the honest
     // shape of "not what this file is about".
     directoryReader: createFakeDirectoryReader(),
+    homeDirectory: '/home/agentplex',
     // The grants file lives beside the identity file, so a runtime that starts
     // writes one here too: grant zero, for the token it just minted.
     grantFileSystem: createFakeGrantFiles(),

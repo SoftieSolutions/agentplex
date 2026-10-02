@@ -199,6 +199,7 @@ async function start(
           // The roots this machine's operator configured, and the rule a start
           // carrying a project's directory is checked against. A start that
           // names no project carries no directory and never reaches it.
+          homeDirectory: '/home/agentplex',
           browse: createDirectoryBrowser({
             roots: [BROWSE_ROOT],
             reader: createFakeDirectoryReader({
@@ -382,7 +383,7 @@ describe('an agent starting, steering and stopping a session through MCP', () =>
     expect(held().ptys.opened[0]).toMatchObject({
       command: 'claude',
       args: ['read the ticket'],
-      cwd: '/volumes/work',
+      cwd: '/home/agentplex',
     });
   });
 
@@ -460,13 +461,13 @@ describe('an agent starting a session in a project', () => {
     });
   });
 
-  it('leaves a start that names no project in the store own folder', async () => {
+  it('runs a start that names no project in the server account home directory', async () => {
     await starting();
 
-    // The behaviour this tool shipped with, unchanged by the argument being
-    // there: an absent project is the store's directory and the machine is
-    // asked to check nothing.
-    expect(held().ptys.opened[0]).toMatchObject({ cwd: '/volumes/work' });
+    // An absent project is the home directory of the account the server runs
+    // as, and the machine is asked to check no browse root for it. Not the
+    // store's own folder: the adapter refuses to start an agent in the store.
+    expect(held().ptys.opened[0]).toMatchObject({ cwd: '/home/agentplex' });
   });
 
   it('is refused in the machine own words when no root covers the project', async () => {

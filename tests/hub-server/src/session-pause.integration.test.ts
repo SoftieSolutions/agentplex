@@ -197,6 +197,7 @@ async function start(): Promise<Harness> {
           ]),
           terminals,
           workingTree: createFakeWorkingTree(),
+          homeDirectory: '/home/agentplex',
           browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
           approvals: null,
           clock,

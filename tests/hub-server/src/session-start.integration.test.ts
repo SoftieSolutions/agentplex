@@ -332,6 +332,7 @@ function serveMachine(machine: Machine): DialResult {
       workingTree: createFakeWorkingTree(),
       // The same rule the browse above passes, so a spawn in a project is
       // bounded by the list this machine's operator wrote and by nothing else.
+      homeDirectory: '/home/agentplex',
       browse: directoryBrowser(),
       // No hook socket in these suites: what a launch is handed before it
       // starts has its own tests on the server side.

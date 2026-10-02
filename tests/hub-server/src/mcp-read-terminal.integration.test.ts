@@ -179,6 +179,7 @@ async function start(): Promise<Harness> {
           // No roots, which is the default a server ships with: nothing in
           // this file starts in a project, so no instruction carries a
           // directory to be bounded against.
+          homeDirectory: '/home/agentplex',
           browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
           // No hook socket in these suites: what a launch is handed before
           // it starts has its own tests on the server side.

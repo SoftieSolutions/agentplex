@@ -137,7 +137,8 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     /** The user's choice of machine, or `null` to let the hub schedule it. */
     server: serverRegistrationIdSchema.nullable(),
     /**
-     * The project to start in, or `null` for the store's own directory.
+     * The project to start in, or `null` for the home directory of the account
+     * the server runs as.
      *
      * A node id and not a directory, which is the difference between this and
      * `directory-list` above. A project is a row this hub owns: the client

@@ -490,21 +490,21 @@ export interface SpawnRequest {
   /**
    * Where to run, as the server decided it.
    *
-   * One of two things, and never anything else: the store's own path, resolved
-   * by that server at boot, or a project's directory that the server has
-   * already refused unless its real path sits under a browse root that
-   * machine's own operator configured. A `{ cwd }` field taken as read off a
-   * frame would be a remote code execution primitive wearing a path — whoever
-   * held a client token would pick any directory and run an agent with write
-   * access to it — and the difference is not that the second case skips the
-   * wire but that nothing crosses it unchecked: the value is parsed by one
-   * schema, bounded by a list no frame can add to, and reaches this field and
-   * no other. `CONTRIBUTING.md` carries the amendment and the argument for it.
+   * One of two things, and never anything else: the home directory of the
+   * account that server runs as, read at boot, or a project's directory that
+   * the server has already refused unless its real path sits under a browse
+   * root that machine's own operator configured. A `{ cwd }` field taken as
+   * read off a frame would be a remote code execution primitive wearing a path
+   * — whoever held a client token would pick any directory and run an agent
+   * with write access to it — and the difference is not that the second case
+   * skips the wire but that nothing crosses it unchecked: the value is parsed
+   * by one schema, bounded by a list no frame can add to, and reaches this
+   * field and no other. `CONTRIBUTING.md` carries the amendment and the argument for it.
    *
    * `parseWorkingDirectory` is the gate the answer passes on the way in, and it
-   * is the adapter's own rather than the server's: a directory inside the
-   * provider's store is one no agent may be started in, whichever of the two
-   * roads it arrived by.
+   * is the adapter's own rather than the server's: the provider's store, and
+   * any directory inside it, is one no agent may be started in, whichever of
+   * the two roads it arrived by — a home directory that is the store included.
    */
   readonly cwd: string;
   /**

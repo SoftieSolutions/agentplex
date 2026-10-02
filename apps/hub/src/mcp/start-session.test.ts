@@ -58,7 +58,8 @@ describe('start_session', () => {
     // The whole request, field by field, because what is not on it is the
     // subject: there is no argv, no environment and no working directory here,
     // and the one piece of user content is the prompt. `project` is `null`
-    // because this caller named none, which is the store's own directory.
+    // because this caller named none, which is the home directory of the
+    // account the server runs as.
     expect(sessions.starts).toEqual([
       {
         storeId: WORK,
