@@ -179,6 +179,25 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     sessionId: sessionIdSchema.nullable(),
     server: serverRegistrationIdSchema,
   }),
+  /**
+   * The spawn a start answered with `sessionId: null` now has the id its
+   * provider minted.
+   *
+   * Sent to the one connection that sent the start, whether or not it ever
+   * subscribed: `replyTo` names that start so the client can bind what it
+   * asked for to the session it became. It is not a reply to a pending
+   * command -- `session-started` already answered that -- and a client owes
+   * nothing on receipt. The hub sends it at most once per start, the first
+   * time a report pairs the start with an id, so a repeat report or a redial
+   * is not news. `sessionId` is never null: until the report has an id there
+   * is nothing to send.
+   */
+  z.object({
+    type: z.literal('session-named'),
+    replyTo: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+  }),
   /** A session's process has been killed. Its transcript is untouched. */
   z.object({
     type: z.literal('session-stopped'),
