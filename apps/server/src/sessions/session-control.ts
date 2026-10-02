@@ -763,6 +763,18 @@ export function createSessionController(
     session: SessionRef,
     after: 'start' | 'retake' = 'start',
   ): Promise<SessionOutcome> {
+    // After a retake every refusal here comes once the process it replaces
+    // has gone -- the checks that could run first did -- and saying only why
+    // would leave the reader thinking the session runs on where it was. The
+    // one refusal that already says the process ended is left as it is.
+    const afterward = (outcome: SessionOutcome): SessionOutcome =>
+      after === 'retake' && !outcome.ok
+        ? {
+            ...outcome,
+            problem: `that session was stopped, but it could not be started here: ${outcome.problem}`,
+          }
+        : outcome;
+
     const { sessions: known, origins } = await discover(store);
     // The same join a report makes, made here off the same scan. A terminal
     // this server spawned is not bound to its session until a report finds
@@ -772,7 +784,7 @@ export function createSessionController(
     bindSpawned(store.storeId, known, origins);
     const descriptor = known.find((one) => one.sessionId === session.sessionId);
     if (descriptor === undefined) {
-      return refused('this server cannot find that session in that store');
+      return afterward(refused('this server cannot find that session in that store'));
     }
 
     if (after === 'retake' && descriptor.process !== 'none') {
@@ -785,7 +797,7 @@ export function createSessionController(
     const refusal = runningElsewhere(session, origins.get(session.sessionId)?.pid ?? null);
     if (refusal !== null) {
       logger.info('session resume refused', { ...session, problem: refusal });
-      return refused(refusal);
+      return afterward(refused(refusal));
     }
 
     const opened = await approvals?.open(store, adapter.permissionHook);
@@ -813,18 +825,7 @@ export function createSessionController(
       asks: opened !== undefined && opened !== null,
       after,
     });
-    const outcome = answer(store.storeId, resumed);
-    // After a retake the refusal is a launch that failed once the process it
-    // replaces had gone -- the checks that could run first did -- and saying
-    // only why it failed would leave the reader thinking the session runs on
-    // where it was.
-    if (after === 'retake' && !outcome.ok) {
-      return {
-        ...outcome,
-        problem: `that session was stopped, but it could not be started here: ${outcome.problem}`,
-      };
-    }
-    return outcome;
+    return afterward(answer(store.storeId, resumed));
   }
 
   /**
