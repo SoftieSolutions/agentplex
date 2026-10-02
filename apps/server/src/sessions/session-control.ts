@@ -356,6 +356,22 @@ export function createSessionController(
    */
   const ours = new Map<StoreId, Set<SessionId>>();
 
+  /**
+   * The sessions a retake is taking over right now, by store.
+   *
+   * Only this server can know it. Between the SIGHUP and the resume the
+   * signalled process drops its registry entry and may already have a dead
+   * pid while it flushes its transcript, so a scan in that window sees the
+   * session run by nothing -- and a start or a second retake acting on that
+   * scan would put a second process on the transcript the first still writes.
+   * Claimed before a retake's first await and released when it settles,
+   * whichever way.
+   */
+  const retaking = new Map<StoreId, Set<SessionId>>();
+
+  const isRetaking = (session: SessionRef): boolean =>
+    retaking.get(session.storeId)?.has(session.sessionId) === true;
+
   function oursIn(storeId: StoreId): Set<SessionId> {
     const known = ours.get(storeId) ?? new Set<SessionId>();
     ours.set(storeId, known);
@@ -439,6 +455,10 @@ export function createSessionController(
           : { sessionId: session.sessionId, stoppable: holder.stoppable, pause: holder.pause },
     };
   };
+
+  /** The refusal for a session a retake here is in the middle of taking over. */
+  const takingOver = (): SessionOutcome =>
+    refused('agentplex is taking that session over on this machine; try again once it has');
 
   return {
     async start(request: StartSessionRequest): Promise<SessionOutcome> {
@@ -526,7 +546,16 @@ export function createSessionController(
       const { adapter } = found;
 
       const session: SessionRef = { storeId: store.storeId, sessionId: request.sessionId };
-      const outcome = await retakeSession(store, adapter, session);
+      if (isRetaking(session)) return takingOver();
+      const claimed = retaking.get(store.storeId) ?? new Set<SessionId>();
+      retaking.set(store.storeId, claimed);
+      claimed.add(session.sessionId);
+      let outcome: SessionOutcome;
+      try {
+        outcome = await retakeSession(store, adapter, session);
+      } finally {
+        claimed.delete(session.sessionId);
+      }
       logger.info('session retake', {
         ...session,
         ok: outcome.ok,
@@ -760,6 +789,15 @@ export function createSessionController(
     }
 
     const opened = await approvals?.open(store, adapter.permissionHook);
+    // After the last await and before the launch, with nothing between, so no
+    // retake can claim the session after this looked. The scan above cannot
+    // see a takeover: the process it signalled reads as gone while it flushes.
+    // A retake's own resume holds the claim, so it is the one not asked.
+    if (after === 'start' && isRetaking(session)) {
+      opened?.close();
+      logger.info('session resume refused', { ...session, problem: 'a retake is taking it over' });
+      return takingOver();
+    }
     const launch = adapter.resume({
       store,
       session,
