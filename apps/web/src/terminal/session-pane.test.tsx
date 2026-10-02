@@ -2447,6 +2447,30 @@ describe('a pane on a session nothing holds', () => {
     expect(action()).toBeNull();
   });
 
+  it('gives a way out when a later state shows nothing running the start it was answered', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    const [start] = ofType(sentSince(connected), 'session-start');
+    if (start === undefined) throw new Error('no start was sent');
+    await deliver(connected.socket, addressedTo(hubFrames.sessionStartedResumed, start.id));
+    expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+
+    // A resume that exits before its machine reports again is never held:
+    // the next state still shows nothing running it.
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    expect(shown()?.getAttribute('data-pane-state')).toBe('lapsed');
+    expect(shown()?.textContent).toContain('mbp-robert');
+    expect(action()?.textContent).toBe('Try again');
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+
+    const button = action();
+    if (button === null) throw new Error('no Try again control');
+    await click(button);
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(2);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+  });
+
   it('repeats the hub’s refusal in the blocked tone, and tries again when asked', async () => {
     const connected = await connectedTo(hubFrames.machineStateResumable);
     await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));

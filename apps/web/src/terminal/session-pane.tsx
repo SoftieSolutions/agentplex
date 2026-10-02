@@ -480,6 +480,7 @@ export function SessionPane({
       memory.start === null ? null : followUp(memory.start, snapshot.answers, 'session-started'),
     terminal,
     everHeld: held.everHeld || memory.ran,
+    startLapsed: memory.lapsed,
     phase: snapshot.phase,
   });
   const provider: Provider | null = row?.descriptor.provider ?? null;

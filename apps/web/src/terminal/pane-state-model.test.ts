@@ -84,6 +84,7 @@ function input(overrides: Partial<PaneStateInput>): PaneStateInput {
     start: null,
     terminal: null,
     everHeld: false,
+    startLapsed: false,
     phase: 'connected',
     ...overrides,
   };
@@ -140,6 +141,19 @@ describe('paneState', () => {
     // And the next state frame names the holder, which ends it.
     const row = rowIn(resumed, 'store-agentplex', 'session-spike-wasm');
     expect(paneState(input({ row, state: resumed, start: yes })).kind).toBe('held');
+  });
+
+  it('says an answered start lapsed when a later state shows nothing running it', () => {
+    const yes = followUp(ASKED, answered(hubFrames.sessionStartedResumed), 'session-started');
+    const state = paneState(input({ start: yes, startLapsed: true }));
+    expect(state).toMatchObject({ kind: 'lapsed', action: 'try-again' });
+    if (state.kind !== 'lapsed') return;
+    expect(state.words).toContain('mbp-robert');
+    // The holder still beats it: a slow report that names one is the answer.
+    const row = rowIn(resumed, 'store-agentplex', 'session-spike-wasm');
+    expect(paneState(input({ row, state: resumed, start: yes, startLapsed: true })).kind).toBe(
+      'held',
+    );
   });
 
   it('repeats the hub’s own words when the start was refused, with a way to try again', () => {

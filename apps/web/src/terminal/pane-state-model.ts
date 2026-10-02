@@ -58,6 +58,16 @@ export type PaneState =
       readonly words: string;
       readonly action: null;
     }
+  /**
+   * The hub said this pane's start went out, and a state since shows nothing
+   * running the session: a resume that exited before its machine reported it.
+   */
+  | {
+      readonly kind: 'lapsed';
+      readonly machine: string;
+      readonly words: string;
+      readonly action: 'try-again';
+    }
   /** The hub said no to this pane's start; `words` are the hub's own. */
   | { readonly kind: 'refused'; readonly words: string; readonly action: 'try-again' }
   /** This pane's start went out and no answer will ever come for it. */
@@ -106,6 +116,8 @@ export interface PaneStateInput {
   readonly terminal: { readonly ended: SubscriptionEndReason | null } | null;
   /** Whether this pane has seen the session held since it opened. */
   readonly everHeld: boolean;
+  /** Whether a state since the start was answered still shows nothing running it. */
+  readonly startLapsed: boolean;
   readonly phase: ConnectionPhase;
 }
 
@@ -114,7 +126,7 @@ const CANNOT_TELL_WARNING =
   'session for both: resume only if you know nothing else is running it';
 
 export function paneState(input: PaneStateInput): PaneState {
-  const { row, state, start, terminal, everHeld, phase } = input;
+  const { row, state, start, terminal, everHeld, startLapsed, phase } = input;
   if (row === null) return { kind: 'unknown-row' };
   if (row.holder !== null) return { kind: 'held' };
 
@@ -130,6 +142,16 @@ export function paneState(input: PaneStateInput): PaneState {
       case 'answered': {
         const machine =
           state === null ? start.answer.server : serverLabel(state, start.answer.server);
+        if (startLapsed) {
+          return {
+            kind: 'lapsed',
+            machine,
+            words:
+              `this session was resumed on ${machine}, but that machine's next report shows ` +
+              'nothing running it: the process may have exited as soon as it started',
+            action: 'try-again',
+          };
+        }
         return {
           kind: 'starting',
           send: false,
