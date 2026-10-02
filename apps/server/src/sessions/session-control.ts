@@ -935,9 +935,10 @@ export function createSessionController(
    * removes its entry while it handles SIGHUP and then runs its SessionEnd
    * hooks and flushes its transcript, so an entry that has gone is a process
    * that may still be writing. The process has gone when its pid is dead, or
-   * when the pid now dates to a later process than the one the adapter
-   * verified -- the kernel issued it again, which it does only once the
-   * process that held it has exited.
+   * when the pid now dates later than the process the adapter verified --
+   * the kernel issued it again, which it does only once the process that held
+   * it has exited. A date earlier than that is the clock, not the kernel, and
+   * is waited out like a pid that could not be dated.
    *
    * Polled every `RETAKE_POLL_MS` and counted in polls rather than read off
    * the clock: a timer fires no earlier than it was set for, so the count is a
@@ -976,20 +977,25 @@ export function createSessionController(
   /**
    * Whether the pid a retake signalled still holds the process it signalled.
    *
-   * `gone` is a dead pid, or one that dates to a process other than the one
-   * verified: a reissued pid, which the kernel hands out only once the holder
-   * has exited. The tolerance is the registry's own, here because two
-   * readings of one process's start are not promised to agree to the
-   * millisecond, and reading the same process as a different one would resume
-   * beside it.
-   * `unknown` is a live pid this machine could not date this time, which is
-   * neither: it is not counted ended and it is not killed.
+   * `gone` is a dead pid, or one that dates later than the process verified:
+   * a reissued pid, which the kernel hands out only once the holder has
+   * exited, and only ever to a process started after it. The tolerance is the
+   * registry's own, here because two readings of one process's start are not
+   * promised to agree to the millisecond, and reading the same process as a
+   * different one would resume beside it.
+   * `unknown` is a live pid this machine could not date this time, or one
+   * that dates earlier than the process verified. No reissue explains an
+   * earlier date; a clock stepped back under the probe does -- the Linux one
+   * re-reads boot time on every call -- and that is the same process read
+   * wrong. Neither is counted ended, and neither is killed.
    */
   async function stillRunning(signalled: LiveProcess): Promise<'same' | 'gone' | 'unknown'> {
     if (!(await processes.isAlive(signalled.pid))) return 'gone';
     const startedAt = await processes.startedAt(signalled.pid);
     if (startedAt === null) return 'unknown';
-    return Math.abs(startedAt - signalled.startedAt) <= PID_RECYCLE_TOLERANCE_MS ? 'same' : 'gone';
+    if (startedAt > signalled.startedAt + PID_RECYCLE_TOLERANCE_MS) return 'gone';
+    if (startedAt < signalled.startedAt - PID_RECYCLE_TOLERANCE_MS) return 'unknown';
+    return 'same';
   }
 
   /**
