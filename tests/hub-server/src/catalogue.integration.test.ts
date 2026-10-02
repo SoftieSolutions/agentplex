@@ -598,6 +598,52 @@ describe('taking a session out of the tree', () => {
 });
 
 /**
+ * A placement the tree declines, over the frame a client sends.
+ *
+ * The rules themselves are in `mutations.integration.test`. What only this
+ * suite can show is that the sentence a person is owed survives the trip: the
+ * refusal leaves the tree as a `TreeRefusal` and reaches a socket as a
+ * `refusal` frame, and a router that flattened it to `internal` or dropped the
+ * words would leave the client nothing to say.
+ */
+describe('a placement the tree refuses', () => {
+  it('answers a move to the top level with the sentence, and moves nothing', async () => {
+    const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
+      descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
+    ]);
+    fleet = await startFleetHub([laptop]);
+    const client = await openClient(fleet.hub);
+    const layout = await settles(client, ['store-agentplex/session-fix-auth']);
+    const node = withoutHome(layout)[0];
+    if (node === undefined) throw new Error('the session was not placed');
+    expect(
+      await client.ask({
+        type: 'node-move',
+        nodeId: node.id,
+        parentId: HOME_PROJECT_ID,
+        position: 0,
+      }),
+    ).toMatchObject({ type: 'node-moved' });
+    const before = await client.layout();
+
+    const answer = await client.ask({
+      type: 'node-move',
+      nodeId: node.id,
+      parentId: null,
+      position: 1,
+    });
+
+    expect(answer).toMatchObject({
+      type: 'refusal',
+      code: 'refused',
+      message: 'only projects sit at the top level; move it into a project, or into HOME',
+      holder: null,
+    });
+    expect(await client.layout()).toEqual(before);
+  });
+});
+
+/**
  * The catalogue query over a fleet that reports, paged and grouped by server.
  *
  * The one thing this suite can say that `query.test` cannot: that the grouping
@@ -696,7 +742,7 @@ describe('paging the catalogue of a reporting fleet', () => {
     // reached this socket -- so what it does about the refusal is ask for the
     // first page again.
     expect(
-      await client.ask({ type: 'node-create-folder', parentId: null, name: 'later' }),
+      await client.ask({ type: 'node-create-folder', parentId: HOME_PROJECT_ID, name: 'later' }),
     ).toMatchObject({ type: 'node-created' });
 
     const refused = await pageOf(client, { limit: 1, cursor });

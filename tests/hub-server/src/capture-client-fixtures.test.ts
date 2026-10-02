@@ -12,6 +12,7 @@ import {
   sessionIdSchema,
   storeIdSchema,
   CLIENT_PROTOCOL_VERSION,
+  HOME_PROJECT_ID,
   SERVER_PROTOCOL_VERSION,
   type Activity,
   type ProviderReadiness,
@@ -1829,11 +1830,17 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     };
 
     // The five tree edits, in an order a person could have performed: make a
-    // folder, put the project in it, try to remove a session somebody is
+    // folder in HOME, put a session in it, try to remove a session somebody is
     // running, remove one nobody is, and then change your mind about it. Every
     // reply here is a frame the web store has to read, and the refusal in the
     // middle is the one with a machine named on it.
-    starter.send({ type: 'node-create-folder', id: 8, parentId: null, name: 'this week' });
+    // In HOME, because the top level holds projects only.
+    starter.send({
+      type: 'node-create-folder',
+      id: 8,
+      parentId: HOME_PROJECT_ID,
+      name: 'this week',
+    });
     await until(
       () => starter.received.some((text) => labelFor(text) === 'nodeCreated'),
       'the folder to be made',
@@ -1848,7 +1855,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     starter.send({
       type: 'node-move',
       id: 9,
-      nodeId: created.value.nodeId,
+      nodeId: nodeFor('session-fix-auth'),
       parentId: folder.value.nodeId,
       position: 0,
     });
@@ -1903,8 +1910,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const catalogueChanged = starter.received.find((text) => labelFor(text) === 'catalogueChanged');
     if (catalogueChanged === undefined) throw new Error('no catalogue-changed was broadcast');
 
-    // The tree after all of that: a folder, a project inside it, and the
-    // sessions. It is the one captured layout with a container in it, which is
+    // The tree after all of that: a project, HOME holding a folder with a
+    // session inside it, and the other sessions. It is the one captured layout with a container in it, which is
     // what the web's "move to a folder" menu is built out of.
     starter.send({ type: 'layout-request', id: 13 });
     await until(
@@ -1952,7 +1959,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // A cursor the tree has moved past. Captured rather than written by hand,
     // because what the store has to be able to read is the sentence this hub
     // actually sends when it refuses one.
-    starter.send({ type: 'node-create-folder', id: 16, parentId: null, name: 'later' });
+    starter.send({
+      type: 'node-create-folder',
+      id: 16,
+      parentId: HOME_PROJECT_ID,
+      name: 'later',
+    });
     await until(
       () => starter.received.filter((text) => labelFor(text) === 'nodeCreated').length > 1,
       'the folder that moves the version to be made',
