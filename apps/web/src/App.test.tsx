@@ -11,7 +11,7 @@ import { createMockSwitch, type MockSwitch } from './mock/mock-switch.js';
 import { createBrowserDependencies } from './store/browser.js';
 import { createOnboardingDismissal, type OnboardingDismissal } from './onboarding/dismissal.js';
 import { ONBOARDING_HASH } from './onboarding/onboarding-route.js';
-import { destinationHash } from './shell/destinations.js';
+import { destinationHash, settingsSectionHash } from './shell/destinations.js';
 import { createFakeSocketFactory, type FakeSocketFactory } from './store/fake-socket.js';
 import { hubFrames } from './store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from './store/hub-store.js';
@@ -253,7 +253,9 @@ describe('the page', () => {
   it('opens with ?mock=1 showing sample data on, and keeps it on for a page without it', async () => {
     const first = buildPage({ search: '?mock=1' });
     first.tokens.write(STORED_TOKEN);
-    window.location.hash = destinationHash('settings');
+    // The toggle is the Developer section's, and the reload below opens on
+    // the same address.
+    window.location.hash = settingsSectionHash('developer');
     await mount(first);
     await hubAnswers(first, hubFrames.machineStateWithServer);
     expect(mockToggle()?.checked).toBe(true);

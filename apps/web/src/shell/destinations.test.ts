@@ -3,7 +3,12 @@ import {
   destinationHash,
   NAV,
   parseDestinationHash,
+  parseSettingsSectionHash,
   resolveDestination,
+  resolveSettingsSection,
+  settingsSectionHash,
+  settingsSections,
+  SETTINGS_SECTIONS,
   TABS,
 } from './destinations.js';
 
@@ -31,7 +36,10 @@ describe('the destination an address names', () => {
     // this one does not. None of them is an error; all of them are the list.
     expect(parseDestinationHash('#/graphs')).toBe('sessions');
     expect(parseDestinationHash('#/projects/tree')).toBe('sessions');
+    // Settings owns its three section addresses exactly, not every path under
+    // it: a path naming no section is an address this app never wrote.
     expect(parseDestinationHash('#/settings/pairing')).toBe('sessions');
+    expect(parseDestinationHash('#/settings/')).toBe('sessions');
     expect(parseDestinationHash('#/session/store-1/session-1')).toBe('sessions');
   });
 });
@@ -85,5 +93,53 @@ describe('what an address means in each form of the shell', () => {
   it('is the same route model in both forms for every other address', () => {
     expect(resolveDestination('settings', 'wide')).toBe('settings');
     expect(resolveDestination('sessions', 'wide')).toBe('sessions');
+  });
+});
+
+describe('the sections of the settings screen', () => {
+  it('reads every section address, and plain settings, as the settings destination', () => {
+    expect(parseDestinationHash('#/settings')).toBe('settings');
+    expect(parseDestinationHash('#/settings/connections')).toBe('settings');
+    expect(parseDestinationHash('#/settings/preferences')).toBe('settings');
+    expect(parseDestinationHash('#/settings/developer')).toBe('settings');
+  });
+
+  it('names the section each settings address opens on, Connections when it names none', () => {
+    expect(parseSettingsSectionHash('#/settings')).toBe('connections');
+    expect(parseSettingsSectionHash('#/settings/connections')).toBe('connections');
+    expect(parseSettingsSectionHash('#/settings/preferences')).toBe('preferences');
+    expect(parseSettingsSectionHash('#/settings/developer')).toBe('developer');
+    expect(parseSettingsSectionHash('#/settings/nonsense')).toBe('connections');
+    expect(parseSettingsSectionHash('')).toBe('connections');
+  });
+
+  it('reads back every section address it writes', () => {
+    for (const { section } of SETTINGS_SECTIONS) {
+      expect(settingsSectionHash(section)).toBe(`#/settings/${section}`);
+      expect(parseSettingsSectionHash(settingsSectionHash(section))).toBe(section);
+      expect(parseDestinationHash(settingsSectionHash(section))).toBe('settings');
+    }
+  });
+
+  it('offers Connections, Preferences and Developer, in that order', () => {
+    expect(settingsSections(true).map((entry) => entry.label)).toEqual([
+      'Connections',
+      'Preferences',
+      'Developer',
+    ]);
+  });
+
+  it('offers no Developer section when there is no switch for it to hold', () => {
+    expect(settingsSections(false).map((entry) => entry.label)).toEqual([
+      'Connections',
+      'Preferences',
+    ]);
+  });
+
+  it('opens Connections for a Developer address with no switch behind it', () => {
+    expect(resolveSettingsSection('developer', false)).toBe('connections');
+    expect(resolveSettingsSection('developer', true)).toBe('developer');
+    expect(resolveSettingsSection('preferences', false)).toBe('preferences');
+    expect(resolveSettingsSection('connections', true)).toBe('connections');
   });
 });

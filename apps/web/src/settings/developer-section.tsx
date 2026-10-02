@@ -19,7 +19,7 @@ export function DeveloperSection({ mock }: { readonly mock: MockSwitch }): JSX.E
   const [refused, setRefused] = useState(false);
   return (
     <Stack gap="sm">
-      <Title order={4}>Developer</Title>
+      <Title order={4}>Mock data</Title>
       <Switch
         label="Show mock data"
         checked={on}

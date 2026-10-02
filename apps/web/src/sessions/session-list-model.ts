@@ -15,7 +15,7 @@ import {
   type ApprovalSubject,
 } from '@agentplex/protocol';
 import { activityWordsText } from '../activity/activity-words.js';
-import { destinationHash } from '../shell/destinations.js';
+import { settingsSectionHash } from '../shell/destinations.js';
 import type { NextAction } from '../shell/next-action.js';
 import type { ShellForm } from '../shell/shell-form.js';
 import type { ConnectionPhase } from '../store/views.js';
@@ -976,7 +976,7 @@ export function emptyListing(
       words:
         'No server is paired with this hub, and a paired server is what reports the stores ' +
         'sessions live in.',
-      action: { label: 'Pair one in Settings', hash: destinationHash('settings') },
+      action: { label: 'Pair one in Settings', hash: settingsSectionHash('connections') },
     };
   }
   if (state.stores.length === 0) {
@@ -998,7 +998,7 @@ export function emptyListing(
             'reported a store';
       return {
         words: `${which}.`,
-        action: { label: 'See why in Settings', hash: destinationHash('settings') },
+        action: { label: 'See why in Settings', hash: settingsSectionHash('connections') },
       };
     }
     const which =

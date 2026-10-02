@@ -16,6 +16,7 @@ import { NewGraphForm } from '../graphs/new-graph-form.js';
 import { appLayoutStore } from '../layout/app-layout.js';
 import { LayoutScreen } from '../layout/layout-screen.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
+import { useMockSwitch } from '../mock/use-mock-mode.js';
 import { CommandPalette } from '../palette/palette.js';
 import { createPaletteSearch, type PaletteSearch } from '../palette/palette-search.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
@@ -32,7 +33,15 @@ import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { AttentionBell } from './attention-bell.js';
 import { connectionView } from './connection-model.js';
 import { ConnectionStatus } from './connection-status.js';
-import { resolveDestination, useDestination, type Destination } from './destinations.js';
+import {
+  resolveDestination,
+  resolveSettingsSection,
+  settingsSections,
+  useDestination,
+  useSettingsSection,
+  type Destination,
+  type SettingsSection,
+} from './destinations.js';
 import { MobileChrome } from './mobile-chrome.js';
 import { MoreScreen } from './more-screen.js';
 import { newMenu, type NewNodeKind } from './new-menu-model.js';
@@ -131,6 +140,13 @@ export function AppShell({
   const graph = useGraphRoute();
   const destination = useDestination();
   const form = useShellForm();
+  // The settings section, resolved once here and handed to both the sidebar
+  // and the screen, so the column and the content cannot mark different
+  // sections current. Developer is offered only where a mock switch is
+  // provided, because that switch is all it holds.
+  const hasDeveloper = useMockSwitch() !== null;
+  const section = resolveSettingsSection(useSettingsSection(), hasDeveloper);
+  const sections = settingsSections(hasDeveloper);
   const [machine, setMachine] = useState<ServerRegistrationId | null>(null);
   // Built once and inert until something subscribes: creating a catalogue
   // store dials nothing, and the panel's first subscriber is what asks.
@@ -300,6 +316,7 @@ export function AppShell({
     doc,
     graph,
     destination: place,
+    section,
     machine,
     form,
     scheme,
@@ -350,6 +367,8 @@ export function AppShell({
             onPickMachine={pickMachine}
             destination={place}
             address={destination}
+            section={section}
+            sections={sections}
             scheme={scheme}
           />
         </SidebarFrame>
@@ -401,8 +420,13 @@ interface ContentProps {
   readonly graph: NodeId | null;
   /** Already resolved for the form: see `resolveDestination`. */
   readonly destination: Destination;
+  /** The settings section the address names, already resolved. */
+  readonly section: SettingsSection;
   readonly machine: ServerRegistrationId | null;
-  /** Passed on to the session list, which draws one control only in one form. */
+  /**
+   * Passed on to the session list and the settings screen, which each draw
+   * one control only in one form.
+   */
   readonly form: ShellForm;
   readonly scheme: Scheme;
 }
@@ -439,6 +463,7 @@ function content({
   doc,
   graph,
   destination,
+  section,
   machine,
   form,
   scheme,
@@ -452,7 +477,7 @@ function content({
     return <LayoutScreen session={sessionRef} doc={doc} store={hub} />;
   }
   if (destination === 'settings') {
-    return <SettingsRoute store={hub} tokens={tokens} />;
+    return <SettingsRoute store={hub} tokens={tokens} section={section} form={form} />;
   }
   if (destination === 'projects') {
     return (

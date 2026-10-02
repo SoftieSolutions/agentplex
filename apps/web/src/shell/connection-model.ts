@@ -1,7 +1,7 @@
 import { connectionNotice } from '../sessions/session-list-model.js';
 import type { ConnectionPhase } from '../store/views.js';
 import type { Tone } from '../ui/tokens.js';
-import { destinationHash } from './destinations.js';
+import { settingsSectionHash } from './destinations.js';
 import type { NextAction } from './next-action.js';
 
 /**
@@ -100,7 +100,7 @@ export function connectionView(facts: ConnectionFacts): ConnectionView {
     return {
       tone: 'blocked',
       words: 'no hub token on this device',
-      action: { label: 'Settings', hash: destinationHash('settings') },
+      action: { label: 'Settings', hash: settingsSectionHash('connections') },
       canRetry: false,
     };
   }

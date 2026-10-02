@@ -6,7 +6,7 @@ import {
   type PendingApproval,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { destinationHash } from '../shell/destinations.js';
+import { settingsSectionHash } from '../shell/destinations.js';
 import {
   acknowledgementHolds,
   activeFilterCount,
@@ -1048,7 +1048,7 @@ describe('an empty list, and what resolves it', () => {
     expect(listing.words).toContain('reports the stores');
     expect(listing.action).toEqual({
       label: 'Pair one in Settings',
-      hash: destinationHash('settings'),
+      hash: settingsSectionHash('connections'),
     });
   });
 
@@ -1080,7 +1080,7 @@ describe('an empty list, and what resolves it', () => {
     // address that was typed, and the hub's sentence about what went wrong.
     expect(listing.action).toEqual({
       label: 'See why in Settings',
-      hash: destinationHash('settings'),
+      hash: settingsSectionHash('connections'),
     });
   });
 });

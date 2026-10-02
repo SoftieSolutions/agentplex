@@ -1,5 +1,7 @@
 import type { JSX } from 'react';
 import type { TokenStore } from '../auth/token.js';
+import type { SettingsSection } from '../shell/destinations.js';
+import type { ShellForm } from '../shell/shell-form.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { discoveredCandidates } from './pairing-form.js';
@@ -61,9 +63,16 @@ export function pushFor(): PushOperations {
 export interface SettingsRouteProps {
   readonly store: HubStore;
   readonly tokens: TokenStore;
+  /**
+   * The section the address names, read by the shell rather than here: the
+   * sidebar draws the same choice, and one reading of the hash is what keeps
+   * the column and the content from disagreeing about where the person is.
+   */
+  readonly section: SettingsSection;
+  readonly form: ShellForm;
 }
 
-export function SettingsRoute({ store, tokens }: SettingsRouteProps): JSX.Element {
+export function SettingsRoute({ store, tokens, section, form }: SettingsRouteProps): JSX.Element {
   const snapshot = useHubSnapshot(store);
   return (
     <SettingsScreen
@@ -73,6 +82,8 @@ export function SettingsRoute({ store, tokens }: SettingsRouteProps): JSX.Elemen
       pairing={pairingFor(store)}
       push={pushFor()}
       candidates={discoveredCandidates(snapshot.machineState)}
+      section={section}
+      form={form}
     />
   );
 }
