@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { connectionView, toneForPhase } from './connection-model.js';
-import { destinationHash } from './destinations.js';
+import { settingsSectionHash } from './destinations.js';
 
 /**
  * What the chrome says about the connection, and what it offers to do about
@@ -86,7 +86,7 @@ describe('the connection line in the chrome', () => {
 
     expect(view.words).toBe('no hub token on this device');
     expect(view.tone).toBe('blocked');
-    expect(view.action).toEqual({ label: 'Settings', hash: destinationHash('settings') });
+    expect(view.action).toEqual({ label: 'Settings', hash: settingsSectionHash('connections') });
   });
 
   it('stops naming the token the moment one is stored, whatever the socket is doing', () => {

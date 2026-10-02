@@ -366,7 +366,7 @@ describe('the session list', () => {
     await mountWith(hubFrames.machineState);
 
     expect(container.textContent).toContain('No server is paired with this hub');
-    const link = container.querySelector<HTMLAnchorElement>('a[href="#/settings"]');
+    const link = container.querySelector<HTMLAnchorElement>('a[href="#/settings/connections"]');
     expect(link?.textContent).toBe('Pair one in Settings');
   });
 
@@ -377,7 +377,7 @@ describe('the session list', () => {
     await mountWith(hubFrames.machineStateWithServer);
 
     expect(container.textContent).toContain('gpu-box-01 is paired but has never connected');
-    const link = container.querySelector<HTMLAnchorElement>('a[href="#/settings"]');
+    const link = container.querySelector<HTMLAnchorElement>('a[href="#/settings/connections"]');
     expect(link?.textContent).toBe('See why in Settings');
   });
 
@@ -387,7 +387,7 @@ describe('the session list', () => {
     await mountWith(hubFrames.machineStatePopulated, 'registration-unpaired');
 
     expect(container.textContent).toContain('no session matches the current narrowing');
-    expect(container.querySelector('a[href="#/settings"]')).toBeNull();
+    expect(container.querySelector('a[href^="#/settings"]')).toBeNull();
   });
 
   it('says what a landed stop landed on, whoever asked for it', async () => {
