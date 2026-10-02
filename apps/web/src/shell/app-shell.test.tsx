@@ -18,6 +18,7 @@ import { sessionHash } from '../terminal/session-route.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { AppShell } from './app-shell.js';
+import { createSidebarWidth, type SidebarWidth } from './sidebar-width.js';
 import { destinationHash } from './destinations.js';
 import type { NewNodeKind } from './new-menu-model.js';
 
@@ -138,6 +139,7 @@ describe('the shell', () => {
   let root: Root | null = null;
   let store: HubStore;
   let tokens: TokenStore;
+  let sidebarWidth: SidebarWidth;
   let sockets: ReturnType<typeof createFakeSocketFactory>;
 
   beforeAll(() => {
@@ -163,6 +165,8 @@ describe('the shell', () => {
     });
     const storage = fakeStorage();
     tokens = createTokenStore(() => storage);
+    // Never jsdom's own localStorage, which every test in the run shares.
+    sidebarWidth = createSidebarWidth({ storage: () => storage });
     window.location.hash = '';
   });
 
@@ -207,7 +211,11 @@ describe('the shell', () => {
       root = createRoot(container);
       // No StrictMode: its simulated remount would subscribe, hang up and
       // dial again, and one dial is part of what the page test asserts.
-      root.render(withProvider(<AppShell hub={store} tokens={tokens} now={now} />));
+      root.render(
+        withProvider(
+          <AppShell hub={store} tokens={tokens} now={now} sidebarWidth={sidebarWidth} />,
+        ),
+      );
     });
     await act(settle);
     const socket = sockets.sockets[0];
@@ -375,6 +383,16 @@ describe('the shell', () => {
     expect(container.querySelectorAll('main')).toHaveLength(1);
     const brand = container.querySelector<HTMLAnchorElement>('header a[aria-label="agentplex"]');
     expect(brand?.getAttribute('href')).toBe(destinationHash('sessions'));
+  });
+
+  it('draws one edge the sidebar is widened by', async () => {
+    // What the edge does is `sidebar-frame.test.tsx`; here it is that the wide
+    // chrome has exactly one.
+    await mount();
+
+    expect(
+      container.querySelectorAll('[role="separator"][aria-label="Resize sidebar"]'),
+    ).toHaveLength(1);
   });
 
   it('fills the top bar slot with how the connection is doing', async () => {
@@ -565,7 +583,9 @@ describe('the shell', () => {
     });
     await act(async () => {
       root = createRoot(container);
-      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+      root.render(
+        withProvider(<AppShell hub={store} tokens={tokens} sidebarWidth={sidebarWidth} />),
+      );
     });
     await act(settle);
 
@@ -586,7 +606,9 @@ describe('the shell', () => {
     });
     await act(async () => {
       root = createRoot(container);
-      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+      root.render(
+        withProvider(<AppShell hub={store} tokens={tokens} sidebarWidth={sidebarWidth} />),
+      );
     });
     await act(settle);
 
@@ -641,7 +663,9 @@ describe('the shell', () => {
     });
     await act(async () => {
       root = createRoot(container);
-      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+      root.render(
+        withProvider(<AppShell hub={store} tokens={tokens} sidebarWidth={sidebarWidth} />),
+      );
     });
     await act(settle);
 
@@ -783,6 +807,7 @@ describe('the shell on a phone', () => {
   let root: Root | null = null;
   let store: HubStore;
   let tokens: TokenStore;
+  let sidebarWidth: SidebarWidth;
   let sockets: ReturnType<typeof createFakeSocketFactory>;
 
   beforeEach(() => {
@@ -803,6 +828,8 @@ describe('the shell on a phone', () => {
     });
     const storage = fakeStorage();
     tokens = createTokenStore(() => storage);
+    // Never jsdom's own localStorage, which every test in the run shares.
+    sidebarWidth = createSidebarWidth({ storage: () => storage });
     window.location.hash = '';
   });
 
@@ -825,7 +852,7 @@ describe('the shell on a phone', () => {
           cssVariablesResolver={cssVariablesResolver}
           defaultColorScheme="dark"
         >
-          <AppShell hub={store} tokens={tokens} />
+          <AppShell hub={store} tokens={tokens} sidebarWidth={sidebarWidth} />
         </MantineProvider>,
       );
     });
@@ -853,6 +880,14 @@ describe('the shell on a phone', () => {
     expect(container.querySelectorAll('aside')).toHaveLength(0);
     expect(container.querySelectorAll('main')).toHaveLength(1);
     expect(tabs().map((tab) => tab.textContent)).toEqual(['Sessions', 'Projects', 'More']);
+  });
+
+  it('draws no sidebar edge, because there is no sidebar to widen', async () => {
+    await mount();
+
+    expect(
+      container.querySelectorAll('[role="separator"][aria-label="Resize sidebar"]'),
+    ).toHaveLength(0);
   });
 
   it('hangs the bell in the phone header, and hangs no second count on the button', async () => {

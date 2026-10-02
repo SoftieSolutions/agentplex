@@ -85,8 +85,8 @@ export function SidebarSessions({
  * under it saying no store holds a session would have the sidebar telling
  * somebody their fleet is gone when it is one Clear away. The list screen's
  * `emptyListing` answers the same question at length and with somewhere to go;
- * this is a 240px column whose undo is the line directly above it, so it says
- * the one thing that column can act on.
+ * this is a column at least 240px wide whose undo is the line directly above
+ * it, so it says the one thing that column can act on.
  *
  * The typed search counts here although `activeFilterCount` leaves it out: the
  * count is for the badge, where a person can see the box for themselves, and

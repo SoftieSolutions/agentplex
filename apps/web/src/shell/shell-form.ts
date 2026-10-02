@@ -13,8 +13,8 @@ export type ShellForm = 'phone' | 'wide';
 
 /**
  * The one width the shell changes shape at, in CSS pixels: the width below
- * which a 240px sidebar and a readable content region stop fitting side by
- * side.
+ * which the narrowest sidebar (`SIDEBAR_MIN` in `sidebar-width.ts`) and a
+ * readable content region stop fitting side by side.
  *
  * Every rule that has to agree with it is driven from this form rather than
  * from a breakpoint of its own. Which control makes things is the one that
@@ -36,7 +36,13 @@ export function shellForm(width: number): ShellForm {
   return width < WIDE_FROM ? 'phone' : 'wide';
 }
 
-function subscribeToWidth(listener: () => void): () => void {
+/**
+ * The window's width as an external store's subscription, for
+ * `useSyncExternalStore`. Exported so the one resize listener a reading of the
+ * window needs is spelled once: the sidebar frame reads its widest width off
+ * the same subscription the form is read off.
+ */
+export function subscribeToWidth(listener: () => void): () => void {
   window.addEventListener('resize', listener);
   return () => window.removeEventListener('resize', listener);
 }
