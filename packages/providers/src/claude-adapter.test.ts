@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  SESSION_CWD_MAX_CHARS,
   SESSION_TITLE_MAX_CHARS,
   sessionRefSchema,
   storeDescriptorSchema,
@@ -476,6 +477,185 @@ describe('createClaudeAdapter.discover, against the session registry', () => {
   });
 });
 
+describe('createClaudeAdapter.discover, a live claude that has not typed yet', () => {
+  // Claude Code registers `sessions/<pid>.json` with its session id within
+  // seconds of starting and before anyone types, and writes no transcript
+  // until a turn lands (2.1.287, run at the origin for AGX-373). These are the
+  // sessions only the registry knows about.
+  const TRANSCRIPT = `${PROJECT}/${SESSION_ID}.jsonl`;
+  const ENTRY = `${SESSIONS}/${PID}.json`;
+  const theSameProcess = { processes: { [PID]: PROCESS_STARTED_AT } };
+  /** The captured entry's own `startedAt` and `statusUpdatedAt`. */
+  const REGISTERED_AT = 1_788_406_129_669;
+  const STATUS_UPDATED_AT = 1_788_407_949_955;
+
+  function entryWith(overrides: Record<string, unknown>): string {
+    return JSON.stringify({ ...JSON.parse(REGISTRY_ENTRY), ...overrides });
+  }
+
+  async function discoverOver(
+    files: Record<string, string>,
+    probe: Parameters<typeof createFakeProcessProbe>[0] = theSameProcess,
+    unreadable?: readonly string[],
+  ) {
+    const adapter = adapterOver({ files, ...(unreadable && { unreadable }) }, probe);
+    const discovered = await adapter.discover(STORE);
+    const statuses = discovered.sessions.map((session) =>
+      adapter.status({
+        signal: session.signal,
+        updatedAt: session.updatedAt,
+        running: session.running,
+        now: session.updatedAt + 1_000,
+      }),
+    );
+    return { ...discovered, statuses };
+  }
+
+  it('lists a verified entry with no transcript as a session, under the entry’s cwd', async () => {
+    const found = await discoverOver({ [ENTRY]: REGISTRY_ENTRY });
+
+    expect(found.problems).toEqual([]);
+    expect(found.sessions).toEqual([
+      {
+        sessionId: SESSION_ID,
+        // Nothing written, so nothing pending: the registry's status is what
+        // says whether the process is at work.
+        signal: 'quiet',
+        createdAt: REGISTERED_AT,
+        updatedAt: STATUS_UPDATED_AT,
+        running: true,
+        pid: PID,
+        process: 'verified',
+        cwd: '/Users/dev/Code/agentplex',
+        // A transcript is the only place these are written, and there is none.
+        title: null,
+        usage: null,
+        model: null,
+        activity: null,
+      },
+    ]);
+    // The captured entry is `busy`.
+    expect(found.statuses).toEqual(['working']);
+  });
+
+  it('reads an idle entry as idle', async () => {
+    const found = await discoverOver({ [ENTRY]: entryWith({ status: 'idle' }) });
+
+    expect(found.sessions.map((session) => session.running)).toEqual([false]);
+    expect(found.statuses).toEqual(['idle']);
+  });
+
+  it('reads a waiting entry as idle, because there is no tool call for it to be waiting on', async () => {
+    // Only `progressing` is promoted to a permission prompt, and a session
+    // with no transcript has no unanswered tool call to promote. A claude that
+    // is blocked on a human before its first turn -- a dialog at launch -- is
+    // not a permission prompt this adapter can name.
+    const found = await discoverOver({ [ENTRY]: entryWith({ status: 'waiting' }) });
+
+    expect(found.sessions.map((session) => session.signal)).toEqual(['quiet']);
+    expect(found.statuses).toEqual(['idle']);
+  });
+
+  it('dates a session by its registration when the entry has never changed status', async () => {
+    const found = await discoverOver({ [ENTRY]: entryWith({ statusUpdatedAt: undefined }) });
+
+    expect(found.sessions.map((session) => session.updatedAt)).toEqual([REGISTERED_AT]);
+  });
+
+  it('lists one session, the transcript’s, once a turn has landed', async () => {
+    // The same id from both sources is one session. The transcript's row is
+    // the richer one and is dated by the first turn, which is what a spawn is
+    // joined by when the pid is not enough.
+    const found = await discoverOver({ [TRANSCRIPT]: COMPLETED_TURN, [ENTRY]: REGISTRY_ENTRY });
+
+    expect(found.sessions).toHaveLength(1);
+    expect(found.sessions[0]).toMatchObject({
+      sessionId: SESSION_ID,
+      createdAt: Date.parse('2026-09-03T02:02:01.540Z'),
+      title: 'Docker compose without hub',
+      pid: PID,
+      process: 'verified',
+    });
+  });
+
+  it('lists nothing for an entry whose process is gone', async () => {
+    const found = await discoverOver({ [ENTRY]: REGISTRY_ENTRY }, {});
+
+    expect(found.sessions).toEqual([]);
+    expect(found.problems).toEqual([]);
+  });
+
+  it('lists nothing for an entry whose pid was handed to another process', async () => {
+    const found = await discoverOver(
+      { [ENTRY]: REGISTRY_ENTRY },
+      { processes: { [PID]: REGISTERED_AT + 60_000 } },
+    );
+
+    expect(found.sessions).toEqual([]);
+  });
+
+  it('lists nothing for an entry whose live pid it cannot date', async () => {
+    // In doubt is not verified. A row here would claim a live process on the
+    // strength of a pid that may have been handed to anything since.
+    const found = await discoverOver({ [ENTRY]: REGISTRY_ENTRY }, { undatable: [PID] });
+
+    expect(found.sessions).toEqual([]);
+  });
+
+  it('lists a verified entry whose transcript has no turn in it yet', async () => {
+    // A transcript with no turn is not a session on its own; a live process
+    // running it is.
+    const found = await discoverOver({ [TRANSCRIPT]: NO_TURNS, [ENTRY]: REGISTRY_ENTRY });
+
+    expect(found.sessions.map((session) => [session.sessionId, session.title])).toEqual([
+      [SESSION_ID, null],
+    ]);
+    expect(found.problems).toEqual([]);
+  });
+
+  it('lists a verified entry whose transcript is damaged, and still names the damage', async () => {
+    // A process this server verified is running the session, so leaving it out
+    // would under-report a live agent; listing it claims only what the
+    // registry proves. The transcript is still somebody's to go and look at.
+    const found = await discoverOver({
+      [TRANSCRIPT]: 'not json at all\n',
+      [ENTRY]: REGISTRY_ENTRY,
+    });
+
+    expect(found.sessions.map((session) => [session.sessionId, session.process])).toEqual([
+      [SESSION_ID, 'verified'],
+    ]);
+    expect(found.problems).toEqual([
+      { subject: TRANSCRIPT, problem: expect.stringContaining('JSON') },
+    ]);
+  });
+
+  it('lists a verified entry whose transcript cannot be read, and still names it', async () => {
+    const found = await discoverOver(
+      { [TRANSCRIPT]: COMPLETED_TURN, [ENTRY]: REGISTRY_ENTRY },
+      theSameProcess,
+      [TRANSCRIPT],
+    );
+
+    expect(found.sessions.map((session) => [session.sessionId, session.title])).toEqual([
+      [SESSION_ID, null],
+    ]);
+    expect(found.problems).toEqual([
+      { subject: TRANSCRIPT, problem: expect.stringContaining('EACCES') },
+    ]);
+  });
+
+  it('lists a session under no cwd when the entry names none or one too long for the wire', async () => {
+    const missing = await discoverOver({ [ENTRY]: entryWith({ cwd: undefined }) });
+    const tooLong = await discoverOver({
+      [ENTRY]: entryWith({ cwd: `/${'d'.repeat(SESSION_CWD_MAX_CHARS)}` }),
+    });
+
+    expect(missing.sessions.map((session) => session.cwd)).toEqual([null]);
+    expect(tooLong.sessions.map((session) => session.cwd)).toEqual([null]);
+  });
+});
+
 describe('createClaudeAdapter.status', () => {
   const observed = { updatedAt: 1_756_000_000_000, now: 1_756_000_001_000 };
 
@@ -765,6 +945,52 @@ describe('createClaudeAdapter.transcript', () => {
     const read = await adapter.transcript({ store: STORE, session, limit: 0 });
 
     expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: true } });
+  });
+
+  describe('for a live claude that has not typed yet', () => {
+    // Discovery lists these off a verified registry entry alone, so asking for
+    // one's transcript is ordinary: there is none on disk until a turn lands.
+    const ENTRY = `${SESSIONS}/${PID}.json`;
+    const theSameProcess = { processes: { [PID]: PROCESS_STARTED_AT } };
+
+    it('answers an empty transcript for a session only its verified registry entry names', async () => {
+      const adapter = adapterOver({ files: { [ENTRY]: REGISTRY_ENTRY } }, theSameProcess);
+
+      const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+      expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: false } });
+    });
+
+    it('still refuses a session neither a transcript nor a verified entry names', async () => {
+      const adapter = adapterOver({ files: { [ENTRY]: REGISTRY_ENTRY } }, theSameProcess);
+
+      const read = await adapter.transcript({
+        store: STORE,
+        session: sessionRefSchema.parse({
+          storeId: STORE.storeId,
+          sessionId: '99999999-3fc6-4519-8bb4-1c3f7eef0bde',
+        }),
+        limit: 10,
+      });
+
+      expect(read).toEqual({
+        ok: false,
+        problem: 'this store holds no claude transcript for that session',
+      });
+    });
+
+    it('still refuses a session whose entry names a live pid it cannot date', async () => {
+      // In doubt is not verified, the same line discovery draws: the pid may
+      // belong to anything by now, and an empty transcript would vouch for it.
+      const adapter = adapterOver({ files: { [ENTRY]: REGISTRY_ENTRY } }, { undatable: [PID] });
+
+      const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+      expect(read).toEqual({
+        ok: false,
+        problem: 'this store holds no claude transcript for that session',
+      });
+    });
   });
 });
 

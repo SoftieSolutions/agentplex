@@ -71,10 +71,26 @@ describe('parseClaudeRegistryEntry', () => {
     expect(parseClaudeRegistryEntry(CAPTURED)).toEqual({
       pid: PID,
       sessionId: SESSION_ID,
+      cwd: '/Users/dev/Code/agentplex',
       startedAt: REGISTERED_AT,
       status: 'busy',
       statusUpdatedAt: 1_788_407_949_955,
     });
+  });
+
+  it('keeps an entry that names no cwd, without one', () => {
+    // The cwd is what a session with no transcript yet is listed under, and
+    // only that. An entry without it still names a process and a session, which
+    // is everything liveness and status turn on.
+    const parsed = parseClaudeRegistryEntry(captured({ cwd: undefined }));
+
+    expect(parsed?.sessionId).toBe(SESSION_ID);
+    expect(parsed?.cwd).toBeUndefined();
+  });
+
+  it('keeps an entry whose cwd is not a usable path, without one', () => {
+    expect(parseClaudeRegistryEntry(captured({ cwd: '' }))?.cwd).toBeUndefined();
+    expect(parseClaudeRegistryEntry(captured({ cwd: 7 }))?.cwd).toBeUndefined();
   });
 
   it('keeps an entry whose status it does not recognise, without a status', () => {

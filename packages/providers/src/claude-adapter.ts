@@ -1,5 +1,10 @@
 import { join } from 'node:path';
-import { sessionIdSchema, type SessionStatus, type StoreDescriptor } from '@agentplex/protocol';
+import {
+  SESSION_CWD_MAX_CHARS,
+  sessionIdSchema,
+  type SessionStatus,
+  type StoreDescriptor,
+} from '@agentplex/protocol';
 import type { ProcessProbe } from './process-probe.js';
 import {
   claudePermissionHook,
@@ -119,7 +124,10 @@ export function createClaudeAdapter({
       );
       scan.finish();
 
-      return { sessions: found.sessions, problems: [...registry.problems, ...found.problems] };
+      return {
+        sessions: [...found.sessions, ...registryOnlySessions(registry, found.sessions)],
+        problems: [...registry.problems, ...found.problems],
+      };
     },
 
     spawn(request: SpawnRequest): Launch {
@@ -162,12 +170,28 @@ export function createClaudeAdapter({
     },
 
     async transcript(request: TranscriptRequest): Promise<TranscriptRead> {
-      return await readSessionTranscript(
+      const read = await readSessionTranscript(
         join(request.store.path, CLAUDE_PROJECTS_DIRECTORY),
         request.session.sessionId,
         request.limit,
         files,
       );
+      if (read !== null) return read;
+
+      // No file. A live claude that has not typed yet has none either, and
+      // discovery lists it off its verified registry entry, so a request for
+      // its transcript is ordinary: nothing has been said. The registry is
+      // read only on this path, and with discovery's own verification, so an
+      // entry in doubt vouches for nothing here either.
+      const registry = await readClaudeRegistry(
+        join(request.store.path, CLAUDE_SESSIONS_DIRECTORY),
+        files,
+        probe,
+      );
+      if (registry.live.has(request.session.sessionId)) {
+        return { ok: true, transcript: { activities: [], olderExist: false } };
+      }
+      return { ok: false, problem: 'this store holds no claude transcript for that session' };
     },
 
     // Provisioning holds no store and no filesystem, so it is built once here
@@ -182,6 +206,59 @@ export function createClaudeAdapter({
     // is the server's.
     permissionHook: claudePermissionHook,
   };
+}
+
+/**
+ * A Claude Code that is running and has not typed yet: listed off its verified
+ * registry entry alone.
+ *
+ * Claude Code registers `sessions/<pid>.json`, session id included, within
+ * seconds of starting, and writes no transcript until a turn lands. Without
+ * this a claude somebody opened and has not spoken to yet is invisible, and a
+ * terminal this server spawned with no prompt cannot be joined to its session
+ * until someone types into it. The entry is verified, so the row claims a live
+ * process and nothing else: it has no title, spend, model or activity, because
+ * a transcript is the only place those are written, and its status is the
+ * registry's alone.
+ *
+ * Once a turn lands, the transcript-derived session replaces it: an id already
+ * found among the transcripts is never listed twice. A transcript that is there
+ * and has no turn, is damaged, or cannot be read did not produce a session, so
+ * its live process still does -- the transcript's own problem is reported
+ * beside it all the same.
+ */
+function registryOnlySessions(
+  registry: ClaudeRegistry,
+  found: readonly DiscoveredSession[],
+): DiscoveredSession[] {
+  const described = new Set<string>(found.map((session) => session.sessionId));
+  const sessions: DiscoveredSession[] = [];
+
+  for (const [sessionId, entry] of registry.live) {
+    if (described.has(sessionId)) continue;
+
+    // Nothing written means nothing pending, so the transcript's answer is
+    // `quiet` and the registry's status decides the rest.
+    const resolved = resolveWithRegistry('quiet', entry);
+    sessions.push({
+      sessionId: entry.sessionId,
+      signal: resolved.signal,
+      createdAt: entry.startedAt,
+      updatedAt: entry.statusUpdatedAt ?? entry.startedAt,
+      running: resolved.running,
+      pid: entry.pid,
+      process: 'verified',
+      // The wire refuses a longer cwd outright, and a session is worth more
+      // listed without one than refused for it.
+      cwd: entry.cwd !== undefined && entry.cwd.length <= SESSION_CWD_MAX_CHARS ? entry.cwd : null,
+      title: null,
+      usage: null,
+      model: null,
+      activity: null,
+    });
+  }
+
+  return sessions;
 }
 
 async function discoverSessions(
@@ -310,17 +387,18 @@ async function readProject(
  * So the read is `readFileTail`, whole lines off the end of the file, and the
  * answer says out loud when the window cut something off.
  *
- * Two refusals, and they are different things for a person to do. A session no
- * project directory holds is one that was deleted, or one this store never had;
- * a transcript that is there and will not be read is a permission or a mount to
- * go and fix.
+ * A transcript that is there and will not be read is refused here: a
+ * permission or a mount to go and fix. A session no project directory holds is
+ * `null`, and the caller decides between a refusal and an empty answer, because
+ * that file is missing for two reasons: the session was deleted or never here,
+ * or it is running and has not typed yet.
  */
 async function readSessionTranscript(
   projects: string,
   sessionId: string,
   limit: number,
   files: ProviderFiles,
-): Promise<TranscriptRead> {
+): Promise<TranscriptRead | null> {
   const listing = await files.listDirectory(projects);
   if (listing.kind === 'failed') {
     return { ok: false, problem: `cannot read this store's transcripts: ${listing.reason}` };
@@ -360,5 +438,5 @@ async function readSessionTranscript(
     };
   }
 
-  return { ok: false, problem: 'this store holds no claude transcript for that session' };
+  return null;
 }
