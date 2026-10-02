@@ -1730,7 +1730,7 @@ describe('terminal frames from the hub', () => {
     // pane reading its entry back as missing would go back to saying it was
     // asking about a session that is running.
     expect(starts.has(answered.id)).toBe(false);
-    expect(starts.get(waiting.id)).toEqual({ started: null, refusal: null });
+    expect(starts.get(waiting.id)).toEqual({ started: null, refusal: null, named: null });
 
     // The exemption yields to the bound, which is the half that is not a
     // preference: with nothing answered left to drop, the oldest goes anyway,
@@ -1772,6 +1772,7 @@ describe('terminal frames from the hub', () => {
         server: 'registration-mbp-robert',
       },
       refusal: null,
+      named: null,
     });
   });
 
@@ -1789,6 +1790,67 @@ describe('terminal frames from the hub', () => {
     // it back, and the one still here never asked.
     expect(h.store.getSnapshot().terminals.has(CAPTURED_KEY)).toBe(true);
     expect(h.store.getSnapshot().problem).toBeNull();
+  });
+});
+
+describe('a start the hub named', () => {
+  /** The captured naming says which session the start on frame 2 became. */
+  const NAMED = { storeId: 'store-work', sessionId: 'session-spawned' };
+
+  /** One start, sent first, so it carries the id the capture's spawn did. */
+  async function spawned(): Promise<{ h: Harness; socket: FakeSocket; id: FrameId }> {
+    const h = harness();
+    const { socket } = await establish(h);
+    const sent = h.store.sendCommand(START);
+    if (!sent.accepted) throw new Error(sent.reason);
+    expect(sent.id).toBe(2);
+    return { h, socket, id: sent.id };
+  }
+
+  it('files the session against the start, beside the yes it already had', async () => {
+    const { h, socket, id } = await spawned();
+
+    socket.deliver(hubFrames.sessionStarted);
+    socket.deliver(hubFrames.sessionNamed);
+
+    const start = h.store.getSnapshot().starts.get(id);
+    expect(start?.named).toEqual(NAMED);
+    expect(start?.started).toMatchObject({ replyTo: id, sessionId: null });
+  });
+
+  it('keeps a naming that arrived first when the yes follows it', async () => {
+    const { h, socket, id } = await spawned();
+
+    socket.deliver(hubFrames.sessionNamed);
+    socket.deliver(hubFrames.sessionStarted);
+
+    const start = h.store.getSnapshot().starts.get(id);
+    expect(start?.named).toEqual(NAMED);
+    expect(start?.started).not.toBeNull();
+  });
+
+  it('changes nothing for an id no start was sent under', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const before = h.store.getSnapshot();
+
+    socket.deliver(hubFrames.sessionNamed);
+
+    expect(h.store.getSnapshot().starts).toBe(before.starts);
+    expect(h.store.getSnapshot().starts.size).toBe(0);
+  });
+
+  it('neither owes nor settles an answer: the start is still waiting on its yes', async () => {
+    const { h, socket, id } = await spawned();
+
+    socket.deliver(hubFrames.sessionNamed);
+
+    const answers = h.store.getSnapshot().answers;
+    expect(answers.outstanding.has(id)).toBe(true);
+    expect(answers.replies.has(id)).toBe(false);
+
+    socket.deliver(hubFrames.sessionStarted);
+    expect(h.store.getSnapshot().answers.outstanding.has(id)).toBe(false);
   });
 });
 

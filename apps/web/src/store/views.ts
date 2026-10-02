@@ -199,14 +199,22 @@ export interface StartedView {
  * The key is the id of the `session-start` frame, which is the name the
  * asking already has and the one every reply to it carries as `replyTo`.
  *
- * Both fields are `null` while the hub has not answered. They are never both
- * set: a start is answered once.
+ * `started` and `refusal` are `null` while the hub has not answered. They are
+ * never both set: a start is answered once.
  */
 export interface StartView {
   /** The hub's yes, naming the machine it placed the start on. */
   readonly started: StartedView | null;
   /** The hub's no, in its own words. */
   readonly refusal: RefusalView | null;
+  /**
+   * The session a spawn became, once a report named it, or `null`.
+   *
+   * Not an answer -- `started` is that -- but news the hub sends this client
+   * alone, watching or not, so a pane opened on a spawn can rebind to the
+   * session with no terminal open on it. It may arrive before `started`.
+   */
+  readonly named: SessionRef | null;
 }
 
 /**
