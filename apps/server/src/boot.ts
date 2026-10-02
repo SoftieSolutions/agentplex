@@ -13,6 +13,7 @@ import type { ServerAbout } from './about/server-about.js';
 import type { MachineLoadReader } from './machine-load/machine-load.js';
 import type { WorkingTree } from './working-tree/working-tree.js';
 import type { TerminalManager } from './terminal/terminal-manager.js';
+import type { ProcessSignaller } from './sessions/process-signaller.js';
 import type { Clock, IdGenerator, Logger, Timers, TokenMinter } from '@agentplex/node-shared';
 import type { ProviderReadiness } from '@agentplex/protocol';
 
@@ -129,6 +130,8 @@ export interface RuntimeDependencies {
    * because its cap is configuration, and only `main` has read the config.
    */
   readonly terminals: TerminalManager;
+  /** The one way a retake ends a process this server did not start; `main` builds it. */
+  readonly signaller: ProcessSignaller;
   /**
    * The operation registry: every child that is not a pty.
    *
@@ -224,6 +227,7 @@ export async function startRuntime(
     providers,
     preflight,
     terminals,
+    signaller,
     operations,
     workingTree,
     machineLoad,
@@ -268,6 +272,7 @@ export async function startRuntime(
     providers,
     preflight,
     terminals,
+    signaller,
     drainMs: config.drainMs,
     operations,
     workingTree,

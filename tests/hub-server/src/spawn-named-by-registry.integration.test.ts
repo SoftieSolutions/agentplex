@@ -75,6 +75,7 @@ import {
 } from '../../../apps/hub/src/fleet-state/fleet-state.js';
 import { createProjects } from '../../../apps/hub/src/projects/projects.js';
 import { createSessions } from '../../../apps/hub/src/sessions/sessions.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * A claude a client started with no prompt, named by its session registry
@@ -184,6 +185,8 @@ async function start(): Promise<Harness> {
     timers: createFakeTimers(),
   });
   const sessions = createSessionController({
+    signaller: createFakeProcessSignaller(),
+    timers: createFakeTimers(),
     stores: [STORE],
     providers: createProviderRegistry([adapter]),
     terminals,

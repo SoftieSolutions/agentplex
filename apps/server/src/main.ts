@@ -7,6 +7,7 @@ import {
   childEnvironment,
   childSearchPath,
   createLogger,
+  errnoCode,
   jsonLineSink,
   randomIdGenerator,
   randomTokenMinter,
@@ -41,6 +42,7 @@ import { readServerAbout } from './about/server-about.js';
 import { createGitWorkingTree } from './working-tree/working-tree.js';
 import { refuseWithoutTerminals } from './terminal/terminal-support.js';
 import { createTerminalManager } from './terminal/terminal-manager.js';
+import { SIGNAL_REFUSALS } from './sessions/process-signaller.js';
 
 /**
  * The server's entrypoint: wiring and process concerns only. argv, env,
@@ -283,6 +285,24 @@ async function main(): Promise<void> {
       // The only place a real pty is opened. It is handed the same composed
       // environment as the one-shot runner, so a provider binary resolves the
       // same way whether it is being probed or driven.
+      // The only signalling `process.kill` in this server (the process probe's
+      // `kill(pid, 0)` asks whether a pid exists and delivers nothing). A
+      // retake reaches it with a pid the provider's adapter verified a moment
+      // before, and only ever SIGHUP or SIGKILL; what the kernel says back is
+      // turned into words here, where the errno is still in hand.
+      signaller: {
+        signal(pid, signal) {
+          try {
+            process.kill(pid, signal);
+            return { ok: true };
+          } catch (error) {
+            const code = errnoCode(error);
+            if (code === 'ESRCH') return { ok: false, problem: SIGNAL_REFUSALS.ESRCH };
+            if (code === 'EPERM') return { ok: false, problem: SIGNAL_REFUSALS.EPERM };
+            return { ok: false, problem: String(error) };
+          }
+        },
+      },
       terminals: createTerminalManager({
         supervisor: createPtySupervisor({
           pty: nodePtyFactory,

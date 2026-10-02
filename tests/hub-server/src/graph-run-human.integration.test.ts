@@ -74,6 +74,7 @@ import { createGraphs } from '../../../apps/hub/src/graphs/graphs.js';
 import { createAgentExecutor } from '../../../apps/hub/src/graph-runs/agent-executor.js';
 import { createHumanExecutor } from '../../../apps/hub/src/graph-runs/human-executor.js';
 import { createGraphRuns } from '../../../apps/hub/src/graph-runs/graph-runs.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * A run that reaches a HUMAN node, over the whole path: the hub's own
@@ -176,6 +177,8 @@ function serveMachine(machine: Machine): DialResult {
     terminals: machine.terminals,
     machineLoad: createFakeMachineLoadReader(),
     sessions: createSessionController({
+      signaller: createFakeProcessSignaller(),
+      timers: createFakeTimers(),
       stores,
       providers: createProviderRegistry([adapter]),
       terminals: machine.terminals,

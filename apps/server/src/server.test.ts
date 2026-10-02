@@ -29,6 +29,7 @@ import { createFakeDataRoot } from './data-root/fake-data-root.js';
 import { createFakeDirectoryReader } from './directories/fake-directory-reader.js';
 import { createFakeWorkingTree } from './working-tree/fake-working-tree.js';
 import { createFakeTerminals, type FakeTerminals } from './terminal/fake-terminals.js';
+import { createFakeProcessSignaller } from './sessions/fake-process-signaller.js';
 import { createFakeMachineLoadReader } from './machine-load/fake-machine-probe.js';
 import { createFakeProjectFiles, type FakeProjectFiles } from './projects/fake-project-files.js';
 import { createFakeStoreWatcher, type FakeStoreWatcher } from './store-watch/fake-store-watcher.js';
@@ -204,6 +205,7 @@ async function start(
     providers: createProviderRegistry([]),
     preflight,
     terminals: terminals.terminals,
+    signaller: createFakeProcessSignaller(),
     machineLoad: createFakeMachineLoadReader(),
     about: ABOUT,
     operations: createOperationRegistry(runner),

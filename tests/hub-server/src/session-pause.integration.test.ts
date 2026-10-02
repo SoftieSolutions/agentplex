@@ -76,6 +76,7 @@ import {
 } from '../../../apps/hub/src/fleet-state/fleet-state.js';
 import { createProjects } from '../../../apps/hub/src/projects/projects.js';
 import { createSessions } from '../../../apps/hub/src/sessions/sessions.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * Pausing a session, from a client's frame to the terminal on another machine
@@ -191,6 +192,8 @@ async function start(): Promise<Harness> {
         terminals,
         machineLoad: createFakeMachineLoadReader(),
         sessions: createSessionController({
+          signaller: createFakeProcessSignaller(),
+          timers: createFakeTimers(),
           stores: [STORE],
           providers: createProviderRegistry([
             createFakeProviderAdapter({ provider: 'claude', files }),

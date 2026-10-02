@@ -1513,3 +1513,81 @@ describe('a hub reading one session’s transcript', () => {
     expect(sessions.transcripts).toEqual([]);
   });
 });
+
+describe('a hub retaking a session somebody else’s terminal is running', () => {
+  const SESSION_A = { storeId: 'store-a', sessionId: 'session-a' };
+  const A_RETAKE = { type: 'session-retake', id: 9, ...SESSION_A, provider: 'claude' };
+
+  function since(socket: { readonly sent: readonly string[] }, mark: number): ServerToHubFrame[] {
+    return replies(socket.sent.slice(mark));
+  }
+
+  async function established() {
+    const sessions = createFakeSessionController();
+    const { socket, connection } = connect({ sessions });
+    socket.receive(handshake());
+    await settle();
+    sessions.setReport({ storeId: 'store-a' as StoreId, sessions: [], holding: [] });
+    return { socket, sessions, connection, mark: socket.sent.length };
+  }
+
+  it('answers session-started under the same id, after the store report', async () => {
+    // The report first, as a start's is: the hub that reads the answer has
+    // already read the session held here, so the client never sees it started
+    // and unheld.
+    const { socket, sessions, mark } = await established();
+    sessions.answerWith({
+      ok: true,
+      storeId: 'store-a' as StoreId,
+      sessionId: 'session-a' as never,
+      terminalId: 'terminal-1',
+    });
+
+    socket.receive(JSON.stringify(A_RETAKE));
+    await settle();
+
+    expect(sessions.retakes).toEqual([{ ...SESSION_A, provider: 'claude' }]);
+    expect(since(socket, mark)).toEqual([
+      { type: 'store-report', storeId: 'store-a', sessions: [], holding: [], starts: [] },
+      { type: 'session-started', replyTo: 9, ...SESSION_A },
+    ]);
+  });
+
+  it('refuses in the controller’s words, and stays connected', async () => {
+    const { socket, sessions, connection, mark } = await established();
+    sessions.answerWith({
+      ok: false,
+      code: 'refused',
+      problem:
+        'that session is working elsewhere; it can be retaken only while it is idle or waiting',
+      hold: null,
+    });
+
+    socket.receive(JSON.stringify(A_RETAKE));
+    await settle();
+
+    expect(since(socket, mark)).toEqual([
+      { type: 'store-report', storeId: 'store-a', sessions: [], holding: [], starts: [] },
+      {
+        type: 'session-refused',
+        replyTo: 9,
+        code: 'refused',
+        message:
+          'that session is working elsewhere; it can be retaken only while it is idle or waiting',
+        hold: null,
+      },
+    ]);
+    expect(connection.state).toBe('established');
+  });
+
+  it('retakes nothing for a peer that has not handshaken', async () => {
+    const socket = createFakeMessageSocket();
+    const sessions = createFakeSessionController();
+    serveHubConnection(socket, deps({ sessions }));
+
+    socket.receive(JSON.stringify(A_RETAKE));
+    await settle();
+
+    expect(sessions.retakes).toEqual([]);
+  });
+});

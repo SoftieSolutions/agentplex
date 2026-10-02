@@ -12,6 +12,7 @@ import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { SERVER_PROTOCOL_VERSION } from '@agentplex/protocol';
 import { createTerminalManager } from './terminal/terminal-manager.js';
+import { createFakeProcessSignaller } from './sessions/fake-process-signaller.js';
 import { createFakeDataRoot, type FakeDataRoot } from './data-root/fake-data-root.js';
 import { createFakeStoreWatcher } from './store-watch/fake-store-watcher.js';
 import { createFakeProjectFiles } from './projects/fake-project-files.js';
@@ -71,6 +72,9 @@ function dependencies(
       // this file counts.
       timers: createFakeTimers(),
     }),
+    // Signals nothing: no retake is asked for in a file about which halves
+    // start and stop.
+    signaller: createFakeProcessSignaller(),
     // The real registry over a runner that starts nothing: this file is about
     // which halves come up and go down, and the operations are closed anyway —
     // there is no fake registry to build, only a fake machine for it to run on.
