@@ -7,7 +7,9 @@ import {
   GRAPH_RETRY_BACKOFF_MAX_SECONDS,
   emptyGraphDocument,
   graphDocumentSchema,
+  graphIncoming,
   graphNameSchema,
+  graphNodeIdSchema,
   graphNodeKindSchema,
   type GraphNodeKind,
 } from './graph.js';
@@ -77,20 +79,37 @@ const NODES = {
     retry: { max: 0, backoff: 1 },
     name: 'merge-and-tag',
   },
+  join: {
+    id: 'both',
+    kind: 'join',
+    label: 'Both reviews',
+    position: { x: 700, y: 156 },
+    placement: { kind: 'cheapest' },
+    retry: { max: 0, backoff: 1 },
+  },
 } as const;
 
 const DOCUMENT = {
-  nodes: [NODES.trigger, NODES.router, NODES.agent, NODES.subgraph, NODES.human, NODES.action],
+  nodes: [
+    NODES.trigger,
+    NODES.router,
+    NODES.agent,
+    NODES.subgraph,
+    NODES.human,
+    NODES.action,
+    NODES.join,
+  ],
   edges: [
     { from: 'start', to: 'classify' },
-    { from: 'rust', to: 'approve' },
-    { from: 'docs', to: 'approve' },
+    { from: 'rust', to: 'both' },
+    { from: 'docs', to: 'both' },
+    { from: 'both', to: 'approve' },
     { from: 'approve', to: 'merge' },
   ],
 };
 
 describe('graphNodeKindSchema', () => {
-  it('names the six kinds as a closed enum, so a table keyed on it is exhaustive', () => {
+  it('names the seven kinds as a closed enum, so a table keyed on it is exhaustive', () => {
     expect(graphNodeKindSchema.options).toEqual([
       'trigger',
       'router',
@@ -98,6 +117,7 @@ describe('graphNodeKindSchema', () => {
       'subgraph',
       'human',
       'action',
+      'join',
     ]);
     // The type is what a later `Record<GraphNodeKind, ...>` leans on: a kind
     // added to the enum with no entry in such a table fails to typecheck.
@@ -108,6 +128,7 @@ describe('graphNodeKindSchema', () => {
       subgraph: 3,
       human: 4,
       action: 5,
+      join: 6,
     };
     expect(Object.keys(table)).toHaveLength(graphNodeKindSchema.options.length);
   });
@@ -119,7 +140,7 @@ describe('graphDocumentSchema', () => {
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
     expect(parsed.data.nodes.map((node) => node.kind)).toEqual(graphNodeKindSchema.options);
-    expect(parsed.data.edges).toHaveLength(4);
+    expect(parsed.data.edges).toHaveLength(5);
   });
 
   it('parses the empty document a fresh draft starts as', () => {
@@ -301,6 +322,77 @@ describe('graphDocumentSchema', () => {
     expect(graphDocumentSchema.safeParse(patient).success).toBe(true);
     const nobody = { nodes: [{ ...NODES.human, approvers: [] }], edges: [] };
     expect(graphDocumentSchema.safeParse(nobody).success).toBe(false);
+  });
+});
+
+describe('a JOIN node', () => {
+  it('carries nothing beyond what every node carries, and drops a field it has no use for', () => {
+    const parsed = graphDocumentSchema.safeParse({
+      nodes: [{ ...NODES.join, prompt: 'wait for them' }],
+      edges: [],
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.nodes[0]).toEqual(NODES.join);
+  });
+
+  it('parses in a draft with fewer than two incoming branches, since publish is where arity is ruled', () => {
+    // A person adds the join and then draws the edges into it; a draft
+    // refused in between would be a canvas that cannot save its own steps.
+    const lone = {
+      nodes: [NODES.trigger, NODES.join],
+      edges: [{ from: 'start', to: 'both' }],
+    };
+    expect(graphDocumentSchema.safeParse(lone).success).toBe(true);
+  });
+
+  it('takes a node other than a ROUTER with several outgoing edges: that is a fan-out', () => {
+    const fanned = {
+      nodes: [NODES.trigger, NODES.agent, { ...NODES.agent, id: 'ts' }, NODES.join],
+      edges: [
+        { from: 'start', to: 'rust' },
+        { from: 'start', to: 'ts' },
+        { from: 'rust', to: 'both' },
+        { from: 'ts', to: 'both' },
+      ],
+    };
+    expect(graphDocumentSchema.safeParse(fanned).success).toBe(true);
+  });
+});
+
+describe('graphIncoming', () => {
+  it('names every node that hands a run on to this one, edges first, each once', () => {
+    const document = graphDocumentSchema.parse({
+      nodes: [
+        NODES.trigger,
+        {
+          ...NODES.router,
+          routes: [
+            { condition: 'language == rust', to: 'both' },
+            { condition: 'only docs/**', to: 'both' },
+          ],
+          otherwise: 'both',
+        },
+        NODES.agent,
+        NODES.join,
+      ],
+      edges: [
+        { from: 'rust', to: 'both' },
+        { from: 'start', to: 'both' },
+        { from: 'rust', to: 'both' },
+        { from: 'start', to: 'rust' },
+      ],
+    });
+
+    // The router is one source however many of its routes name the join:
+    // a run leaves a router by one route, so it arrives once.
+    expect(graphIncoming(document, graphNodeIdSchema.parse('both'))).toEqual([
+      'rust',
+      'start',
+      'classify',
+    ]);
+    expect(graphIncoming(document, graphNodeIdSchema.parse('rust'))).toEqual(['start']);
+    expect(graphIncoming(document, graphNodeIdSchema.parse('classify'))).toEqual([]);
   });
 });
 

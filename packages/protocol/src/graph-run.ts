@@ -59,7 +59,9 @@ export type GraphRunId = z.infer<typeof graphRunIdSchema>;
  * Where a run is. `running` and `waiting` are the two open states; the other
  * three are final, and a run in one of them never moves again.
  *
- * `waiting` is a run parked at a HUMAN node until a person answers. Its own
+ * `waiting` is a run parked at a HUMAN node until a person answers, with no
+ * other branch of it still running: a run with one branch waiting on a
+ * person and another working is `running`, because something is. Its own
  * word rather than a `running` the strip reads as `live`, because nothing is
  * running: no session is working, no machine is busy, and a person looking at
  * `live` would wait for something that is waiting for them.
@@ -69,7 +71,10 @@ export type RunStatus = z.infer<typeof runStatusSchema>;
 
 /**
  * What one attempt at one node became. `running` and `waiting` are the
- * attempt in flight, and there is at most one of those in a run at a time.
+ * attempt in flight. A run that has fanned out has one in flight per branch,
+ * so there may be several at once, and every one of them is open on the
+ * canvas: nothing on the state names "the" running node, because since the
+ * JOIN there is no such thing.
  */
 export const stepOutcomeSchema = z.enum(['running', 'waiting', 'succeeded', 'failed', 'cancelled']);
 export type StepOutcome = z.infer<typeof stepOutcomeSchema>;
@@ -156,7 +161,8 @@ export type GraphRunStep = z.infer<typeof graphRunStepSchema>;
  * `step` counts the nodes the run has reached and `of` is how many nodes the
  * document has, which is what the strip's `step 3/9` reads. `of` is a bound
  * and not a prophecy -- a ROUTER skips whole branches -- so the strip says
- * where a run is in the graph rather than how long it has left.
+ * where a run is in the graph rather than how long it has left. Branches
+ * running at once each count the nodes they reach, and a JOIN counts once.
  *
  * `reason` is the sentence a run ended with, and it is `null` for a run that
  * is still going or that succeeded. A failed run always has one, and it names

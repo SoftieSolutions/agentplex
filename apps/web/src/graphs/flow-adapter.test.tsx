@@ -41,6 +41,22 @@ function fixtureDocument(): GraphDocument {
   return parsed.value.document;
 }
 
+/** The document a real hub answered the open of a graph that fans out and joins with. */
+function branchesDocument(): GraphDocument {
+  const parsed = parseTextFrame(parseHubFrame, hubFrames.graphDocumentBranches);
+  if (!parsed.ok || parsed.value.type !== 'graph-document') {
+    throw new Error('the captured frame is not a graph document');
+  }
+  return parsed.value.document;
+}
+
+/** A colour as the browser serialises it, so a hex from the tokens compares with a style read back. */
+function serialised(color: string): string {
+  const probe = document.createElement('div');
+  probe.style.color = color;
+  return probe.style.color;
+}
+
 const id = (text: string) => graphNodeIdSchema.parse(text);
 const LABELS = new Map([
   [serverRegistrationIdSchema.parse('registration-mbp-robert'), 'mbp-robert'],
@@ -76,12 +92,40 @@ describe('toFlow', () => {
     expect(nodes.map((node) => node.selected)).toEqual([false, true, false]);
   });
 
-  it('marks the node whose run step is in flight, and none when no step is', () => {
-    const { nodes } = toFlow(fixtureDocument(), null, LABELS, 'dark', id('review'));
+  it('marks every node whose run step is in flight, and none when no step is', () => {
+    const { nodes } = toFlow(fixtureDocument(), null, LABELS, 'dark', new Set([id('review')]));
     expect(nodes.map((node) => node.data.running)).toEqual([false, false, true]);
 
-    const idle = toFlow(fixtureDocument(), null, LABELS, 'dark', null);
+    const idle = toFlow(fixtureDocument(), null, LABELS, 'dark', new Set());
     expect(idle.nodes.map((node) => node.data.running)).toEqual([false, false, false]);
+  });
+
+  it('marks two cards running at once when a run has fanned out', () => {
+    const { nodes } = toFlow(
+      branchesDocument(),
+      null,
+      LABELS,
+      'dark',
+      new Set([id('rust'), id('ts')]),
+    );
+    expect(nodes.filter((node) => node.data.running).map((node) => node.id)).toEqual([
+      'rust',
+      'ts',
+    ]);
+  });
+
+  it('carries a JOIN as a card of its kind, with an edge in from each branch', () => {
+    const { nodes, edges } = toFlow(branchesDocument(), null, LABELS);
+    expect(nodes.map((node) => [node.id, node.data.kind])).toEqual([
+      ['start', 'trigger'],
+      ['rust', 'agent'],
+      ['ts', 'agent'],
+      ['both', 'join'],
+    ]);
+    expect(edges.filter((edge) => edge.target === 'both').map((edge) => edge.source)).toEqual([
+      'rust',
+      'ts',
+    ]);
   });
 
   it('yields one edge per document edge plus one per router route, labelled by its condition', () => {
@@ -167,7 +211,7 @@ describe('deriveNodes', () => {
       node.id === 'start' ? { ...node, measured: { width: 170, height: 64 } } : node,
     );
 
-    const nodes = deriveNodes(document, id('start'), LABELS, 'dark', null, previous);
+    const nodes = deriveNodes(document, id('start'), LABELS, 'dark', new Set(), previous);
 
     expect(nodes[0]?.measured).toEqual({ width: 170, height: 64 });
     expect(nodes[0]?.selected).toBe(true);
@@ -180,7 +224,7 @@ describe('deriveNodes', () => {
       node.id === 'classify' ? { ...node, dragging: true, position: { x: 999, y: 333 } } : node,
     );
 
-    const nodes = deriveNodes(document, null, LABELS, 'dark', null, previous);
+    const nodes = deriveNodes(document, null, LABELS, 'dark', new Set(), previous);
 
     // The document says 250, 84; the drop is what will tell it otherwise, and
     // until then a frame from the hub must not snap the card back.
@@ -219,16 +263,19 @@ describe('GraphCanvas', () => {
       onConnect: (from: unknown, to: unknown) => void;
     }> = {},
     selection: ReturnType<typeof id> | null = null,
+    drawn: GraphDocument = fixtureDocument(),
+    running: ReadonlySet<ReturnType<typeof id>> = new Set(),
   ): Promise<void> {
     await act(async () => {
       root = createRoot(container);
       root.render(
         <GraphCanvas
-          document={fixtureDocument()}
+          document={drawn}
           selection={selection}
           labels={LABELS}
           scheme="dark"
           interactive={false}
+          running={running}
           onSelect={handlers.onSelect ?? (() => {})}
           onEdit={handlers.onEdit ?? (() => {})}
           onConnect={handlers.onConnect ?? (() => {})}
@@ -268,6 +315,39 @@ describe('GraphCanvas', () => {
     expect(cards.map((card) => card.dataset['kind'])).toEqual(['trigger', 'router', 'agent']);
     expect(container.textContent).toContain('ROUTER');
     expect(container.textContent).toContain('Classify diff');
+  });
+
+  it('draws a JOIN as the mock’s 44px circle with the join glyph, a handle each side', async () => {
+    await mount({}, null, branchesDocument());
+
+    const join = container.querySelector<HTMLElement>('[data-node-card="both"]');
+    if (join === null) throw new Error('no join card was drawn');
+    expect(join.dataset['kind']).toBe('join');
+    expect(join.style.width).toBe('44px');
+    expect(join.style.height).toBe('44px');
+    expect(join.style.borderRadius).toBe('50%');
+    expect(join.style.background).toBe(serialised(colorForRole('surface', 'dark')));
+    expect(join.style.border).toBe(`1px solid ${serialised(colorForRole('borderStrong', 'dark'))}`);
+    const glyph = join.querySelector<HTMLElement>('[data-join-glyph]');
+    expect(glyph?.textContent).toBe('⋈');
+    expect(glyph?.style.fontSize).toBe('15px');
+    expect(glyph?.style.color).toBe(serialised(colorForRole('textSecondary', 'dark')));
+    // Nothing of the rectangular card: no kind line, no label, no third line.
+    expect(join.textContent).toBe('⋈');
+    expect(join.getAttribute('aria-label')).toBe('JOIN Both reviews');
+    expect(join.querySelector('.react-flow__handle-left')).not.toBeNull();
+    expect(join.querySelector('.react-flow__handle-right')).not.toBeNull();
+  });
+
+  it('draws both branch cards running at once, and the join at rest until it is reached', async () => {
+    await mount({}, null, branchesDocument(), new Set([id('rust'), id('ts')]));
+
+    const running = [...container.querySelectorAll<HTMLElement>('[data-running="true"]')];
+    expect(running.map((card) => card.dataset['nodeCard'])).toEqual(['rust', 'ts']);
+    for (const card of running) expect(card.textContent).toContain('running');
+    expect(
+      container.querySelector<HTMLElement>('[data-node-card="both"]')?.dataset['running'],
+    ).toBeUndefined();
   });
 
   it('draws the zoom controls: out, the percentage, in, and fit', async () => {

@@ -44,7 +44,10 @@ import { nameOf, type Executor, type StepResult } from './walker.js';
  *
  * A node with `timeoutMinutes` waits that long through injected timers and
  * then takes its request back and fails with a sentence naming the node and
- * the minutes -- reported like a denial, which is the decision. Both are
+ * the minutes -- reported like a denial, which is the decision. Its own
+ * request and no other: two HUMAN nodes on parallel branches wait at once,
+ * and one node's timeout taking back the other's request would end that
+ * branch "withdrawn" first and fail the run naming the wrong node. Both are
  * `retryable: false`: a Deny is an answer, and a timeout is the node's own
  * word on how long an answer may take, so asking again would overrule either.
  * Publish refuses a HUMAN node with retries for the same reason. A run that
@@ -52,13 +55,17 @@ import { nameOf, type Executor, type StepResult } from './walker.js';
  * tell apart from one still worth waiting on. `null` waits as long as it
  * takes.
  *
- * A cancel takes the request back the same way and fails the step with the
- * cancel in the sentence; the walk reads its own cancellation flag and ends
- * the run `cancelled` rather than `failed`.
+ * A cancel takes back every request the run holds, not only this step's,
+ * and fails the step with the cancel in the sentence. The walk fires it on
+ * the run's own cancel and on a sibling branch failing, and either way the
+ * run is ending: nothing of it is left worth asking a person, so the whole
+ * run is withdrawn rather than trusting each waiting step to take back its
+ * own. The walk reads its own cancellation flag and ends the run `cancelled`
+ * or `failed` with the sibling's sentence, never this one.
  */
 
 export interface HumanExecutorDependencies {
-  readonly approvals: Pick<Approvals, 'requestedByHub' | 'withdrawnByHub'>;
+  readonly approvals: Pick<Approvals, 'requestedByHub' | 'withdrawnByHub' | 'withdrawnOneByHub'>;
   readonly ids: IdGenerator;
   readonly timers: Timers;
   readonly logger: Logger;
@@ -131,7 +138,7 @@ export function createHumanExecutor(dependencies: HumanExecutorDependencies): Hu
             ? () => {}
             : timers.schedule(node.timeoutMinutes * 60_000, () => {
                 endedBy = 'timeout';
-                approvals.withdrawnByHub(run.runId);
+                approvals.withdrawnOneByHub(subject, approvalId);
               });
         const detach = context.cancellation.onCancel(() => {
           endedBy = 'cancel';

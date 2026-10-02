@@ -35,7 +35,7 @@ import {
   type LineageEntry,
 } from './subgraph-executor.js';
 import { simulate } from './simulate.js';
-import { routerExecutor, triggerExecutor, walk, type Walk } from './walker.js';
+import { joinExecutor, routerExecutor, triggerExecutor, walk, type Walk } from './walker.js';
 
 /**
  * Runs, from the hub's side: start one, cancel one, say where each one is,
@@ -207,6 +207,10 @@ interface ActiveRun {
   readonly lineage: readonly LineageEntry[];
   step: number;
   steps: GraphRunStep[];
+  /** Where each open record sits in `steps`, by the record number the walk reports it under. */
+  readonly open: Map<number, number>;
+  /** Branches waiting out a retry's backoff, as the walk last reported: running, with no open record. */
+  retrying: number;
   walk: Walk | null;
   /** The state the queued flush will publish, or `null` when none is queued. */
   pending: GraphRunState | null;
@@ -296,13 +300,24 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
   };
 
   /**
-   * The open state a run is in, read off its own steps: `waiting` while the
-   * one attempt in flight is waiting on a person, else `running`. Off the
-   * list rather than a flag beside it, so the status and the strip's step
-   * records can never say two things.
+   * The open state a run is in, read off its own steps: `running` while any
+   * attempt in flight is running -- a branch working is a run working, even
+   * with another branch parked at a person -- `waiting` when every attempt
+   * in flight is waiting on one. Off the list rather than a flag beside it,
+   * so the status and the strip's step records can never say two things.
+   *
+   * The one branch the list cannot show is one between two attempts: its
+   * last is recorded `failed`, and it will try again when its backoff ends
+   * whether or not anybody answers anything. The walk counts those, and a
+   * run with one is `running` -- not parked on a person, which is what
+   * `waiting` tells whoever reads it.
    */
   const openStatus = (run: ActiveRun): GraphRunState['status'] =>
-    run.steps.some((step) => step.outcome === 'waiting') ? 'waiting' : 'running';
+    run.retrying > 0 ||
+    run.steps.some((step) => step.outcome === 'running') ||
+    !run.steps.some((step) => step.outcome === 'waiting')
+      ? 'running'
+      : 'waiting';
 
   const stateOf = (
     run: ActiveRun,
@@ -320,24 +335,25 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
   });
 
   /**
-   * Replaces the open record this outcome is of, or appends. The walker
-   * reports an attempt's outcome directly after its running record -- or its
-   * waiting one, when the attempt stopped to ask a person -- so the record to
-   * replace is always the last one, and a node a cycle reaches again gets a
-   * new record rather than overwriting its earlier visit.
+   * Replaces the open record this report is of, or appends a new one. Found
+   * by the record number the walk gives every report of one attempt, not by
+   * node and attempt: branches interleave their records, so the one to
+   * replace is not always the last, and two branches reaching one node that
+   * is no JOIN run it twice with the same node and attempt -- perhaps at once,
+   * when keying on those would let the second visit's record replace the
+   * first's and leave one of them in flight with no record at all. A record
+   * is forgotten once it ends, and a node a cycle reaches again is a new
+   * attempt and so a new record.
    */
-  const record = (run: ActiveRun, step: GraphRunStep): void => {
-    const last = run.steps.at(-1);
-    if (
-      last !== undefined &&
-      (last.outcome === 'running' || last.outcome === 'waiting') &&
-      last.nodeId === step.nodeId &&
-      last.attempt === step.attempt
-    ) {
-      run.steps[run.steps.length - 1] = step;
+  const record = (run: ActiveRun, step: GraphRunStep, id: number): void => {
+    let index = run.open.get(id);
+    if (index === undefined) {
+      index = run.steps.push(step) - 1;
     } else {
-      run.steps.push(step);
+      run.steps[index] = step;
     }
+    if (step.outcome === 'running' || step.outcome === 'waiting') run.open.set(id, index);
+    else run.open.delete(id);
   };
 
   /**
@@ -416,6 +432,8 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
         lineage: [...what.above, { graph: nodeId, name: what.graphName }],
         step: 0,
         steps: [],
+        open: new Map(),
+        retrying: 0,
         walk: null,
         pending: null,
         writes: Promise.resolve(),
@@ -447,11 +465,13 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
           graphName: what.graphName,
         }),
         subgraph: subgraph.forRun({ runId: run.runId, lineage: run.lineage }),
+        join: joinExecutor,
       },
       timers,
-      onStep: (step, reached) => {
-        record(run, step);
+      onStep: (step, reached, id, retrying) => {
+        record(run, step, id);
         run.step = reached;
+        run.retrying = retrying;
         const steps = [...run.steps];
         write(run, 'steps', () => replaceSteps(database, run.runId, steps));
         publish(run, stateOf(run, openStatus(run), null));

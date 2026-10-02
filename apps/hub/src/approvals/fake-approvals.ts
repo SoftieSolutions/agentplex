@@ -1,5 +1,6 @@
 import {
   sessionRefKey,
+  type ApprovalId,
   type ApprovalOutcome,
   type ApprovalRequest,
   type ApprovalSubject,
@@ -163,6 +164,15 @@ export function createFakeApprovals(options: FakeApprovalsOptions = {}): FakeApp
         runs.delete(key);
         held.resolve('withdrawn');
       }
+      announceRuns();
+    },
+
+    withdrawnOneByHub(subject: GraphRunSubject, approvalId: ApprovalId): void {
+      const key = runKey(subject, approvalId);
+      const held = runs.get(key);
+      if (held === undefined) return;
+      runs.delete(key);
+      held.resolve('withdrawn');
       announceRuns();
     },
 

@@ -609,9 +609,10 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
    * `path` is the walk in order, a SUB-GRAPH's child steps directly after it
    * one depth down, bounded by `GRAPH_RUN_STEPS_MAX` as a run's steps are.
    * `reason` is the sentence the walk stopped on -- a run that would stop at a
-   * node, a node with two outgoing edges, a draft with no TRIGGER -- and
-   * `null` when it reached a node with nowhere to go, which is where a run
-   * would succeed. It names the graph so a screen files it by the graph.
+   * node, a JOIN one of whose branches would never arrive, a draft with no
+   * TRIGGER -- and `null` when every branch reached a node with nowhere to
+   * go, which is where a run would succeed. It names the graph so a screen
+   * files it by the graph.
    */
   z.object({
     type: z.literal('graph-simulated'),

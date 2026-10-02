@@ -7,11 +7,11 @@
  * and these exist to test that it can read what the hub actually sends.
  * Re-capture after any change to the hub-to-client frames.
  *
- * Captured at client protocol version 40.
+ * Captured at client protocol version 41.
  */
 export const hubFrames = {
   welcome:
-    '{"type":"welcome","replyTo":1,"protocolVersion":40,"hubId":"hub-1","pushPublicKey":null}',
+    '{"type":"welcome","replyTo":1,"protocolVersion":41,"hubId":"hub-1","pushPublicKey":null}',
   machineState:
     '{"type":"machine-state","state":{"version":0,"stores":[],"servers":[],"candidates":[],"graphRunApprovals":[]}}',
   pong: '{"type":"pong","replyTo":2}',
@@ -23,7 +23,7 @@ export const hubFrames = {
   protocolError:
     '{"type":"protocol-error","code":"bad-request","message":"frame is not valid JSON"}',
   refusalProtocolVersion:
-    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks client protocol 40, not 41","holder":null}',
+    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks client protocol 41, not 42","holder":null}',
   machineStateWithServer:
     '{"type":"machine-state","state":{"version":1,"stores":[],"servers":[{"registrationId":"pairing-1","label":"gpu-box-01","address":"wss://gpu-box-01.example:8443","serverId":null,"phase":"stale","stores":[],"providers":[],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":null,"staleReason":"unreachable","draining":null,"problem":"connection refused"}],"candidates":[],"graphRunApprovals":[]}}',
   paneLayout:
@@ -104,6 +104,10 @@ export const hubFrames = {
     '{"type":"graph-run-history","replyTo":42,"nodeId":"hub-14","runs":[{"runId":"hub-21","number":2,"status":"succeeded","startedAt":1756000000000,"endedAt":1756000000000,"reason":null},{"runId":"hub-15","number":1,"status":"succeeded","startedAt":1756000000000,"endedAt":1756000000000,"reason":null}]}',
   graphSimulated:
     '{"type":"graph-simulated","replyTo":43,"nodeId":"hub-10","path":[{"nodeId":"start","kind":"trigger","depth":0,"outcome":"would-run","why":"would start the run with {\\"language\\":\\"rust\\"}"},{"nodeId":"classify","kind":"router","depth":0,"outcome":"would-run","why":"route 1, language == rust, would send it to Rust reviewer: language is \\"rust\\""},{"nodeId":"review","kind":"agent","depth":0,"outcome":"would-run","why":"would run claude on mbp-robert; a failure would be tried again up to 2 more times, 30 s apart"}],"reason":null}',
+  graphDocumentBranches:
+    '{"type":"graph-document","replyTo":47,"nodeId":"hub-22","name":"dual-review","draftVersion":2,"document":{"nodes":[{"id":"start","label":"PR opened","position":{"x":0,"y":0},"placement":{"kind":"cheapest"},"retry":{"max":0,"backoff":1},"kind":"trigger","source":"manual"},{"id":"rust","label":"Rust reviewer","position":{"x":500,"y":62},"placement":{"kind":"pin","server":"registration-mbp-robert"},"retry":{"max":0,"backoff":1},"kind":"agent","prompt":"Review the Rust in this change.","provider":"claude","storeId":"store-agentplex"},{"id":"ts","label":"TS reviewer","position":{"x":500,"y":152},"placement":{"kind":"pin","server":"registration-mbp-robert"},"retry":{"max":0,"backoff":1},"kind":"agent","prompt":"Review the TypeScript in this change.","provider":"claude","storeId":"store-agentplex"},{"id":"both","label":"Both reviews","position":{"x":700,"y":156},"placement":{"kind":"cheapest"},"retry":{"max":0,"backoff":1},"kind":"join"}],"edges":[{"from":"start","to":"rust"},{"from":"start","to":"ts"},{"from":"rust","to":"both"},{"from":"ts","to":"both"}]},"published":[{"version":1,"publishedAt":1756000000000}]}',
+  graphRunStateBranches:
+    '{"type":"graph-run-state","nodeId":"hub-22","runId":"hub-23","number":1,"status":"running","reason":null,"step":3,"of":4,"steps":[{"nodeId":"start","attempt":0,"outcome":"succeeded","output":{"kind":"text","text":"{\\"language\\":\\"rust\\"}"},"child":null},{"nodeId":"rust","attempt":0,"outcome":"running","output":null,"child":null},{"nodeId":"ts","attempt":0,"outcome":"running","output":null,"child":null}]}',
   layoutWithProject:
     '{"type":"layout","replyTo":13,"nodes":[{"id":"hub-2","parentId":null,"kind":"session","position":0,"name":"fix-auth-refresh","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-fix-auth"}},{"id":"hub-3","parentId":null,"kind":"session","position":1,"name":"spike-wasm","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-spike-wasm"}},{"id":"hub-5","parentId":null,"kind":"project","position":2,"name":"agentplex (main checkout)","named":true,"anchor":null},{"id":"hub-6","parentId":"hub-5","kind":"doc","position":0,"name":"plan.md","named":true,"anchor":null}]}',
   nodeCreated: '{"type":"node-created","replyTo":8,"nodeId":"hub-7"}',
@@ -166,7 +170,7 @@ export const hubFrames = {
     '{"type":"machine-state","state":{"version":3,"stores":[{"storeId":"store-agentplex","servers":["registration-mbp-robert"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[{"descriptor":{"storeId":"store-agentplex","sessionId":"10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde","provider":"claude","status":"awaiting-permission","updatedAt":1755999820000,"cwd":"/Users/robert/code/agentplex","branch":null,"title":"migrate-db","uncommitted":null},"source":"registration-mbp-robert","reportedBy":["registration-mbp-robert"],"reportedAt":1756000000000,"reachable":true,"holder":{"server":"registration-mbp-robert","stoppable":true,"pause":"none"},"acknowledgedThrough":null,"mutedAt":null,"project":null,"approvals":[{"approvalId":"approval-1","tool":"Bash","proposal":"command: prisma migrate deploy --schema ./db\\ndescription: Apply pending Prisma migrations","truncated":false,"suggestions":[{"behavior":"allow","destination":"localSettings","rules":[{"tool":"Bash","content":"prisma migrate *"}]}],"subject":{"kind":"session","storeId":"store-agentplex","sessionId":"10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde"},"requestedAt":1756000000000,"answeredBy":null}],"task":null}]}],"servers":[{"registrationId":"registration-mbp-robert","label":"mbp-robert","address":"wss://mbp-robert.example:8443","serverId":"server-mbp","phase":"connected","stores":["store-agentplex"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null}],"candidates":[],"graphRunApprovals":[]}}',
   approvalDecided: '{"type":"approval-decided","replyTo":2,"outcome":"granted","answeredBy":null}',
   welcomeWithPush:
-    '{"type":"welcome","replyTo":1,"protocolVersion":40,"hubId":"hub-1","pushPublicKey":"BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM"}',
+    '{"type":"welcome","replyTo":1,"protocolVersion":41,"hubId":"hub-1","pushPublicKey":"BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM"}',
   pushSubscribed: '{"type":"push-subscribed","replyTo":2}',
   pushUnsubscribed: '{"type":"push-unsubscribed","replyTo":3}',
   refusalNoPush:

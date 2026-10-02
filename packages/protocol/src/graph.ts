@@ -18,16 +18,28 @@ import { routeConditionTextSchema } from './route-condition.js';
  * document whole, parses it on every read, and this file is the one place its
  * shape is stated.
  *
- * ## Six kinds, closed
+ * ## Seven kinds, closed
  *
  * `graphNodeKindSchema` is a `z.enum` and not an open string, which is the
  * opposite choice from the tree's `nodeKindSchema`, made for the opposite
  * reason. A tree kind is a row in a lookup table so that adding one costs an
  * INSERT; a graph node kind is a branch of the runtime, and a kind the walker
  * has no executor for is a run that cannot proceed. Closing the enum lets the
- * executor table be `Record<GraphNodeKind, Executor>`, so that adding a
- * seventh kind here without teaching the runtime about it is a type error
+ * executor table be `Record<GraphNodeKind, Executor>`, so that adding an
+ * eighth kind here without teaching the runtime about it is a type error
  * rather than a run that stops on a node nothing can execute.
+ *
+ * ## Branches and the JOIN
+ *
+ * A node that is not a ROUTER may have several outgoing edges, and a run
+ * then goes down every one of them at once: that is a fan-out, and it is the
+ * only way a run is in two places. A ROUTER still chooses one route, because
+ * choosing is what it is for. Branches meet again at a JOIN, which waits for
+ * every node that can hand a run to it (`graphIncoming`) and then goes on
+ * once, with what each branch made. A JOIN with fewer than two incoming
+ * branches is a draft somebody is still drawing, so the document takes it
+ * and publish refuses it: the arity is a rule of what can run, not of what
+ * can be saved.
  *
  * ## Draft and published
  *
@@ -46,6 +58,7 @@ export const graphNodeKindSchema = z.enum([
   'subgraph',
   'human',
   'action',
+  'join',
 ]);
 export type GraphNodeKind = z.infer<typeof graphNodeKindSchema>;
 
@@ -206,6 +219,12 @@ export const graphNodeSchema = z.discriminatedUnion('kind', [
   }),
   /** Names an action this build would perform. No build performs one yet, so publishing a graph with one is refused. */
   z.object({ ...baseNode, kind: z.literal('action'), name: z.string().min(1).max(64) }),
+  /**
+   * Waits for every incoming branch and goes on once, handing the next node
+   * `{ branches: { [fromNodeId]: output } }`. No field of its own: what it
+   * waits for is the edges into it, which the document already says.
+   */
+  z.object({ ...baseNode, kind: z.literal('join') }),
 ]);
 export type GraphNode = z.infer<typeof graphNodeSchema>;
 
@@ -251,6 +270,29 @@ export const graphDocumentSchema = z
     }
   });
 export type GraphDocument = z.infer<typeof graphDocumentSchema>;
+
+/**
+ * Every node that can hand a run on to this one, each once: the sources of
+ * the edges into it in the order the edges are listed, then each ROUTER with
+ * a route or an `otherwise` naming it. A router is one source however many of
+ * its routes lead here, because a run leaves a router by one route.
+ *
+ * What a JOIN waits for, and what publish counts when it refuses a JOIN with
+ * fewer than two: one reading of "incoming" for both, so a graph cannot
+ * publish with a join the walk would read differently.
+ */
+export function graphIncoming(document: GraphDocument, id: GraphNodeId): GraphNodeId[] {
+  const sources: GraphNodeId[] = [];
+  const add = (from: GraphNodeId): void => {
+    if (!sources.includes(from)) sources.push(from);
+  };
+  for (const edge of document.edges) if (edge.to === id) add(edge.from);
+  for (const node of document.nodes) {
+    if (node.kind !== 'router') continue;
+    if (node.routes.some((route) => route.to === id) || node.otherwise === id) add(node.id);
+  }
+  return sources;
+}
 
 /** What a fresh draft holds: nothing yet. */
 export function emptyGraphDocument(): GraphDocument {

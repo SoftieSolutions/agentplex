@@ -91,6 +91,8 @@ interface Raised {
 
 let raised: Raised[];
 let withdrawnRuns: GraphRunId[];
+/** Every single request taken back, as the subject and id it was named by. */
+let withdrawnOnes: { subject: GraphRunSubject; approvalId: string }[];
 let timers: FakeTimers;
 /** What the executor schedules on: the fake timers unless a test hands it the real ones. */
 let scheduleOn: Timers;
@@ -129,6 +131,16 @@ function executor(): HumanExecutor {
           held.resolve('withdrawn');
         }
       },
+      withdrawnOneByHub: (subject, approvalId) => {
+        withdrawnOnes.push({ subject, approvalId });
+        for (const held of raised) {
+          if (held.request.approvalId !== approvalId) continue;
+          if (held.subject.runId !== subject.runId || held.subject.nodeId !== subject.nodeId) {
+            continue;
+          }
+          held.resolve('withdrawn');
+        }
+      },
     },
     ids: { newId: () => `approval-${String((minted += 1))}` },
     timers: scheduleOn,
@@ -148,14 +160,10 @@ function context(): StepContext {
   };
 }
 
+const THE_RUN = { runId: RUN, number: 38, graph: RELEASE, graphName: 'release' };
+
 function step(id: string): Promise<StepResult> {
-  const execute = executor().forRun({
-    runId: RUN,
-    number: 38,
-    graph: RELEASE,
-    graphName: 'release',
-  });
-  return execute(humanNode(id), { language: 'rust' }, context());
+  return executor().forRun(THE_RUN)(humanNode(id), { language: 'rust' }, context());
 }
 
 async function settle(): Promise<void> {
@@ -170,6 +178,7 @@ describe('the HUMAN executor', () => {
   beforeEach(() => {
     raised = [];
     withdrawnRuns = [];
+    withdrawnOnes = [];
     timers = createFakeTimers();
     scheduleOn = timers;
     minted = 0;
@@ -237,14 +246,17 @@ describe('the HUMAN executor', () => {
     expect(timers.pending).toBe(0);
   });
 
-  it('schedules the timeout through the injected timers, and on expiry withdraws and fails naming the node and the minutes', async () => {
+  it('schedules the timeout through the injected timers, and on expiry withdraws its request and fails naming the node and the minutes', async () => {
     const result = step('timed');
     await settle();
     expect(timers.delays).toEqual([2 * 60_000]);
 
     timers.fireAll();
 
-    expect(withdrawnRuns).toEqual([RUN]);
+    expect(withdrawnOnes).toEqual([
+      { subject: { kind: 'graphRun', runId: RUN, nodeId: 'timed' }, approvalId: 'approval-1' },
+    ]);
+    expect(withdrawnRuns).toEqual([]);
     await expect(result).resolves.toEqual({
       ok: false,
       // The node has no label, so its id names it.
@@ -261,14 +273,41 @@ describe('the HUMAN executor', () => {
     scheduleOn = systemTimers;
     const result = step('longest');
     await vi.advanceTimersByTimeAsync(1);
-    expect(withdrawnRuns).toEqual([]);
+    expect(withdrawnOnes).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(GRAPH_HUMAN_TIMEOUT_MAX_MINUTES * 60_000 - 2);
-    expect(withdrawnRuns).toEqual([]);
+    expect(withdrawnOnes).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(withdrawnRuns).toEqual([RUN]);
+    expect(withdrawnOnes).toHaveLength(1);
     await expect(result).resolves.toMatchObject({ ok: false });
+  });
+
+  it('takes back only its own request on a timeout, leaving another node of the run asking', async () => {
+    // Two HUMAN nodes of one run on parallel branches, one with a timeout
+    // and one without: the timeout is an answer to its own node's question
+    // and nobody else's.
+    const execute = executor().forRun(THE_RUN);
+    const untimed = execute(humanNode('gate'), {}, context());
+    const timed = execute(humanNode('timed'), {}, context());
+    let untimedEnded = false;
+    void untimed.then(() => {
+      untimedEnded = true;
+    });
+    await settle();
+
+    timers.fireAll();
+
+    await expect(timed).resolves.toMatchObject({
+      ok: false,
+      problem: 'timed waited 2 minutes for a person and nobody answered',
+    });
+    await settle();
+    expect(untimedEnded).toBe(false);
+    expect(withdrawnRuns).toEqual([]);
+
+    raised[0]?.resolve('granted');
+    await expect(untimed).resolves.toMatchObject({ ok: true });
   });
 
   it('cancels the timeout when a person answers first', async () => {
@@ -279,6 +318,7 @@ describe('the HUMAN executor', () => {
 
     expect(timers.pending).toBe(0);
     expect(withdrawnRuns).toEqual([]);
+    expect(withdrawnOnes).toEqual([]);
   });
 
   it('takes the request back when the run is cancelled, and says so', async () => {

@@ -170,10 +170,10 @@ describe('GraphScreen', () => {
     );
   }
 
-  async function mount(): Promise<FakeSocket> {
+  async function mount(nodeId = GRAPH): Promise<FakeSocket> {
     await act(async () => {
       root = createRoot(container);
-      root.render(withProvider(<GraphScreen nodeId={GRAPH} store={store} />));
+      root.render(withProvider(<GraphScreen nodeId={nodeId} store={store} />));
     });
     await act(settle);
     const socket = sockets.sockets[0];
@@ -339,6 +339,30 @@ describe('GraphScreen', () => {
     );
     expect(card('review').dataset['running']).toBeUndefined();
     expect(button('Run').disabled).toBe(false);
+  });
+
+  it('draws two cards running at once when the run has fanned out, and the JOIN between them', async () => {
+    // The graph a real hub fanned out: two AGENT branches meeting at a JOIN,
+    // and its run parked with both sessions working.
+    const socket = await mount(nodeIdSchema.parse('hub-22'));
+    await act(() => {
+      socket.deliver(hubFrames.graphDocumentBranches);
+    });
+    await act(settle);
+    await act(() => {
+      socket.deliver(hubFrames.graphRunStateBranches);
+    });
+    await act(settle);
+
+    expect(container.querySelector('[data-run-strip]')?.textContent).toContain(
+      'run #1 · live · step 3/4',
+    );
+    expect(card('rust').dataset['running']).toBe('true');
+    expect(card('ts').dataset['running']).toBe('true');
+    expect(card('start').dataset['running']).toBeUndefined();
+    expect(card('both').dataset['kind']).toBe('join');
+    expect(card('both').dataset['running']).toBeUndefined();
+    expect(card('both').textContent).toBe('⋈');
   });
 
   it('lists the runs newest first, and a picked row puts that run on the strip and in LAST OUTPUT', async () => {

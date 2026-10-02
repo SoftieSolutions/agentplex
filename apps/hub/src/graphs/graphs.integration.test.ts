@@ -295,6 +295,55 @@ describe('the graphs feature over a real schema', () => {
       expect(opened.ok && opened.published).toEqual([]);
     });
 
+    it('refuses a JOIN with fewer than two incoming branches, and takes one with two', async () => {
+      const feature = graphs();
+      const made = await feature.create(PROJECT, 'release');
+      if (!made.ok) throw new Error('refused');
+      const reviewer = {
+        ...BASE,
+        id: 'review',
+        kind: 'agent',
+        label: 'Rust reviewer',
+        prompt: 'Review it.',
+        provider: 'claude',
+        storeId: 'store-work',
+      };
+      const join = { ...BASE, id: 'both', kind: 'join', label: 'Both reviews' };
+      await feature.save(
+        made.nodeId,
+        document({
+          nodes: [TRIGGER, reviewer, join],
+          edges: [
+            { from: 'start', to: 'review' },
+            { from: 'review', to: 'both' },
+          ],
+        }),
+      );
+
+      const refused = await feature.publish(made.nodeId);
+
+      expect(refused).toEqual({
+        ok: false,
+        code: 'refused',
+        problem:
+          'the JOIN node Both reviews has 1 incoming branch, and a join waits for two or more',
+      });
+
+      await feature.save(
+        made.nodeId,
+        document({
+          nodes: [TRIGGER, reviewer, { ...reviewer, id: 'docs', label: 'Docs reviewer' }, join],
+          edges: [
+            { from: 'start', to: 'review' },
+            { from: 'start', to: 'docs' },
+            { from: 'review', to: 'both' },
+            { from: 'docs', to: 'both' },
+          ],
+        }),
+      );
+      expect(await feature.publish(made.nodeId)).toEqual({ ok: true, version: 1 });
+    });
+
     it('checks the draft it freezes, not the one it read before another save landed', async () => {
       const feature = graphs();
       const made = await feature.create(PROJECT, 'release');

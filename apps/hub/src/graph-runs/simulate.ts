@@ -2,6 +2,7 @@ import {
   GRAPH_RUN_OUTPUT_MAX_CHARS,
   GRAPH_RUN_STEPS_MAX,
   assertNever,
+  graphIncoming,
   parseRouteCondition,
   evaluateRouteCondition,
   type GraphDocument,
@@ -32,8 +33,11 @@ import {
  * ## One traversal, a second table
  *
  * The walk is `walker.ts`'s, the same function a run goes through, so a
- * simulation follows edges, refuses a node with two, and stops a loop exactly
- * where a run would. What differs is the table: every node is answered by an
+ * simulation follows edges, waits at a JOIN, and stops a loop exactly where a
+ * run would. It takes a fan-out's branches in turn rather than at
+ * once, in the order they were reached, so the path it answers with reads the
+ * same every time and a SUB-GRAPH's child steps follow the step that reached
+ * them. What differs is the table: every node is answered by an
  * entry of `SIMULATED_STEPS`, which says what the node would do and does
  * none of it. A second traversal written for simulation would be a second
  * reading of the graph, free to disagree with the first about the one thing
@@ -42,7 +46,7 @@ import {
  * ## Every kind has an answer, by type
  *
  * `SimulatedTable` is keyed by every `GraphNodeKind`, ACTION and HUMAN
- * included, so a seventh kind added to the protocol is a type error here
+ * included, so an eighth kind added to the protocol is a type error here
  * rather than a simulation that falls back to executing it. The risk a
  * simulation carries is quietly doing something real, and the table is the
  * only place a node is answered: it is handed three reads -- where an AGENT
@@ -59,7 +63,9 @@ import {
  * no machine could take it. A HUMAN says how long it would wait and for
  * whom. A SUB-GRAPH names the graph and version it pins and walks that
  * published document one depth down, with the chain limits a run has. An
- * ACTION names itself and stops, since no build performs one.
+ * ACTION names itself and stops, since no build performs one. A JOIN is
+ * reached once every incoming branch has arrived, as in a run, and names the
+ * branches it waited for.
  *
  * Nothing an AGENT would produce can be known without running it, so every
  * step hands on the input it was given: a ROUTER after an AGENT reads the
@@ -90,7 +96,7 @@ export interface SimulationDependencies {
 
 /**
  * What a simulated node answers. `next` is the node the walk goes to, or
- * `null` to follow the one outgoing edge; only a ROUTER names one. A stop
+ * `null` to follow every outgoing edge; only a ROUTER names one. A stop
  * has no next: it is the last step at its depth.
  */
 export type SimulatedAnswer =
@@ -242,6 +248,14 @@ const action: SimulatedStep<'action'> = async (node) => ({
   why: `would perform ${node.name}, and no action of that name exists on this build`,
 });
 
+const join: SimulatedStep<'join'> = async (node, _input, { document }) => ({
+  outcome: 'would-run',
+  why: `would go on once every incoming branch has reached it: ${graphIncoming(document, node.id)
+    .map((id) => called(document, id))
+    .join(' and ')}`,
+  next: null,
+});
+
 /** The table every simulation answers with. */
 export const SIMULATED_STEPS: SimulatedTable = {
   trigger,
@@ -250,6 +264,7 @@ export const SIMULATED_STEPS: SimulatedTable = {
   subgraph,
   human,
   action,
+  join,
 };
 
 /**
@@ -337,11 +352,13 @@ export async function simulate(
       human: adapt(table.human),
       subgraph: adapt(table.subgraph),
       action: adapt(table.action),
+      join: adapt(table.join),
     };
 
     const outcome: WalkOutcome = await walk(doc, input, {
       executors,
       timers: NO_TIMERS,
+      branches: 'in-turn',
       onStep: () => {},
       onEnd: () => {},
     }).done;

@@ -143,9 +143,14 @@ export function NodeInspector({
           set={set}
           onEdit={onEdit}
         />
-        <PlacementFields node={node} machines={machines} set={set} />
+        {/* A JOIN runs nothing: there is no machine to place it on and no try to repeat. */}
+        {node.kind === 'join' ? null : (
+          <PlacementFields node={node} machines={machines} set={set} />
+        )}
         {/* A HUMAN node's answer is final: the runtime never retries it and publish refuses a policy that would. */}
-        {node.kind === 'human' ? null : <RetryFields node={node} set={set} />}
+        {node.kind === 'human' || node.kind === 'join' ? null : (
+          <RetryFields node={node} set={set} />
+        )}
         <Button
           variant="default"
           size="xs"
@@ -330,6 +335,13 @@ function KindFields({ node, document, stores, scheme, set, onEdit }: KindFieldsP
             onCommit={(name) => set('name', name)}
           />
         </Field>
+      );
+    case 'join':
+      // No field of its own: what it waits for is the edges drawn into it.
+      return (
+        <Text data-join-sentence fz={12}>
+          Waits for every incoming branch, then goes on once with what each made.
+        </Text>
       );
   }
 }

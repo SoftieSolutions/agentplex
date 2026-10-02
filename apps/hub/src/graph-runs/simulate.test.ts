@@ -416,21 +416,102 @@ describe('simulate', () => {
     });
   });
 
-  describe('the walk it reuses', () => {
-    it('stops on what the walk itself refuses, in the walk’s words', async () => {
-      const doc = document({
-        nodes: [TRIGGER, AGENT, DOCS],
+  describe('branches and a JOIN', () => {
+    const JOIN = { ...BASE, id: 'both', kind: 'join', label: 'Both checks' };
+    const CHILD = document({
+      nodes: [TRIGGER, { ...GATE, approvers: ['cy'] }],
+      edges: [{ from: 'start', to: 'gate' }],
+    });
+
+    it('walks each branch of a fan-out in turn, in edge order, and reports the JOIN once all have reached it', async () => {
+      const fanned = document({
+        nodes: [TRIGGER, AGENT, LINT_NODE, JOIN, GATE],
         edges: [
           { from: 'start', to: 'review' },
-          { from: 'start', to: 'docs' },
+          { from: 'start', to: 'lint' },
+          { from: 'review', to: 'both' },
+          { from: 'lint', to: 'both' },
+          { from: 'both', to: 'gate' },
         ],
       });
-      const simulated = await simulate(ROOT, doc, {}, dependencies());
-      expect(simulated.path.map((step) => step.nodeId)).toEqual(['start']);
-      expect(simulated.reason).toBe(
-        'the TRIGGER node PR opened has 2 outgoing edges, and only a ROUTER chooses between them',
-      );
+      const deps = dependencies({ published: new Map([[`${LINT}@3`, CHILD]]) });
 
+      const simulated = await simulate(ROOT, fanned, {}, deps);
+
+      // One branch after the other, so the path reads in order and the
+      // child's steps still follow the SUB-GRAPH step that reached them.
+      expect(simulated.path.map((step) => [step.nodeId, step.depth])).toEqual([
+        ['start', 0],
+        ['review', 0],
+        ['lint', 0],
+        ['start', 1],
+        ['gate', 1],
+        ['both', 0],
+        ['gate', 0],
+      ]);
+      expect(simulated.path[5]).toEqual({
+        nodeId: 'both',
+        kind: 'join',
+        depth: 0,
+        outcome: 'would-run',
+        why: 'would go on once every incoming branch has reached it: Rust reviewer and Lint suite',
+      });
+      expect(simulated.reason).toBeNull();
+    });
+
+    it('stops the walk where one branch would stop, and walks no branch after it', async () => {
+      const fanned = document({
+        nodes: [TRIGGER, SHIP, AGENT, JOIN],
+        edges: [
+          { from: 'start', to: 'ship' },
+          { from: 'start', to: 'review' },
+          { from: 'ship', to: 'both' },
+          { from: 'review', to: 'both' },
+        ],
+      });
+
+      const simulated = await simulate(ROOT, fanned, {}, dependencies());
+
+      expect(simulated.path.map((step) => [step.nodeId, step.outcome])).toEqual([
+        ['start', 'would-run'],
+        ['ship', 'would-stop'],
+      ]);
+      expect(simulated.reason).toBe(
+        'a run would stop at the ACTION node Ship it: would perform merge, and no action of that name exists on this build',
+      );
+    });
+
+    it('says a run would fail at a JOIN one of whose branches a ROUTER sends elsewhere', async () => {
+      const routed = document({
+        nodes: [
+          TRIGGER,
+          {
+            ...ROUTER,
+            routes: [{ condition: 'language == rust', to: 'review' }],
+            otherwise: 'docs',
+          },
+          AGENT,
+          DOCS,
+          JOIN,
+        ],
+        edges: [
+          { from: 'start', to: 'classify' },
+          { from: 'review', to: 'both' },
+          { from: 'docs', to: 'both' },
+        ],
+      });
+
+      const simulated = await simulate(ROOT, routed, { language: 'rust' }, dependencies());
+
+      expect(simulated.path.map((step) => step.nodeId)).toEqual(['start', 'classify', 'review']);
+      expect(simulated.reason).toBe(
+        'the JOIN node Both checks waits for every incoming branch, and Docs reviewer never reached it',
+      );
+    });
+  });
+
+  describe('the walk it reuses', () => {
+    it('stops on what the walk itself refuses, in the walk’s words', async () => {
       const empty = await simulate(ROOT, document({ nodes: [], edges: [] }), {}, dependencies());
       expect(empty).toEqual({
         path: [],
@@ -466,7 +547,7 @@ describe('simulate', () => {
 
   it('has an entry for every kind, so a kind added without one fails the typecheck', () => {
     expect(Object.keys(SIMULATED_STEPS).sort()).toEqual(
-      ['action', 'agent', 'human', 'router', 'subgraph', 'trigger'].sort(),
+      ['action', 'agent', 'human', 'join', 'router', 'subgraph', 'trigger'].sort(),
     );
     const { action: _action, ...withoutAction } = SIMULATED_STEPS;
     // @ts-expect-error -- a table missing ACTION is not a SimulatedTable.

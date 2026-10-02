@@ -8,7 +8,7 @@ import {
 import type { Tone } from '../ui/tokens.js';
 
 /**
- * What the screen reads off a run state: the strip's sentence, the node the
+ * What the screen reads off a run state: the strip's sentence, the nodes the
  * canvas marks, and what the inspector shows as LAST OUTPUT.
  *
  * Pure, and all of it derived from one `GraphRunState` on each call, because
@@ -71,13 +71,21 @@ export function runTone(status: RunStatus, stale = false): Tone {
   }
 }
 
-/** The node whose step is in flight or waiting, or `null` when no step is, or when the run is stale. */
-export function runningNode(run: GraphRunState | null, stale = false): GraphNodeId | null {
-  if (run === null || stale || !isRunOpen(run.status)) return null;
-  const inFlight = run.steps.find(
-    (step) => step.outcome === 'running' || step.outcome === 'waiting',
-  );
-  return inFlight?.nodeId ?? null;
+/** What a run with no step in flight answers: one set, so an idle canvas is not a new value every render. */
+const NONE: ReadonlySet<GraphNodeId> = new Set();
+
+/**
+ * Every node whose step is in flight or waiting, in the order the steps are
+ * listed; empty when no step is, or when the run is stale. A set and not one
+ * node, because a run that has fanned out has a step in flight per branch and
+ * the canvas marks each of them.
+ */
+export function runningNodes(run: GraphRunState | null, stale = false): ReadonlySet<GraphNodeId> {
+  if (run === null || stale || !isRunOpen(run.status)) return NONE;
+  const inFlight = run.steps
+    .filter((step) => step.outcome === 'running' || step.outcome === 'waiting')
+    .map((step) => step.nodeId);
+  return inFlight.length === 0 ? NONE : new Set(inFlight);
 }
 
 /** What the inspector shows under LAST OUTPUT for one node: the run, and that node's last step in it. */

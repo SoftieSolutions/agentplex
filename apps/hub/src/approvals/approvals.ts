@@ -308,6 +308,14 @@ export interface Approvals {
    * resolves with that word.
    */
   withdrawnByHub(runId: GraphRunId): void;
+  /**
+   * One step of a run is not asking any more -- its own wait ran out -- so
+   * the one request it raised ends `withdrawn` and every other request the
+   * run holds stays open. A run's branches wait on people at the same time,
+   * and one node's timeout is no answer to another's question. A subject and
+   * id that name no open request withdraw nothing.
+   */
+  withdrawnOneByHub(subject: GraphRunSubject, approvalId: ApprovalId): void;
 }
 
 /**
@@ -722,6 +730,13 @@ export function createApprovals({
           end(entry, 'withdrawn');
         }
       }
+    },
+
+    withdrawnOneByHub(subject: GraphRunSubject, approvalId: ApprovalId): void {
+      const entry = lookup(subject, approvalId);
+      if (entry?.origin.kind !== 'hub') return;
+      logger.info('approval withdrawn: its step stopped asking', { ...subject, approvalId });
+      end(entry, 'withdrawn');
     },
   };
 

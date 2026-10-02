@@ -111,6 +111,15 @@ describe('RunStrip', () => {
     expect(cancels).toBe(1);
   });
 
+  it('reads a run with two branches in flight as one live run, counting steps reached over nodes', async () => {
+    await mount(state(hubFrames.graphRunStateBranches));
+
+    const strip = container.querySelector<HTMLElement>('[data-run-strip]');
+    expect(strip?.textContent).toContain('run #1 · live · step 3/4');
+    expect(strip?.dataset['runTone']).toBe('running');
+    expect(cancel()?.disabled).toBe(false);
+  });
+
   it('reads a stale run as reconnecting, at rest, with no Cancel: nothing here can vouch for it', async () => {
     await mount(state(hubFrames.graphRunStateRunning), false, true);
 
