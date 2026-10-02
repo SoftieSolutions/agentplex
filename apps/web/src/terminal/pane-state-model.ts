@@ -119,6 +119,11 @@ export interface PaneStateInput {
   /** Whether a state since the start was answered still shows nothing running it. */
   readonly startLapsed: boolean;
   readonly phase: ConnectionPhase;
+  /**
+   * Whether `state` arrived on this connection. Acting on the last
+   * connection's word would resume a session on what may no longer be true.
+   */
+  readonly stateCurrent: boolean;
 }
 
 const CANNOT_TELL_WARNING =
@@ -126,7 +131,7 @@ const CANNOT_TELL_WARNING =
   'session for both: resume only if you know nothing else is running it';
 
 export function paneState(input: PaneStateInput): PaneState {
-  const { row, state, start, terminal, everHeld, startLapsed, phase } = input;
+  const { row, state, start, terminal, everHeld, startLapsed, phase, stateCurrent } = input;
   if (row === null) return { kind: 'unknown-row' };
   if (row.holder !== null) return { kind: 'held' };
 
@@ -225,11 +230,14 @@ export function paneState(input: PaneStateInput): PaneState {
       }
       return {
         kind: 'starting',
-        send: phase === 'connected',
+        send: phase === 'connected' && stateCurrent,
         words:
-          phase === 'connected'
-            ? 'nothing is running this session, so it is being resumed'
-            : 'nothing is running this session; it is resumed once the connection to the hub is back',
+          phase !== 'connected'
+            ? 'nothing is running this session; it is resumed once the connection to the hub is back'
+            : stateCurrent
+              ? 'nothing is running this session, so it is being resumed'
+              : 'nothing was running this session when last reported; it is resumed once the hub ' +
+                'sends its current state and that still says so',
         action: null,
       };
     }

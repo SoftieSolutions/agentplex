@@ -318,6 +318,15 @@ export interface HubSnapshot {
    * Kept, unchanged, across a disconnection: `phase` is what labels it stale.
    */
   readonly machineState: MachineState | null;
+  /**
+   * Whether `machineState` arrived on this connection.
+   *
+   * A welcome makes the phase `connected` a frame before the hub's answer to
+   * it -- the whole current state -- lands, and React can draw in between. A
+   * screen showing the kept state labels it by phase; a screen about to act
+   * on it waits for this, or it acts on what the last connection said.
+   */
+  readonly machineStateCurrent: boolean;
   /** The stored layout, once a layout subscription has been answered. */
   readonly layout: Layout | null;
   /**

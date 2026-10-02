@@ -16,7 +16,7 @@ import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.j
 import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
-import { createFakeTimers } from '../store/timers.js';
+import { createFakeTimers, type FakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { colorForTone, colorForToneText } from '../ui/tokens.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
@@ -98,22 +98,33 @@ const COARSE_POINTER = (query: string): boolean => query === '(pointer: coarse)'
  */
 interface StoreHarness {
   readonly store: HubStore;
+  /** The store's clock, which is what fires a redial. */
+  readonly timers: FakeTimers;
   /** The socket the store dialled, once `settle` has let the ticket resolve. */
   socket(): FakeSocket;
+  /** The socket it dialled last. */
+  latestSocket(): FakeSocket;
 }
 
 function buildStore(): StoreHarness {
   const sockets = createFakeSocketFactory();
+  const timers = createFakeTimers();
   const store = createHubStore({
     fetchTicket: () => Promise.resolve('ticket-1'),
     createSocket: (ticket) => sockets.create(ticket),
-    timers: createFakeTimers(),
+    timers,
     frameIds: createFrameIds(),
   });
   return {
     store,
+    timers,
     socket(): FakeSocket {
       const dialled = sockets.sockets[0];
+      if (dialled === undefined) throw new Error('the store dialled nothing');
+      return dialled;
+    },
+    latestSocket(): FakeSocket {
+      const dialled = sockets.sockets.at(-1);
       if (dialled === undefined) throw new Error('the store dialled nothing');
       return dialled;
     },
@@ -2367,6 +2378,33 @@ describe('a pane on a session nothing holds', () => {
 
     const frames = sentFrames(socket);
     expect(ofType(frames, 'session-start')).toHaveLength(1);
+  });
+
+  it('decides nothing on the last connection’s state until this one’s arrives', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await act(async () => {
+      connected.socket.drop();
+    });
+    // Opened while the connection is down: nothing goes out, and the "nothing
+    // runs it" the page holds is the last connection's word.
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    await act(async () => {
+      connected.hub.timers.fireAll();
+      await settle();
+    });
+    const next = connected.hub.latestSocket();
+    expect(next).not.toBe(connected.socket);
+    await act(async () => {
+      next.open();
+      next.deliver(hubFrames.welcome);
+    });
+
+    expect(connected.hub.store.getSnapshot().phase).toBe('connected');
+    expect(ofType(sentFrames(next), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+
+    await deliver(next, hubFrames.machineStateResumable);
+    expect(ofType(sentFrames(next), 'session-start')).toHaveLength(1);
   });
 
   it('says it cannot tell, warns of two copies, and resumes only when pressed', async () => {
