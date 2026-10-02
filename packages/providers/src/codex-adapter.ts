@@ -14,6 +14,7 @@ import {
   type DiscoveredSession,
   type DiscoveryProblem,
   type Launch,
+  type LiveProcess,
   type ProviderAdapter,
   type ProviderDiscovery,
   type ResumeRequest,
@@ -161,6 +162,13 @@ export function createCodexAdapter({ files }: CodexAdapterDependencies): Provide
         request.limit,
         files,
       );
+    },
+
+    // codex keeps no registry of its running processes, so this adapter can
+    // verify none, and a retake -- which ends the process it is told about --
+    // has nothing it may signal. `null` is that, said plainly.
+    async liveProcess(): Promise<LiveProcess | null> {
+      return null;
     },
 
     // Provisioning holds no store and no filesystem, so it is built once here

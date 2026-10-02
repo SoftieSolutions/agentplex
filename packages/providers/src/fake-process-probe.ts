@@ -19,7 +19,16 @@ export interface FakeProcessProbeOptions {
   readonly undatable?: readonly number[];
 }
 
-export function createFakeProcessProbe(options: FakeProcessProbeOptions = {}): ProcessProbe {
+/**
+ * The fake, and the one thing a real process table does that a test needs on
+ * cue: a process ending.
+ */
+export interface FakeProcessProbe extends ProcessProbe {
+  /** The process holding this pid exits; the pid is no longer alive or datable. */
+  exit(pid: number): void;
+}
+
+export function createFakeProcessProbe(options: FakeProcessProbeOptions = {}): FakeProcessProbe {
   const processes = new Map(
     Object.entries(options.processes ?? {}).map(([pid, startedAt]) => [Number(pid), startedAt]),
   );
@@ -32,6 +41,11 @@ export function createFakeProcessProbe(options: FakeProcessProbeOptions = {}): P
 
     async startedAt(pid: number): Promise<number | null> {
       return processes.get(pid) ?? null;
+    },
+
+    exit(pid: number): void {
+      processes.delete(pid);
+      undatable.delete(pid);
     },
   };
 }
