@@ -29,7 +29,7 @@
 export const CLIENT_PROTOCOL_VERSION = 44;
 
 /** The hub-to-server leg's contract; see `CLIENT_PROTOCOL_VERSION` above. */
-export const SERVER_PROTOCOL_VERSION = 42;
+export const SERVER_PROTOCOL_VERSION = 43;
 
 export type ProtocolLeg = 'client' | 'server';
 
