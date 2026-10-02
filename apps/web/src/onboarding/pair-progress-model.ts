@@ -9,14 +9,13 @@ import type { Tone } from '../ui/tokens.js';
  *
  * The screen this feeds is the end of the first run, and the temptation there
  * is to congratulate: a tick, a machine name, an operating system, a version
- * number. None of those last three are on any frame the hub sends. The server
- * reports its stores and what it can start; it never reports what it is
- * running on or which build it is, so a line saying "macOS 15, agentplex 1.4"
- * would be the wizard inventing the two facts a first-run reader has no way to
- * check and every reason to believe. The type below has no field for either,
- * which is the only way that stays true after somebody adds a line to the JSX.
+ * number. The last two are drawn only because the server now says them in its
+ * handshake, and only as it said them: `os` and `daemonVersion` are the row's,
+ * each `null` when the machine did not name it, and nothing here fills a gap
+ * with a word of its own. A first-run reader has no way to check either fact
+ * and every reason to believe it, which is why a guess has no field to go in.
  *
- * What replaces them is the hub's own dial progress, which is a fact: the hub
+ * The rest is the hub's own dial progress, which is a fact too: the hub
  * dials the server, the server dials nothing, and the wizard is watching that
  * dial happen. So the honest waiting state is `dialling`, and the honest
  * ending when it does not work is `unreachable` with the hub's sentence and
@@ -70,6 +69,10 @@ export type PairProgress =
       readonly connectedSince: number | null;
       readonly stores: readonly string[];
       readonly providers: readonly ProviderRowView[];
+      /** What the machine said it runs, or `null` when it did not say. */
+      readonly os: string | null;
+      /** Which daemon build answered, or `null` when it did not say. */
+      readonly daemonVersion: string | null;
     }
   /** The dial failed, in the hub's words, with the next thing to try. */
   | {
@@ -89,6 +92,17 @@ export type PairProgress =
       /** The hub's own sentence, or `null` when it published none. */
       readonly problem: string | null;
       readonly nextAction: string;
+      /**
+       * What the machine last said it runs, or `null` when it never said.
+       *
+       * The hub keeps both across a close, because they are facts about the
+       * box and the box is the one that went quiet; Settings draws them on the
+       * same stale row, so the wizard dropping them would be two screens
+       * disagreeing about one machine.
+       */
+      readonly os: string | null;
+      /** Which daemon build last answered, kept and `null` as `os` is. */
+      readonly daemonVersion: string | null;
     };
 
 /**
@@ -174,6 +188,8 @@ export function pairProgress(
         connectedSince: row.connectedSince,
         stores: row.stores,
         providers: row.providers,
+        os: row.os,
+        daemonVersion: row.daemonVersion,
       };
     case 'blocked':
       return {
@@ -183,6 +199,8 @@ export function pairProgress(
         words: row.phase,
         problem: row.problem,
         nextAction: nextActionFor(row.staleReason),
+        os: row.os,
+        daemonVersion: row.daemonVersion,
       };
     default:
       return assertNever(row.tone, 'server row tone');

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { readFile } from 'node:fs/promises';
+import { release, type } from 'node:os';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
@@ -35,6 +37,7 @@ import { nodeStoreWatcher } from './store-watch/node-store-watcher.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { withoutLazyFetch } from './operations/git-probe.js';
 import { createMachineLoadReader, createNodeMachineProbe } from './machine-load/machine-load.js';
+import { readServerAbout } from './about/server-about.js';
 import { createGitWorkingTree } from './working-tree/working-tree.js';
 import { refuseWithoutTerminals } from './terminal/terminal-support.js';
 import { createTerminalManager } from './terminal/terminal-manager.js';
@@ -189,6 +192,28 @@ async function main(): Promise<void> {
   // a warning and a `null`, never a refusal to start.
   const approvals = await openApprovals(config.dataPath, logger);
 
+  // What this machine runs and which daemon build this is, read once and
+  // stated on every handshake. The product name on a Mac is one `sw_vers`
+  // child, run through the registry's operation over the plain runner; on
+  // Linux it is a file. Neither ever stops the server: a machine that cannot
+  // name itself says its kernel, or nothing.
+  //
+  // The manifest is the package root's, three levels up from the `dist` this
+  // file is emitted into, for the reason the bin reads its own there: packaging
+  // copies `apps/server/dist` and never the manifest beside it, so
+  // `../package.json` exists only in a checkout. At the root, an installed
+  // machine reads the version the release tag named, and a checkout or the
+  // image reads the workspace's `0.0.0` -- which is true of both.
+  const about = await readServerAbout({
+    platform: process.platform,
+    kernel: { type: type(), release: release() },
+    runner: processRunner,
+    readFile: (path) => readFile(path, 'utf8'),
+    manifest: fileURLToPath(new URL('../../../package.json', import.meta.url)),
+    logger,
+  });
+  logger.info('this machine, as the hub will be told', { ...about });
+
   let runtime;
   try {
     runtime = await startRuntime(config, {
@@ -237,6 +262,7 @@ async function main(): Promise<void> {
       // never on a timer. Composed here for the reason everything else is: the
       // probe is the one thing in it that touches the outside world.
       machineLoad: createMachineLoadReader({ probe: createNodeMachineProbe(), clock: systemClock }),
+      about,
       // The only place a real pty is opened. It is handed the same composed
       // environment as the one-shot runner, so a provider binary resolves the
       // same way whether it is being probed or driven.

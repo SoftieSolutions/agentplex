@@ -33,7 +33,7 @@ import { PairingPanel } from './pairing-panel.js';
 import type { PairingOperations } from './pairing-operations.js';
 import { PushControl } from './push-control.js';
 import type { PushOperations } from './push-operations.js';
-import { roundTripWords, serverRows, type ServerRowView } from './server-rows.js';
+import { aboutWords, roundTripWords, serverRows, type ServerRowView } from './server-rows.js';
 
 /**
  * The settings screen: hub access, server pairing, and the paired-server
@@ -381,6 +381,7 @@ function ServerRow({
             <Text size="sm" ff="monospace" c="dimmed">
               {row.serverId === null ? 'identity not yet confirmed' : row.serverId}
             </Text>
+            <About row={row} />
           </Group>
           <Text size="sm" ff="monospace" c="dimmed">
             {row.address}
@@ -415,6 +416,21 @@ function ServerRow({
         </Button>
       </Group>
     </Paper>
+  );
+}
+
+/**
+ * What the machine said it runs, beside what it calls itself: the same claim
+ * the wizard's card makes, in this row's own muted monospace. Nothing is drawn
+ * for a machine that said neither, rather than a word standing in.
+ */
+function About({ row }: { readonly row: ServerRowView }): JSX.Element | null {
+  const words = aboutWords(row.os, row.daemonVersion);
+  if (words === null) return null;
+  return (
+    <Text size="xs" ff="monospace" c="dimmed">
+      {words}
+    </Text>
   );
 }
 

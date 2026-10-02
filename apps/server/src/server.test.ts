@@ -162,6 +162,9 @@ function createFakePreflight(reading: readonly ProviderReadiness[]): FakePreflig
 
 let world: World | undefined;
 
+/** What `main` read about this machine at boot, as a test writes it down. */
+const ABOUT = { os: 'macOS 26.6.2', daemonVersion: '2.0.3' } as const;
+
 afterEach(async () => {
   world?.runtime.stopWaiting();
   await world?.runtime.stop();
@@ -201,6 +204,7 @@ async function start(
     preflight,
     terminals: terminals.terminals,
     machineLoad: createFakeMachineLoadReader(),
+    about: ABOUT,
     operations: createOperationRegistry(runner),
     workingTree: createFakeWorkingTree(),
     beacon: {
@@ -461,6 +465,24 @@ describe('a draining shutdown', () => {
  * for a fresh reading at all, and the only path a fresh one has to a hub --
  * which is the handshake it already reads, taken again.
  */
+describe('what the server says about itself', () => {
+  it('states the os and daemon version it was handed on every handshake', async () => {
+    const started = await start();
+
+    const first = await dial(started);
+    const second = await dial(started);
+
+    // Read once, by `main`, and carried to every hub that dials: the second
+    // connection is told exactly what the first was, with no probe between.
+    for (const hub of [first, second]) {
+      expect(await hub.next('handshake-accepted')).toMatchObject({
+        os: 'macOS 26.6.2',
+        daemonVersion: '2.0.3',
+      });
+    }
+  });
+});
+
 describe('re-reading provider readiness', () => {
   it('reports the fresh reading to a hub that dials after it', async () => {
     const started = await start([missingProvider()]);

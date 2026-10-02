@@ -112,24 +112,17 @@ describe('a registration that answered', () => {
       connectedSince: 1_756_000_000_000,
       stores: ['store-agentplex'],
       providers: [{ name: 'claude', tone: 'running', words: 'claude 9.9.9', problem: null }],
+      os: 'macOS 26.6.2',
+      daemonVersion: '2.0.3',
     });
   });
 
-  it('claims nothing about the operating system or the daemon build', () => {
-    // Neither is on any frame the hub sends, so neither can be drawn. A line
-    // that said "macOS 15, agentplex 1.4" would be the wizard inventing the
-    // two facts a first-run reader is most likely to believe.
-    const progress = pairProgress(justPaired, onlyRow(justPaired).registrationId);
-    expect(Object.keys(progress).sort()).toEqual([
-      'address',
-      'connectedSince',
-      'kind',
-      'label',
-      'providers',
-      'stores',
-      'tone',
-      'words',
-    ]);
+  it('carries no operating system and no build for a machine that did not say', () => {
+    // The captured drain is of a server that sent `null` for both. The wizard
+    // draws what the handshake said and nothing in its place: a filler word
+    // here would be the one fact on the card a first-run reader cannot check.
+    const progress = pairProgress(draining, onlyRow(draining).registrationId);
+    expect(progress).toMatchObject({ kind: 'online', os: null, daemonVersion: null });
   });
 
   it('needs no intermediate state: the first frame after pairing can already be online', () => {
@@ -183,6 +176,38 @@ describe('a registration the hub cannot reach', () => {
       problem: 'connection refused',
       nextAction:
         'Check the server is running and its port is reachable from the hub; Settings can unpair it.',
+      os: null,
+      daemonVersion: null,
+    });
+  });
+
+  it('keeps what the machine said it runs after it goes quiet', () => {
+    // The hub keeps both across a close: they are facts about the box, and the
+    // box is the one that went quiet. The captured connected row re-read as
+    // the stale row that follows it, with only the phase fields varied, so the
+    // wizard's card says what Settings says about the same machine.
+    const captured = stateFrom(hubFrames.machineStateJustPaired);
+    const row = captured.servers[0];
+    if (row === undefined) throw new Error('the fixture carries no server');
+    const rows = serverRows({
+      ...captured,
+      servers: [
+        {
+          ...row,
+          phase: 'stale',
+          staleReason: 'unreachable',
+          connectedSince: null,
+          staleSince: 1_756_000_015_000,
+          roundTrip: null,
+          problem: 'connection refused',
+        },
+      ],
+    });
+
+    expect(pairProgress(rows, row.registrationId)).toMatchObject({
+      kind: 'unreachable',
+      os: 'macOS 26.6.2',
+      daemonVersion: '2.0.3',
     });
   });
 

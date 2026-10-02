@@ -77,6 +77,8 @@ function connected(): ServerConnectionReport {
     staleReason: null,
     draining: null,
     roundTrip: null,
+    os: null,
+    daemonVersion: null,
   };
 }
 

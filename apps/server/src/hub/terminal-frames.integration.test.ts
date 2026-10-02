@@ -114,6 +114,7 @@ function harness(scrollbackBytes?: number, socketOptions?: FakeMessageSocketOpti
     audience: createHubAudience({ sessions, logger }),
     stores: [STORE],
     providers: [readyProvider()],
+    about: { os: 'macOS 26.6.2', daemonVersion: '2.0.3' },
     sessions,
     terminals,
     // No approvals: this file's subject is terminal bytes, and a hook has

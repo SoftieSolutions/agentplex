@@ -145,6 +145,8 @@ function server(
     staleReason,
     draining: null,
     roundTrip: null,
+    os: null,
+    daemonVersion: null,
   };
 }
 

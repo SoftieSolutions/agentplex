@@ -41,12 +41,12 @@ import {
  */
 export type ServerEndDependencies = Omit<
   HubConnectionDependencies,
-  'connectionId' | 'grants' | 'audience' | 'docs' | 'browse' | 'approvals'
+  'connectionId' | 'grants' | 'audience' | 'docs' | 'browse' | 'approvals' | 'about'
 > &
   Partial<
     Pick<
       HubConnectionDependencies,
-      'connectionId' | 'grants' | 'audience' | 'docs' | 'browse' | 'approvals'
+      'connectionId' | 'grants' | 'audience' | 'docs' | 'browse' | 'approvals' | 'about'
     >
   >;
 
@@ -73,6 +73,10 @@ export function serveServerEnd(
     // socket hooks connect to: it refuses a decision rather than appearing to
     // apply one. A suite whose subject is approvals passes its own gate.
     approvals: null,
+    // Nothing named by default, which is a server that could read neither its
+    // operating system nor its manifest: the card draws no detail line for it.
+    // A suite whose subject is that line passes what a machine read.
+    about: { os: null, daemonVersion: null },
     ...dependencies,
   });
 }

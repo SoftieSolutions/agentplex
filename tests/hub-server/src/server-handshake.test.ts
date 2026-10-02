@@ -90,6 +90,30 @@ describe('handshakeWithServer against a real server', () => {
     });
   });
 
+  it('hands on what the server said it runs and which daemon it is', async () => {
+    const outcome = await handshakeWithServer(
+      target,
+      dependencies(
+        pair({ about: { os: 'Debian GNU/Linux 12 (bookworm)', daemonVersion: '2.0.3' } }),
+      ),
+    );
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      os: 'Debian GNU/Linux 12 (bookworm)',
+      daemonVersion: '2.0.3',
+    });
+  });
+
+  it('hands on null for what a server could not name, and invents nothing', async () => {
+    const outcome = await handshakeWithServer(
+      target,
+      dependencies(pair({ about: { os: null, daemonVersion: null } })),
+    );
+
+    expect(outcome).toMatchObject({ ok: true, os: null, daemonVersion: null });
+  });
+
   it('leaves the socket open, because that connection is the one to keep', async () => {
     const outcome = await handshakeWithServer(target, dependencies(pair()));
 
@@ -165,6 +189,8 @@ describe('handshakeWithServer', () => {
         serverId: 'server-under-test',
         stores: [],
         providers: [],
+        os: null,
+        daemonVersion: null,
       }),
     );
 
@@ -184,6 +210,8 @@ describe('handshakeWithServer', () => {
         serverId: 's',
         stores: [],
         providers: [],
+        os: null,
+        daemonVersion: null,
       }),
     );
 

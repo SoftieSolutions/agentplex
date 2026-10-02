@@ -43,6 +43,7 @@ import { createProjectDocs } from '../projects/project-docs.js';
 import { projectKeyFor, projectPath } from '../projects/project-files.js';
 import { createMachineLoadReader, type MachineLoadReader } from '../machine-load/machine-load.js';
 import * as linux from '../machine-load/machine-load-linux.fixture.js';
+import type { ServerAbout } from '../about/server-about.js';
 
 const logger = createLogger('error', () => {});
 
@@ -71,6 +72,9 @@ const DATA_ROOT = '/var/lib/agentplex';
 
 /** What the startup preflight found, as every handshake reports it. */
 const providers: readonly ProviderReadiness[] = [readyProvider()];
+
+/** What this machine read about itself at boot, as every handshake reports it. */
+const about: ServerAbout = { os: 'macOS 26.6.2', daemonVersion: '2.0.3' };
 
 /** The frame a well-behaved hub opens with. */
 function handshake(overrides: Record<string, unknown> = {}): string {
@@ -102,6 +106,7 @@ function deps(
     audience: createHubAudience({ sessions, logger }),
     stores,
     providers,
+    about,
     sessions,
     terminals: createFakeTerminals().terminals,
     // One browse root and a disk under it, so that the frames in this file have
@@ -178,6 +183,8 @@ describe('serveHubConnection', () => {
         serverId: 'server-under-test',
         stores: [{ storeId: 'store-a', path: '/volumes/claude' }],
         providers: [readyProvider()],
+        os: 'macOS 26.6.2',
+        daemonVersion: '2.0.3',
       },
     ]);
     expect(connection.state).toBe('established');
@@ -215,6 +222,29 @@ describe('serveHubConnection', () => {
         { provider: 'codex', state: 'ready' },
       ],
     });
+  });
+
+  it('says what it runs and which daemon is answering, as it read them at boot', async () => {
+    const { socket } = connect({
+      about: { os: 'Debian GNU/Linux 12 (bookworm)', daemonVersion: '2.0.3' },
+    });
+
+    socket.receive(handshake());
+    await settle();
+
+    expect(replies(socket.sent)[0]).toMatchObject({
+      os: 'Debian GNU/Linux 12 (bookworm)',
+      daemonVersion: '2.0.3',
+    });
+  });
+
+  it('sends null for what it could not read, rather than a word standing in for it', async () => {
+    const { socket } = connect({ about: { os: null, daemonVersion: null } });
+
+    socket.receive(handshake());
+    await settle();
+
+    expect(replies(socket.sent)[0]).toMatchObject({ os: null, daemonVersion: null });
   });
 
   it('refuses a wrong token and closes', async () => {

@@ -119,6 +119,9 @@ function stateWith(overrides?: {
         draining: null,
         // Not yet timed: nothing here draws a latency.
         roundTrip: null,
+        // Named by nothing: nothing here draws a machine card.
+        os: null,
+        daemonVersion: null,
         problem: null,
         ...overrides?.server,
       },

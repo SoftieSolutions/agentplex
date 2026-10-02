@@ -50,6 +50,8 @@ export function sameConnection(
     left.staleReason === right.staleReason &&
     sameDraining(left.draining, right.draining) &&
     sameRoundTrip(left.roundTrip, right.roundTrip) &&
+    left.os === right.os &&
+    left.daemonVersion === right.daemonVersion &&
     sameProviders(left.providers, right.providers) &&
     left.stores.length === right.stores.length &&
     left.stores.every((storeId, index) => storeId === right.stores[index])

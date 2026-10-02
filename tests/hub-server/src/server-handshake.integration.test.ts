@@ -99,6 +99,9 @@ async function startServer(storePaths: readonly string[] = []) {
     drainMs: 0,
     operations: createOperationRegistry(createFakeProcessRunner()),
     machineLoad: createFakeMachineLoadReader(),
+    // What `main` reads at boot, written down: the handshake below is the
+    // whole path it takes to a hub, over a real socket and both parsers.
+    about: { os: 'macOS 26.6.2', daemonVersion: '2.0.3' },
     dataRoot: '/var/lib/agentplex',
     projectFiles: createFakeProjectFiles(),
     timers: systemTimers,
@@ -196,6 +199,15 @@ describe('the handshake over a real websocket', () => {
     if (!dialed.ok) return;
 
     expect(() => dialed.socket.close(closure(CLOSE_POLICY, 'why '.repeat(200)))).not.toThrow();
+  });
+
+  it('carries what the machine runs and which daemon answered, over the real wire', async () => {
+    server = await startServer();
+
+    const outcome = await handshakeWithServer(target(), dependencies(server.port));
+
+    expect(outcome).toMatchObject({ ok: true, os: 'macOS 26.6.2', daemonVersion: '2.0.3' });
+    if (outcome.ok) outcome.socket.close({ code: 1000, reason: 'done' });
   });
 
   it('answers the same identity to a second hub, and to a reconnect', async () => {

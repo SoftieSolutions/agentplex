@@ -218,6 +218,15 @@ export function startDialLoop(
   let serverId: ServerId | null = registration.serverId;
   let stores: readonly StoreId[] = [];
   let providers: readonly ProviderReadiness[] = [];
+  /**
+   * What the last handshake said this machine runs and which daemon answered.
+   *
+   * Kept across a close, like the store list: they are facts about the box,
+   * and the box is the one that went quiet. Replaced by the next handshake,
+   * which is the only thing that can say otherwise.
+   */
+  let os: string | null = null;
+  let daemonVersion: string | null = null;
   let connectedSince: number | null = null;
   let staleSince: number | null = null;
   let lastConnectedAt: number | null = registration.lastConnectedAt;
@@ -278,6 +287,8 @@ export function startDialLoop(
     staleReason,
     draining,
     roundTrip,
+    os,
+    daemonVersion,
   });
 
   const changed = (): void => dependencies.onChange?.(report());
@@ -301,11 +312,14 @@ export function startDialLoop(
     id: ServerId,
     mounted: readonly StoreId[],
     reported: readonly ProviderReadiness[],
+    about: { readonly os: string | null; readonly daemonVersion: string | null },
   ): void => {
     phase = 'connected';
     serverId = id;
     stores = mounted;
     providers = reported;
+    os = about.os;
+    daemonVersion = about.daemonVersion;
     connectedSince = clock.now();
     lastConnectedAt = connectedSince;
     staleSince = null;
@@ -321,6 +335,8 @@ export function startDialLoop(
       serverId: id,
       stores: mounted.length,
       providers: reported.map(({ provider, state }) => `${provider}:${state}`),
+      os,
+      daemonVersion,
     });
     changed();
   };
@@ -560,6 +576,7 @@ export function startDialLoop(
           outcome.serverId,
           recorded.stores.map((store) => store.storeId),
           outcome.providers,
+          outcome,
         );
         // After the state says this server is connected, because the fleet
         // state refuses sessions from a server it has no connection for --

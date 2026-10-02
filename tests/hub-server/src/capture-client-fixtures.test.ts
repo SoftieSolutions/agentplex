@@ -54,6 +54,7 @@ import {
 } from '../../../apps/hub/src/discovery/fake-discovery.js';
 import { createFakeWebAssets } from '../../../apps/hub/src/web/fake-web.js';
 import { serveServerEnd } from './server-end.js';
+import type { ServerAbout } from '../../../apps/server/src/about/server-about.js';
 import type { HubConnection } from '../../../apps/server/src/hub/hub-connection.js';
 import { createDirectoryBrowser } from '../../../apps/server/src/directories/directory-browse.js';
 import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
@@ -362,6 +363,12 @@ interface Machine {
   readonly reports: readonly StoreReport[];
   /** What that machine's startup preflight found, as it reports it. */
   readonly providers: readonly ProviderReadiness[];
+  /**
+   * What that machine read about itself at boot. Absent is a server that could
+   * name neither, which is what most of this fleet is: the detail line is the
+   * subject of the machines that carry one, and of no other capture.
+   */
+  readonly about?: ServerAbout;
   /** What this machine's controller answers a start with. Default: a refusal. */
   readonly startOutcome?: SessionOutcome;
   /** What it answers a pause and a resume with. Default: a refusal. */
@@ -513,6 +520,7 @@ function fleetDialer(
         identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
         stores: machine.stores,
         providers: machine.providers,
+        about: machine.about ?? { os: null, daemonVersion: null },
         browse: createDirectoryBrowser({
           roots: [...(machine.browse?.roots ?? [])],
           reader: createFakeDirectoryReader({ directories: machine.browse?.directories ?? {} }),
@@ -1061,6 +1069,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
         {
           serverId: 'server-mbp',
           providers: [readyProvider('claude'), readyProvider('codex')],
+          // What this ticket's own machine answered: `sw_vers` on a Mac, and a
+          // release's manifest.
+          about: { os: 'macOS 26.6.2', daemonVersion: '2.0.3' },
           stores: [
             {
               storeId: storeIdSchema.parse('store-agentplex'),
@@ -1147,6 +1158,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
         {
           serverId: 'server-gpu',
           providers: [readyProvider('claude'), missingProvider('codex')],
+          // The PRETTY_NAME `ubuntu:24.04` ships in its os-release.
+          about: { os: 'Ubuntu 24.04.5 LTS', daemonVersion: '2.0.3' },
           stores: [
             { storeId: storeIdSchema.parse('store-universe'), path: '/mnt/volumes/universe' },
           ],
@@ -2934,6 +2947,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
         {
           serverId: 'server-mbp',
           providers: [readyProvider('claude')],
+          // The machine the wizard's card is drawn from, naming itself as the
+          // mock's did: an os and a daemon build, beside its label.
+          about: { os: 'macOS 26.6.2', daemonVersion: '2.0.3' },
           stores: [
             {
               storeId: storeIdSchema.parse('store-agentplex'),

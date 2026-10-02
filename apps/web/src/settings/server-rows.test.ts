@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import {
+  aboutWords,
   ROUND_TRIP_FRESH_MS,
   roundTripWords,
   serverRows,
@@ -252,6 +253,26 @@ describe('the paired-server rows', () => {
     expect(unmeasured?.slow).toBe(false);
   });
 
+  it('carries what the machine runs and which daemon it is, as the handshake said', () => {
+    // Captured from two real servers that each named both in their handshake:
+    // the marketing name the probe read and the build in the published
+    // manifest. The row passes them through untouched -- nothing downstream
+    // parses either, it only draws them.
+    const rows = serverRows(stateFrom(hubFrames.machineStatePopulated));
+    expect(rows.map(({ label, os, daemonVersion }) => ({ label, os, daemonVersion }))).toEqual([
+      { label: 'gpu-box-01', os: 'Ubuntu 24.04.5 LTS', daemonVersion: '2.0.3' },
+      { label: 'mbp-robert', os: 'macOS 26.6.2', daemonVersion: '2.0.3' },
+    ]);
+  });
+
+  it('carries neither for a machine that has not said, rather than a placeholder', () => {
+    // A pairing that never connected sent no handshake, so there is nothing to
+    // carry. `null` is the fact; a word like "unknown" would be a claim.
+    const [never] = serverRows(stateFrom(hubFrames.machineStateWithServer));
+    expect(never?.os).toBeNull();
+    expect(never?.daemonVersion).toBeNull();
+  });
+
   it('calls a round trip past the threshold slow, and one at it not', () => {
     const captured = stateFrom(hubFrames.machineStateMeasured);
     const row = captured.servers[0];
@@ -287,5 +308,20 @@ describe('a round trip in words', () => {
 
   it('is nothing at all before a pong has been timed, rather than a zero', () => {
     expect(roundTripWords(null, reading.measuredAt)).toBeNull();
+  });
+});
+
+describe('what a machine said about itself, in words', () => {
+  it('is the system and the daemon, as the mock draws them', () => {
+    expect(aboutWords('macOS 26.6.2', '2.0.3')).toBe('macOS 26.6.2 · daemon 2.0.3');
+  });
+
+  it('is whichever half was said, with nothing standing in for the other', () => {
+    expect(aboutWords('Ubuntu 24.04.5 LTS', null)).toBe('Ubuntu 24.04.5 LTS');
+    expect(aboutWords(null, '2.0.3')).toBe('daemon 2.0.3');
+  });
+
+  it('is nothing at all when neither was said, rather than a placeholder', () => {
+    expect(aboutWords(null, null)).toBeNull();
   });
 });

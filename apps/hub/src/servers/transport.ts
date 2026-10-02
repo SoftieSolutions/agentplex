@@ -145,6 +145,10 @@ export type ServerTransportOutcome =
       readonly stores: readonly StoreDescriptor[];
       /** What that machine says it can start, from its own startup preflight. */
       readonly providers: readonly ProviderReadiness[];
+      /** What that machine says it runs, or `null` for a machine that could not name it. */
+      readonly os: string | null;
+      /** Which daemon build answered, or `null` for one that could not say. */
+      readonly daemonVersion: string | null;
       readonly transport: ServerTransport;
     }
   | {
@@ -199,6 +203,8 @@ export function createMessageSocketTransports(
         serverId: outcome.serverId,
         stores: outcome.stores,
         providers: outcome.providers,
+        os: outcome.os,
+        daemonVersion: outcome.daemonVersion,
         transport: overSocket(outcome.socket, outcome.nextFrameId, dependencies),
       };
     },

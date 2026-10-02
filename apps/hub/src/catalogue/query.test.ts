@@ -121,6 +121,8 @@ function fleet(readings: readonly Reading[]): MachineState {
         problem: null,
         draining: null,
         roundTrip: null,
+        os: null,
+        daemonVersion: null,
       },
       {
         registrationId: BOX,
@@ -137,6 +139,8 @@ function fleet(readings: readonly Reading[]): MachineState {
         problem: null,
         draining: null,
         roundTrip: null,
+        os: null,
+        daemonVersion: null,
       },
     ],
     candidates: [],

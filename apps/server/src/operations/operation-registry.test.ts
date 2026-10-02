@@ -112,6 +112,7 @@ describe('the operation registry', () => {
       'git.diff',
       'git.status',
       'process.start-time',
+      'system.os-name',
     ]);
     for (const { summary } of registry.operations) expect(summary).not.toBe('');
   });
@@ -141,6 +142,7 @@ describe('the operation registry', () => {
       'git.diff': { directory: DIRECTORY },
       'git.status': { directory: DIRECTORY },
       'process.start-time': { pid: 42 },
+      'system.os-name': {},
     };
     expect(Object.keys(requests).sort()).toEqual(
       registry.operations.map(({ name }) => name).sort(),
@@ -160,8 +162,9 @@ describe('the operation registry', () => {
       // would have to appear here first, and this is where it fails.
       expect(Object.keys(request).sort()).toEqual(['args', 'file', 'timeoutMs']);
       // A program name PATH resolves, never a path and never a line to be
-      // split: `/bin/sh -c ...` cannot be spelled in this shape.
-      expect(request.file).toMatch(/^[a-z][a-z0-9-]*$/);
+      // split: `/bin/sh -c ...` cannot be spelled in this shape. The
+      // underscore is `sw_vers`'s, and no shell gives it a meaning.
+      expect(request.file).toMatch(/^[a-z][a-z0-9_-]*$/);
       for (const argument of request.args) expect(typeof argument).toBe('string');
       expect(request.timeoutMs).toBeGreaterThan(0);
     }

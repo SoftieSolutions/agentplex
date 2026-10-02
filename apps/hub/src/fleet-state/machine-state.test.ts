@@ -63,6 +63,8 @@ function connection(
     staleReason: phase === 'stale' ? 'unreachable' : null,
     draining: null,
     roundTrip: null,
+    os: phase === 'connecting' ? null : 'macOS 26.6.2',
+    daemonVersion: phase === 'connecting' ? null : '2.0.3',
   };
 }
 
@@ -211,6 +213,33 @@ describe('toMachineState', () => {
     // Copied rather than passed through, like every other nested value here:
     // nothing a client is sent shares an object with the supervisor's own.
     expect(published.servers[0]?.roundTrip?.load).not.toBe(load);
+  });
+
+  it('publishes what the handshake said the machine runs, through the wire parser', () => {
+    const state = createFleetState({ logger });
+    state.applyConnection({
+      ...connection('workshop', 'connected', ['store-work']),
+      os: 'Debian GNU/Linux 12 (bookworm)',
+      daemonVersion: '2.0.3',
+    });
+
+    const [server] = machineStateSchema.parse(toMachineState(state.snapshot())).servers;
+
+    expect(server).toMatchObject({ os: 'Debian GNU/Linux 12 (bookworm)', daemonVersion: '2.0.3' });
+  });
+
+  it('keeps the os and daemon version of a stale server, the last thing it said', () => {
+    const laptop = published().servers.find((server) => server.label === 'laptop');
+    expect(laptop).toMatchObject({ phase: 'stale', os: 'macOS 26.6.2', daemonVersion: '2.0.3' });
+  });
+
+  it('publishes null for a pairing no handshake has answered, never a placeholder', () => {
+    const state = createFleetState({ logger });
+    state.applyConnection(connection('new-box', 'connecting', []));
+
+    const [server] = toMachineState(state.snapshot()).servers;
+
+    expect(server).toMatchObject({ os: null, daemonVersion: null });
   });
 
   it('publishes null for a server no heartbeat has completed on, rather than a zero', () => {

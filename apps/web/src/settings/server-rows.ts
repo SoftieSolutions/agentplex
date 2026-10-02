@@ -105,6 +105,16 @@ export interface ServerRowView {
   readonly roundTrip: ServerRoundTrip | null;
   /** Whether that round trip is past `SLOW_ROUND_TRIP_MS`, which is drawn in a warning tone. */
   readonly slow: boolean;
+  /**
+   * What the machine said it runs, e.g. `macOS 26.6.2`, or `null` when it has
+   * not said -- a pairing that never connected, or a server that could not
+   * name its own system. Passed through as the handshake carried it: the
+   * protocol already bounded it and refused control characters, and nothing
+   * here does more with it than draw it.
+   */
+  readonly os: string | null;
+  /** Which daemon build answered, e.g. `2.0.3`, or `null` when it did not say. */
+  readonly daemonVersion: string | null;
 }
 
 /**
@@ -141,6 +151,22 @@ export function roundTripWords(reading: ServerRoundTrip | null, now: number): st
   const figure = `${String(reading.ms)}ms`;
   if (now - reading.measuredAt <= ROUND_TRIP_FRESH_MS) return figure;
   return `${figure} · ${ageLabel(now, reading.measuredAt)} ago`;
+}
+
+/**
+ * What a machine said it runs and which daemon answered, as mock 7f draws it:
+ * `macOS 26.6.2 · daemon 2.0.3`.
+ *
+ * Whichever half the machine did not say is left out rather than stood in
+ * for, and a machine that said neither is `null`, so the drawing puts nothing
+ * there at all. It is one function because the wizard's card and the settings
+ * row draw the same claim, and two spellings of it are how they would drift.
+ */
+export function aboutWords(os: string | null, daemonVersion: string | null): string | null {
+  const said = [os, daemonVersion === null ? null : `daemon ${daemonVersion}`].filter(
+    (part): part is string => part !== null,
+  );
+  return said.length === 0 ? null : said.join(' · ');
 }
 
 /**
@@ -256,5 +282,7 @@ export function serverRows(state: MachineState | null): readonly ServerRowView[]
     providers: view.providers.map(providerRow),
     roundTrip: view.roundTrip,
     slow: isSlowRoundTrip(view.roundTrip),
+    os: view.os,
+    daemonVersion: view.daemonVersion,
   }));
 }

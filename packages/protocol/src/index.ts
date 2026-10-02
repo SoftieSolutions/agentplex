@@ -171,7 +171,13 @@ export type { ServerAddress } from './pairing.js';
 export { NODE_NAME_MAX_CHARS } from './layout.js';
 export type { Layout, LayoutNode } from './layout.js';
 
-export { SESSION_TASK_MAX_CHARS, machineLoadSchema, machineStateSchema } from './machine-state.js';
+export {
+  SESSION_TASK_MAX_CHARS,
+  daemonVersionSchema,
+  machineLoadSchema,
+  machineOsSchema,
+  machineStateSchema,
+} from './machine-state.js';
 export type {
   CpuSample,
   GraphRunApproval,

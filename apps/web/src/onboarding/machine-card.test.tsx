@@ -7,7 +7,7 @@ import { serverRows, type ServerRowView } from '../settings/server-rows.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
-import { colorForTone } from '../ui/tokens.js';
+import { colorForRole, colorForTone } from '../ui/tokens.js';
 import { sessionsOnServer, type AdoptedSession } from './adopted-sessions-model.js';
 import { MachineCard } from './machine-card.js';
 import { pairProgress, type PairProgress } from './pair-progress-model.js';
@@ -154,6 +154,21 @@ describe('the wizard machine card', () => {
     return clone.textContent ?? '';
   }
 
+  /** The row the headline sits in: the dot, the name, and what is drawn beside it. */
+  function headlineGroup(headline: string): HTMLElement {
+    const name = [...container.querySelectorAll('p')].find((line) => line.textContent === headline);
+    const group = name?.parentElement;
+    if (group === null || group === undefined) throw new Error(`no headline ${headline}`);
+    return group;
+  }
+
+  /** The text drawn in the headline row after the name, one entry per element. */
+  function besideHeadline(headline: string): string[] {
+    return [...headlineGroup(headline).children]
+      .map((child) => child.textContent ?? '')
+      .filter((text) => text !== '' && text !== headline);
+  }
+
   /** The card's own tone dot: the round span above any provider line. */
   function headlineDotColor(): string {
     const dot = [...container.querySelectorAll('span')].find(
@@ -196,16 +211,66 @@ describe('the wizard machine card', () => {
     expect(said).toContain('claude 9.9.9');
   });
 
-  it('claims no operating system and no build number, because no frame carries one', async () => {
+  it('says what the machine runs and which daemon it is, beside its name', async () => {
     await draw(progressFrom(hubFrames.machineStateJustPaired));
 
-    // The mockup this card comes from drew `macOS 15.6 · daemon 2.0.3` here.
-    // Neither fact is on any frame the hub sends, and a first-run reader has
-    // no way to check either, which is the worst place in the product to
-    // invent one.
-    const said = copy();
-    expect(said).not.toMatch(/macOS|Linux|Windows/i);
-    expect(said).not.toMatch(/daemon/i);
+    // Mock 7f draws `mbp-robert connected  macOS 15.6 · daemon 2.0.3` as one
+    // row: the name in bold, the two facts muted beside it. These are the ones
+    // the captured server said in its handshake, not the mock's.
+    const group = headlineGroup('mbp-robert connected');
+    const about = [...group.children].find(
+      (child) => child.textContent === 'macOS 26.6.2 · daemon 2.0.3',
+    );
+    expect(about).toBeInstanceOf(HTMLElement);
+    if (!(about instanceof HTMLElement)) return;
+    expect(about.style.fontFamily).toContain('monospace');
+    expect(about.style.fontSize).toContain('0.6875rem');
+    expect(about.style.color).toBe(asDrawn(colorForRole('textMuted', 'dark')));
+    expect(about.style.fontWeight).toBe('');
+    // The name it sits beside is the mock's too: 13px, bold. At 15px the two
+    // read as a title and a footnote rather than as one line.
+    const name = [...group.children].find((child) => child.textContent === 'mbp-robert connected');
+    expect(name).toBeInstanceOf(HTMLElement);
+    if (!(name instanceof HTMLElement)) return;
+    expect(name.style.fontSize).toContain('0.8125rem');
+    expect(name.style.fontWeight).toBe('700');
+  });
+
+  it('puts the address and the connection age on their own line under the name', async () => {
+    await draw(progressFrom(hubFrames.machineStateJustPaired));
+
+    const detail = [...container.querySelectorAll('p')].find(
+      (line) => line.textContent === 'wss://mbp-robert.example:8443 · connected 4m',
+    );
+    expect(detail).toBeDefined();
+    expect(headlineGroup('mbp-robert connected').contains(detail ?? null)).toBe(false);
+  });
+
+  it('draws only the half of the pair the machine said, and nothing for neither', async () => {
+    // The captured row re-read with one fact at a time taken away, because the
+    // hub publishes `null` for whichever a server did not name -- a server too
+    // old to send them, or one that could not read its own manifest.
+    const captured = stateFrom(hubFrames.machineStateJustPaired);
+    const row = captured.servers[0];
+    expect(row).toBeDefined();
+    if (row === undefined) return;
+    const withAbout = (os: string | null, daemonVersion: string | null): PairProgress =>
+      pairProgress(
+        serverRows({ ...captured, servers: [{ ...row, os, daemonVersion }] }),
+        row.registrationId,
+      );
+
+    await draw(withAbout(null, '2.0.3'));
+    expect(besideHeadline('mbp-robert connected')).toEqual(['daemon 2.0.3']);
+
+    await draw(withAbout('macOS 26.6.2', null));
+    expect(besideHeadline('mbp-robert connected')).toEqual(['macOS 26.6.2']);
+
+    await draw(withAbout(null, null));
+    expect(besideHeadline('mbp-robert connected')).toEqual([]);
+    // Nothing stands in for either: a machine that did not say is not
+    // `unknown`, and no build is `daemon` with nothing after it.
+    expect(copy()).not.toMatch(/daemon|unknown/i);
   });
 
   it('draws a draining machine in its own tone, not in a healthy one', async () => {
@@ -281,6 +346,49 @@ describe('the wizard machine card', () => {
     expect(said).toMatch(/unreachable/i);
     expect(said).toContain('connection refused');
     expect(said).toContain('Settings can unpair it');
+  });
+
+  it('still says what an unreachable machine runs, as the online card did', async () => {
+    // The hub keeps both facts while the row is stale and Settings draws them,
+    // so the wizard's card must not lose them the moment the machine goes
+    // quiet. The captured connected row re-read as the stale row after it.
+    const captured = stateFrom(hubFrames.machineStateJustPaired);
+    const row = captured.servers[0];
+    expect(row).toBeDefined();
+    if (row === undefined) return;
+    const rows = serverRows({
+      ...captured,
+      servers: [
+        {
+          ...row,
+          phase: 'stale',
+          staleReason: 'unreachable',
+          connectedSince: null,
+          staleSince: 1_756_000_015_000,
+          roundTrip: null,
+          problem: 'connection refused',
+        },
+      ],
+    });
+
+    await draw(pairProgress(rows, row.registrationId));
+
+    const group = headlineGroup('mbp-robert unreachable');
+    const about = [...group.children].find(
+      (child) => child.textContent === 'macOS 26.6.2 · daemon 2.0.3',
+    );
+    expect(about).toBeInstanceOf(HTMLElement);
+    if (!(about instanceof HTMLElement)) return;
+    expect(about.style.fontFamily).toContain('monospace');
+    expect(about.style.fontSize).toContain('0.6875rem');
+    expect(about.style.color).toBe(asDrawn(colorForRole('textMuted', 'dark')));
+  });
+
+  it('draws nothing beside an unreachable machine that never said what it runs', async () => {
+    await draw(progressFrom(hubFrames.machineStateWithServer));
+
+    expect(besideHeadline('gpu-box-01 unreachable')).toEqual([]);
+    expect(copy()).not.toMatch(/daemon|unknown/i);
   });
 
   it('spins at nobody: an unreachable machine is an ending, not a wait', async () => {

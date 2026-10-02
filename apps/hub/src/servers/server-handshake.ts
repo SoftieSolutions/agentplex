@@ -94,6 +94,13 @@ export type HandshakeOutcome =
        */
       readonly providers: readonly ProviderReadiness[];
       /**
+       * What that machine says it runs, and which daemon build answered, as
+       * the frame carried them: `null` for either it could not name. Handed
+       * on unjudged, for the reason the providers are.
+       */
+      readonly os: string | null;
+      readonly daemonVersion: string | null;
+      /**
        * Left open, and the caller owns it from here. This is the point of
        * returning it: the connection the supervisor keeps is the one that
        * handshook, not a second one opened afterwards that would have to prove
@@ -196,12 +203,16 @@ export async function handshakeWithServer(
             serverId: frame.serverId,
             stores: frame.stores.length,
             providers: frame.providers.map(({ provider, state }) => `${provider}:${state}`),
+            os: frame.os,
+            daemonVersion: frame.daemonVersion,
           });
           settle({
             ok: true,
             serverId: frame.serverId,
             stores: frame.stores,
             providers: frame.providers,
+            os: frame.os,
+            daemonVersion: frame.daemonVersion,
             socket,
             nextFrameId,
           });
