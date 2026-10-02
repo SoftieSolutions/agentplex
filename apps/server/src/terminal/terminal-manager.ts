@@ -104,6 +104,9 @@ import type { LaunchOptions, PtyExit, PtyRun, PtySupervisor } from '@agentplex/p
  */
 export const KILL_GRACE_MS = 3_000;
 
+/** What a sealed manager answers every open with. */
+const SEALED = 'this server is shutting down';
+
 /**
  * Who is watching, rather than how many.
  *
@@ -351,6 +354,18 @@ export interface TerminalManager extends SessionLiveness {
   seal(): void;
   readonly sealed: boolean;
   /**
+   * Why a terminal could not be opened right now, in the words `spawn` and
+   * `resume` would refuse with, or `null` when one could.
+   *
+   * For a caller that has something to do first that it cannot take back --
+   * a retake ends a process before it resumes -- and so must hear the refusal
+   * before it acts. Asks without evicting anything: a terminal that would be
+   * closed to make room is only closed by the open that needs the room. A
+   * launch's own refusal and a holder of the session are the caller's to
+   * check; this is the manager's half.
+   */
+  openRefusal(): string | null;
+  /**
    * Shutdown. The one thing besides the cap that closes a terminal.
    *
    * Every terminal is gone from the manager by the time this returns; the
@@ -457,9 +472,7 @@ export function createTerminalManager({
     // reason: a sealed manager has no answer that involves starting something,
     // and evicting a terminal to make room on a server that is going down would
     // close a session for nothing.
-    if (sealed) {
-      return { ok: false, problem: 'this server is shutting down', holder: null };
-    }
+    if (sealed) return { ok: false, problem: SEALED, holder: null };
 
     if (sessionId !== null) {
       const held = liveHolderOf({ storeId, sessionId });
@@ -501,9 +514,7 @@ export function createTerminalManager({
         );
 
       const oldest = evictable[0];
-      if (oldest === undefined) {
-        return `the terminal cap of ${cap} is reached and every terminal is being watched`;
-      }
+      if (oldest === undefined) return capReached();
       // Not awaited: the start that asked for room is not held up by the
       // agent it displaced. `close` keeps that agent the holder of its session
       // until it has gone, which is what makes not waiting safe.
@@ -537,6 +548,9 @@ export function createTerminalManager({
     }
     return exited;
   };
+
+  const capReached = (): string =>
+    `the terminal cap of ${cap} is reached and every terminal is being watched`;
 
   const track = (
     run: PtyRun,
@@ -714,6 +728,13 @@ export function createTerminalManager({
 
     get sealed(): boolean {
       return sealed;
+    },
+
+    openRefusal(): string | null {
+      if (sealed) return SEALED;
+      if (terminals.size < cap) return null;
+      const evictable = [...terminals.values()].some(({ record }) => record.watchers.size === 0);
+      return evictable ? null : capReached();
     },
 
     async closeAll(): Promise<void> {

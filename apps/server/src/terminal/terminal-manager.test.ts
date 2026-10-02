@@ -937,3 +937,38 @@ describe('createTerminalManager seal', () => {
     expect(manager.spawn(STORE, launch).ok).toBe(false);
   });
 });
+
+describe('createTerminalManager openRefusal', () => {
+  // Asked by a caller that has something to do before it opens a terminal and
+  // cannot undo it afterwards -- a retake ends a process first -- so the answer
+  // has to be the one an open would give, and asking must cost nothing.
+  it('answers null while a terminal could open, and evicts nothing to find out', () => {
+    const { manager, factory } = harness(1);
+    open(manager);
+
+    expect(manager.openRefusal()).toBeNull();
+    expect(manager.terminals).toHaveLength(1);
+    expect(factory.ptys[0]?.kills).toBe(0);
+  });
+
+  it('names the cap when every terminal is watched, in the words an open refuses with', () => {
+    const { manager } = harness(1);
+    const watched = open(manager);
+    manager.terminal(watched)?.watch('a-hub', () => {});
+
+    const refusal = manager.openRefusal();
+
+    expect(refusal).toContain('terminal cap of 1');
+    expect(manager.spawn(STORE, launch)).toMatchObject({ ok: false, problem: refusal });
+  });
+
+  it('names the seal, in the words an open refuses with', () => {
+    const { manager } = harness();
+    manager.seal();
+
+    const refusal = manager.openRefusal();
+
+    expect(refusal).toBe('this server is shutting down');
+    expect(manager.spawn(STORE, launch)).toMatchObject({ ok: false, problem: refusal });
+  });
+});
