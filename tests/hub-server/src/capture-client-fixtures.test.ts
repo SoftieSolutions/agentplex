@@ -3526,7 +3526,13 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // -- a pane must say where it runs and send nothing. Then the resume
     // itself: the machine answers the start naming the session and reports it
     // held, which is the state a pane re-subscribes on.
+    //
+    // And a store both machines mount, whose session the hub publishes as
+    // `unknown` because neither machine can see the other's processes: the
+    // pane offers a resume there only when a person presses it, and the held
+    // state after that press is captured the same way.
     const resumableStore = storeIdSchema.parse('store-agentplex');
+    const resumableShared = storeIdSchema.parse('store-shared');
     const resumableReport = (held: boolean): StoreReport => ({
       storeId: resumableStore,
       sessions: [
@@ -3551,8 +3557,23 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       ],
       holding: held ? [hold('session-spike-wasm', true)] : [],
     });
+    const sharedReport = (held: boolean): StoreReport => ({
+      storeId: resumableShared,
+      sessions: [
+        descriptor(
+          'store-shared',
+          'session-shared-notes',
+          'claude',
+          'idle',
+          START - 30 * MINUTE,
+          '/mnt/shared/notes',
+          'shared-notes',
+        ),
+      ],
+      holding: held ? [hold('session-shared-notes', true)] : [],
+    });
     const resumableController = createFakeSessionController({
-      reports: [resumableReport(false)],
+      reports: [resumableReport(false), sharedReport(false)],
       outcome: {
         ok: true,
         storeId: resumableStore,
@@ -3567,20 +3588,43 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
           {
             serverId: 'server-mbp',
             providers: [readyProvider('claude'), readyProvider('codex')],
-            stores: [{ storeId: resumableStore, path: '/Users/robert/code/agentplex' }],
-            reports: [resumableReport(false)],
+            stores: [
+              { storeId: resumableStore, path: '/Users/robert/code/agentplex' },
+              { storeId: resumableShared, path: '/mnt/shared' },
+            ],
+            reports: [resumableReport(false), sharedReport(false)],
             controller: resumableController,
           },
         ],
+        [
+          'gpu-box.example',
+          {
+            serverId: 'server-gpu',
+            providers: [readyProvider('claude'), missingProvider('codex')],
+            stores: [{ storeId: resumableShared, path: '/mnt/shared' }],
+            reports: [sharedReport(false)],
+          },
+        ],
       ]),
-      [{ label: 'mbp-robert', host: 'mbp-robert.example' }],
+      [
+        { label: 'mbp-robert', host: 'mbp-robert.example' },
+        { label: 'gpu-box-01', host: 'gpu-box.example' },
+      ],
       new Map(),
     );
+    const sessionHeld = (sessionId: string) => (): boolean =>
+      resumableHub.hub.state
+        .snapshot()
+        .stores.some((view) =>
+          view.sessions.some(
+            (row) => row.descriptor.sessionId === sessionId && row.holder !== null,
+          ),
+        );
     await until(
       () =>
         resumableHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
-        sessionCount(resumableHub.hub) === 2,
-      'the resumable machine to connect and report',
+        sessionCount(resumableHub.hub) === 3,
+      'the resumable machines to connect and report',
     );
     const machineStateResumable = await captureState(resumableHub.hub);
     const resumer = await openClient(resumableHub.hub);
@@ -3602,19 +3646,42 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     await until(
       () =>
         resumer.received.some((text) => labelFor(text) === 'sessionStarted') &&
-        resumableHub.hub.state
-          .snapshot()
-          .stores.some((view) =>
-            view.sessions.some(
-              (row) => row.descriptor.sessionId === 'session-spike-wasm' && row.holder !== null,
-            ),
-          ),
+        sessionHeld('session-spike-wasm')(),
       () => `the resume to be answered and the session held: ${resumer.received.join('\n')}`,
     );
     const sessionStartedResumed = firstFrame(resumer, 'sessionStarted');
     // Read by a client that says hello now, as the other states here are: what
     // a pane is sent is the state as it stands when it asks.
     const machineStateResumed = await captureState(resumableHub.hub);
+
+    // Pinned to the machine whose controller answers, because which of two
+    // mounting machines the hub would pick is the router's question and not
+    // this capture's: what a pane reads is the answer and the held state.
+    resumableController.setReport(sharedReport(true));
+    resumableController.answerWith({
+      ok: true,
+      storeId: resumableShared,
+      sessionId: sessionIdSchema.parse('session-shared-notes'),
+      terminalId: 'terminal-mbp-shared',
+    });
+    resumer.send({
+      type: 'session-start',
+      id: 3,
+      storeId: 'store-shared',
+      sessionId: 'session-shared-notes',
+      provider: 'claude',
+      prompt: null,
+      server: 'registration-mbp-robert',
+      project: null,
+    });
+    await until(
+      () =>
+        resumer.received.filter((text) => labelFor(text) === 'sessionStarted').length === 2 &&
+        sessionHeld('session-shared-notes')(),
+      () => `the shared resume to be answered and held: ${resumer.received.join('\n')}`,
+    );
+    const sessionStartedShared = lastFrame(resumer, 'sessionStarted');
+    const machineStateSharedResumed = await captureState(resumableHub.hub);
     await resumableHub.cleanup();
 
     const captured = new Map<string, string>();
@@ -3716,6 +3783,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('machineStateResumable', machineStateResumable);
     captured.set('sessionStartedResumed', sessionStartedResumed);
     captured.set('machineStateResumed', machineStateResumed);
+    captured.set('sessionStartedShared', sessionStartedShared);
+    captured.set('machineStateSharedResumed', machineStateSharedResumed);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)
