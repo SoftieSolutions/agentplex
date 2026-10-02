@@ -29,7 +29,10 @@ import {
   hookLine,
 } from '../../../apps/server/src/approvals/fake-approval-hooks.js';
 import { createHubAudience } from '../../../apps/server/src/hub/hub-audience.js';
-import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
+import {
+  createFakeSessionController,
+  type FakeSessionController,
+} from '../../../apps/server/src/sessions/fake-session-controller.js';
 import {
   createFakeStoreFiles,
   createFakeProviderAdapter,
@@ -375,6 +378,13 @@ interface Machine {
   /** What it answers a pause and a resume with. Default: a refusal. */
   readonly pauseOutcome?: PauseOutcome;
   /**
+   * The fake controller itself, for the one capture that changes what a
+   * machine reports between two frames: a resume whose server holds the
+   * session once it has answered. Every other machine is handed a fresh fake
+   * built from the fields above.
+   */
+  readonly controller?: FakeSessionController;
+  /**
    * What a client may browse on this machine, and what is under it.
    *
    * Absent is a machine with no browse roots, which is the default a server
@@ -466,11 +476,13 @@ function fleetDialer(
       const machine = machines.get(host);
       if (machine === undefined) return { ok: false, problem: 'connection refused' };
       const { hubEnd, serverEnd } = createSocketPair();
-      const fake = createFakeSessionController(
-        machine.startOutcome === undefined
-          ? { reports: machine.reports }
-          : { reports: machine.reports, outcome: machine.startOutcome },
-      );
+      const fake =
+        machine.controller ??
+        createFakeSessionController(
+          machine.startOutcome === undefined
+            ? { reports: machine.reports }
+            : { reports: machine.reports, outcome: machine.startOutcome },
+        );
       if (machine.pauseOutcome !== undefined) fake.answerPauseWith(machine.pauseOutcome);
       const controller = machine.live?.sessions ?? fake;
       // A real scan reads a disk and takes event-loop turns; a fake that
@@ -3525,6 +3537,104 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
 
     const refusalNoPush = firstFrame(sixth, 'refusal');
 
+    // A pane opened on a session nothing runs, and on one something outside
+    // agentplex runs. One machine reports both, unheld: `spike-wasm` has no
+    // process and is the session a pane resumes on its own, and `cli-run` is
+    // working with no holder, which is a session somebody started in a shell
+    // -- a pane must say where it runs and send nothing. Then the resume
+    // itself: the machine answers the start naming the session and reports it
+    // held, which is the state a pane re-subscribes on.
+    const resumableStore = storeIdSchema.parse('store-agentplex');
+    const resumableReport = (held: boolean): StoreReport => ({
+      storeId: resumableStore,
+      sessions: [
+        descriptor(
+          'store-agentplex',
+          'session-spike-wasm',
+          'claude',
+          'idle',
+          START - 120 * MINUTE,
+          '/Users/robert/code/agentplex',
+          'spike-wasm',
+        ),
+        descriptor(
+          'store-agentplex',
+          'session-cli-run',
+          'claude',
+          'working',
+          START - 2 * MINUTE,
+          '/Users/robert/code/agentplex',
+          'cli-run',
+        ),
+      ],
+      holding: held ? [hold('session-spike-wasm', true)] : [],
+    });
+    const resumableController = createFakeSessionController({
+      reports: [resumableReport(false)],
+      outcome: {
+        ok: true,
+        storeId: resumableStore,
+        sessionId: sessionIdSchema.parse('session-spike-wasm'),
+        terminalId: 'terminal-mbp-resumed',
+      },
+    });
+    const resumableHub = await startFleetHub(
+      new Map<string, Machine>([
+        [
+          'mbp-robert.example',
+          {
+            serverId: 'server-mbp',
+            providers: [readyProvider('claude'), readyProvider('codex')],
+            stores: [{ storeId: resumableStore, path: '/Users/robert/code/agentplex' }],
+            reports: [resumableReport(false)],
+            controller: resumableController,
+          },
+        ],
+      ]),
+      [{ label: 'mbp-robert', host: 'mbp-robert.example' }],
+      new Map(),
+    );
+    await until(
+      () =>
+        resumableHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        sessionCount(resumableHub.hub) === 2,
+      'the resumable machine to connect and report',
+    );
+    const machineStateResumable = await captureState(resumableHub.hub);
+    const resumer = await openClient(resumableHub.hub);
+    resumer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    await resumer.framesReceived(2);
+    // What the machine reports once it runs the session, set before the start
+    // so the scan the server takes after answering one is the held reading.
+    resumableController.setReport(resumableReport(true));
+    resumer.send({
+      type: 'session-start',
+      id: 2,
+      storeId: 'store-agentplex',
+      sessionId: 'session-spike-wasm',
+      provider: 'claude',
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    await until(
+      () =>
+        resumer.received.some((text) => labelFor(text) === 'sessionStarted') &&
+        resumableHub.hub.state
+          .snapshot()
+          .stores.some((view) =>
+            view.sessions.some(
+              (row) => row.descriptor.sessionId === 'session-spike-wasm' && row.holder !== null,
+            ),
+          ),
+      () => `the resume to be answered and the session held: ${resumer.received.join('\n')}`,
+    );
+    const sessionStartedResumed = firstFrame(resumer, 'sessionStarted');
+    // Read by a client that says hello now, as the other states here are: what
+    // a pane is sent is the state as it stands when it asks.
+    const machineStateResumed = await captureState(resumableHub.hub);
+    await resumableHub.cleanup();
+
     const captured = new Map<string, string>();
     for (const text of [
       ...first.received,
@@ -3621,6 +3731,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('pushUnsubscribed', pushUnsubscribed);
     captured.set('refusalNoPush', refusalNoPush);
     captured.set('approvalPolicy', approvalPolicy);
+    captured.set('machineStateResumable', machineStateResumable);
+    captured.set('sessionStartedResumed', sessionStartedResumed);
+    captured.set('machineStateResumed', machineStateResumed);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)
