@@ -140,6 +140,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     problem: null,
     hubId: null,
     machineState: null,
+    machineStateCurrent: true,
     layout: null,
     paneLayout: null,
     commandQueue: { queued: 0, capacity: 32, overflowed: null },

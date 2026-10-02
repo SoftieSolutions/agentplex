@@ -481,6 +481,7 @@ export function SessionPane({
     terminal,
     everHeld: held.everHeld || memory.ran,
     startLapsed: memory.lapsed,
+    stateCurrent: snapshot.machineStateCurrent,
     phase: snapshot.phase,
   });
   const provider: Provider | null = row?.descriptor.provider ?? null;

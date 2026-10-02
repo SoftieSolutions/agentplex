@@ -86,6 +86,7 @@ function input(overrides: Partial<PaneStateInput>): PaneStateInput {
     everHeld: false,
     startLapsed: false,
     phase: 'connected',
+    stateCurrent: true,
     ...overrides,
   };
 }
@@ -121,6 +122,15 @@ describe('paneState', () => {
       kind: 'starting',
       send: false,
     });
+  });
+
+  it('waits for this connection’s own state before resuming on its own', () => {
+    // A welcome is answered with the whole current state, but the one held
+    // until it lands is the last connection's: nothing to act on.
+    const state = paneState(input({ stateCurrent: false }));
+    expect(state).toMatchObject({ kind: 'starting', send: false });
+    if (state.kind !== 'starting') return;
+    expect(state.words).toContain('current state');
   });
 
   it('goes on starting, sending nothing more, while the start is owed an answer', () => {

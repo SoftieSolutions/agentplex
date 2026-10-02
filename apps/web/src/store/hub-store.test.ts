@@ -1137,6 +1137,27 @@ describe('what is still owed an answer', () => {
   });
 });
 
+describe('whether the state is this connection’s', () => {
+  it('is not until a state arrives after the welcome, though the last one is kept', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    expect(h.store.getSnapshot().machineStateCurrent).toBe(false);
+    socket.deliver(hubFrames.machineState);
+    expect(h.store.getSnapshot().machineStateCurrent).toBe(true);
+
+    socket.drop();
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+    expect(h.store.getSnapshot().phase).toBe('connected');
+    expect(h.store.getSnapshot().machineState).not.toBeNull();
+    expect(h.store.getSnapshot().machineStateCurrent).toBe(false);
+
+    next.deliver(hubFrames.machineState);
+    expect(h.store.getSnapshot().machineStateCurrent).toBe(true);
+  });
+});
+
 describe('resume memory', () => {
   it('remembers a session stopped from this page, sent or queued, past a teardown', async () => {
     const h = harness();

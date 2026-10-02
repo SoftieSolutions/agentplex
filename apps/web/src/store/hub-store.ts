@@ -242,6 +242,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     problem: null,
     hubId: null,
     machineState: null,
+    machineStateCurrent: false,
     layout: null,
     paneLayout: null,
     commandQueue: { ...INITIAL_QUEUE, capacity },
@@ -392,6 +393,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         connection.welcomed();
         update({
           phase: 'connected',
+          // The state kept is the last connection's until this one's lands.
+          machineStateCurrent: false,
           hubId: frame.hubId,
           // Taken from every welcome and not only the first. A hub that was
           // restarted with push wired in is a hub whose next welcome says so,
@@ -417,6 +420,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // whole current state. The latest frame received is the state.
         update({
           machineState: frame.state,
+          machineStateCurrent: true,
           resumes: rememberState(snapshot.resumes, frame.state, snapshot.answers.replies),
         });
         return;
@@ -649,6 +653,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     terminals.detach();
     update({
       phase: 'idle',
+      machineStateCurrent: false,
       commandQueue: queueView(null),
       terminalInput: INITIAL_TERMINAL,
       // An answer is to a frame some screen sent on a connection that is now
