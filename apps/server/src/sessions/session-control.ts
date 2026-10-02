@@ -775,16 +775,35 @@ export function createSessionController(
       asks: opened !== undefined && opened !== null,
       after,
     });
-    return answer(store.storeId, resumed);
+    const outcome = answer(store.storeId, resumed);
+    // After a retake the refusal is a launch that failed once the process it
+    // replaces had gone -- the checks that could run first did -- and saying
+    // only why it failed would leave the reader thinking the session runs on
+    // where it was.
+    if (after === 'retake' && !outcome.ok) {
+      return {
+        ...outcome,
+        problem: `that session was stopped, but it could not be started here: ${outcome.problem}`,
+      };
+    }
+    return outcome;
   }
 
   /**
    * Ends the outside process running a session, then resumes it here.
    *
-   * Every check that can refuse runs before anything is signalled, and the
-   * signal goes to a pid the adapter verified in the same breath -- nothing
-   * awaited between the second `liveProcess` and the SIGHUP -- because a pid
-   * is stale the moment it is read and this one is about to be ended.
+   * Every refusal that can be known beforehand is made before anything is
+   * signalled: the session's phase, its transcript, a sealed manager, a cap
+   * with every terminal watched, and a launch the adapter will not plan. Three
+   * can be learned only afterwards, and each says so: a process that has not
+   * ended by the bound, something else taking the session while it went, and
+   * a launch that fails once it has gone. Those are not quite all: the
+   * snapshot of the manager can change while the process ends, which is a
+   * launch that fails and is worded as one.
+   *
+   * The signal goes to a pid the adapter verified in the same breath --
+   * nothing awaited between the second `liveProcess` and the SIGHUP -- because
+   * a pid is stale the moment it is read and this one is about to be ended.
    *
    * Only at the prompt or at a question. `idle` and `waiting` are a process
    * whose transcript already holds everything it did; a turn in flight, a
@@ -809,7 +828,8 @@ export function createSessionController(
     const { sessions: known, origins } = await discover(store);
     bindSpawned(store.storeId, known, origins);
     if (terminals.isRunning(session)) return alreadyHeld(session);
-    if (!known.some((one) => one.sessionId === session.sessionId)) {
+    const descriptor = known.find((one) => one.sessionId === session.sessionId);
+    if (descriptor === undefined) {
       return refused('this server cannot find that session in that store');
     }
 
@@ -822,6 +842,16 @@ export function createSessionController(
         'this server finds no transcript to resume that session from, so it ends nothing',
       );
     }
+
+    // What the resume after the signal would refuse, refused before it: a
+    // sealed manager, a cap with every terminal watched, and a launch the
+    // adapter will not plan. The plan is made without an approval, which adds
+    // only a settings file to argv; what a plan is refused for is the working
+    // directory, and that is the session's own.
+    const room = terminals.openRefusal();
+    if (room !== null) return refused(room);
+    const planned = adapter.resume({ store, session, cwd: descriptor.cwd, approval: null });
+    if (!planned.ok) return refused(planned.problem);
 
     // The re-verify, and the signal straight after it.
     const now = await liveProcessOf(store, adapter, session);

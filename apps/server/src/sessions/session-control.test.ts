@@ -120,6 +120,8 @@ interface MachineOptions {
   readonly files?: Readonly<Record<string, string>>;
   /** The pid each fake pty reports, in the order they are opened. */
   readonly pids?: readonly number[];
+  /** Every pty refuses to open with this message, as a machine that cannot fork does. */
+  readonly failsToOpen?: string;
   /** How many terminals the machine keeps before it evicts one. */
   readonly cap?: number;
   /** The home directory of the account the server runs as. Default `HOME`. */
@@ -227,7 +229,10 @@ function machine(options: MachineOptions = {}): Machine {
     stat: (path) => createFakeProviderFiles({ files: transcripts }).stat(path),
   };
 
-  const ptys = createFakePtyFactory(options.pids === undefined ? {} : { pids: options.pids });
+  const ptys = createFakePtyFactory({
+    ...(options.pids === undefined ? {} : { pids: options.pids }),
+    ...(options.failsToOpen === undefined ? {} : { failsToOpen: options.failsToOpen }),
+  });
   const terminals = createTerminalManager({
     supervisor: createPtySupervisor({
       pty: ptys,
@@ -1428,6 +1433,70 @@ describe('a retake of a session a claude outside agentplex is running', () => {
     expect(refusal(await pending)).toContain('could not tell whether');
     expect(signaller.sent).toEqual([{ pid: OUTSIDE_PID, signal: 'SIGHUP' }]);
     expect(ptys.opened).toEqual([]);
+  });
+
+  describe('refusing before anything is signalled what the resume after it would refuse', () => {
+    // Every one of these would otherwise end somebody's claude and then say
+    // no: the process is gone and nothing took its place.
+    it('refuses while this server is shutting down', async () => {
+      const { sessions, terminals, signaller, ptys } = await outsideClaude({ status: 'idle' });
+      terminals.seal();
+
+      expect(refusal(await retake(sessions))).toBe('this server is shutting down');
+      expect(signaller.sent).toEqual([]);
+      expect(ptys.opened).toEqual([]);
+    });
+
+    it('refuses at the terminal cap when every terminal is being watched', async () => {
+      const { sessions, terminals, signaller, ptys } = await outsideClaude(
+        { status: 'idle' },
+        { cap: 1, pids: [NEW_PID, NEW_PID + 1] },
+      );
+      const opened = terminals.spawn(STORE, {
+        ok: true,
+        plan: { command: 'claude', args: [], cwd: '/checkouts', env: {}, scrubEnvPrefixes: [] },
+      });
+      if (!opened.ok) throw new Error(opened.problem);
+      terminals.terminal(opened.terminal.terminalId)?.watch('a-hub', () => {});
+
+      expect(refusal(await retake(sessions))).toContain('terminal cap of 1');
+      expect(signaller.sent).toEqual([]);
+      expect(ptys.opened).toHaveLength(1);
+    });
+
+    it('refuses a session whose working directory no launch would run in', async () => {
+      // Inside the store, which the launch planner refuses whoever asks.
+      const transcript = (await readProviderFixture('claude-completed-turn.jsonl')).replaceAll(
+        '/Users/dev/Code/agentplex',
+        `${STORE.path}/inside`,
+      );
+      const { sessions, signaller, ptys } = await outsideClaude(
+        { status: 'idle' },
+        { files: { [TRANSCRIPT]: transcript } },
+      );
+
+      expect(refusal(await retake(sessions))).toContain(`${STORE.path}/inside`);
+      expect(signaller.sent).toEqual([]);
+      expect(ptys.opened).toEqual([]);
+    });
+  });
+
+  it('says the process was stopped when the launch after it fails', async () => {
+    // The one refusal no check can get ahead of: whether this machine can fork
+    // is learned by forking, and by then the outside claude has gone.
+    const { sessions, signaller, timers } = await outsideClaude(
+      { status: 'idle' },
+      { failsToOpen: 'posix_spawnp failed.' },
+    );
+
+    const pending = retake(sessions);
+    await settle();
+    await poll(timers);
+    const problem = refusal(await pending);
+
+    expect(signaller.sent).toEqual([{ pid: OUTSIDE_PID, signal: 'SIGHUP' }]);
+    expect(problem).toContain('was stopped, but it could not be started here');
+    expect(problem).toContain('posix_spawnp failed.');
   });
 
   it('refuses in words when the process belongs to another account', async () => {
