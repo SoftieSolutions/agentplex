@@ -33,7 +33,11 @@ import { machineLabel } from './presentation.js';
  * left to say. Then this pane's own start, because a person who pressed
  * Resume is owed what became of that press over anything the row said before
  * it. Then the session ending, which never resumes on its own -- a session
- * somebody just stopped is not one to restart behind their back. Then what
+ * somebody just stopped is not one to restart behind their back. That covers
+ * every session a pane on this page has seen run, held or not: a pane resumes
+ * on its own only a session that was already not running when it opened, and
+ * one that stops while it watches -- somebody quitting their own claude in
+ * another terminal -- is said to have stopped, with Resume to press. Then what
  * the row says about a process, degrading towards not acting: `running` and
  * unheld is somebody else's process, `unknown` is a question only a person
  * can answer, and only `none` is permission to start one.
@@ -72,7 +76,7 @@ export type PaneState =
   | { readonly kind: 'refused'; readonly words: string; readonly action: 'try-again' }
   /** This pane's start went out and no answer will ever come for it. */
   | { readonly kind: 'lost'; readonly words: string; readonly action: 'try-again' }
-  /** The session ended under this pane, or stopped after it was held. */
+  /** The session ended under this pane, or stopped after a pane saw it run. */
   | { readonly kind: 'ended'; readonly words: string; readonly action: 'resume' }
   /** Every machine that reported it is out of reach. */
   | {
@@ -114,8 +118,11 @@ export interface PaneStateInput {
   readonly start: FollowUp<Answer<'session-started'>> | null;
   /** The watched terminal's ending, when the pane is watching one. */
   readonly terminal: { readonly ended: SubscriptionEndReason | null } | null;
-  /** Whether this pane has seen the session held since it opened. */
-  readonly everHeld: boolean;
+  /**
+   * Whether a pane on this page has seen a process run the session: held by
+   * agentplex, run outside it, ended under a pane, or stopped from here.
+   */
+  readonly ran: boolean;
   /** Whether a state since the start was answered still shows nothing running it. */
   readonly startLapsed: boolean;
   readonly phase: ConnectionPhase;
@@ -131,7 +138,7 @@ const CANNOT_TELL_WARNING =
   'session for both: resume only if you know nothing else is running it';
 
 export function paneState(input: PaneStateInput): PaneState {
-  const { row, state, start, terminal, everHeld, startLapsed, phase, stateCurrent } = input;
+  const { row, state, start, terminal, ran, startLapsed, phase, stateCurrent } = input;
   if (row === null) return { kind: 'unknown-row' };
   if (row.holder !== null) return { kind: 'held' };
 
@@ -178,10 +185,11 @@ export function paneState(input: PaneStateInput): PaneState {
   }
 
   const process = row.descriptor.process;
-  if (terminal?.ended === 'session-ended' || (everHeld && process === 'none')) {
+  if (terminal?.ended === 'session-ended' || (ran && process === 'none')) {
     return {
       kind: 'ended',
-      words: 'this session is no longer running: the process that held it has ended',
+      words:
+        'this session stopped: the process that ran it has ended, and nothing is running it now',
       action: 'resume',
     };
   }

@@ -83,7 +83,7 @@ function input(overrides: Partial<PaneStateInput>): PaneStateInput {
     state: resumable,
     start: null,
     terminal: null,
-    everHeld: false,
+    ran: false,
     startLapsed: false,
     phase: 'connected',
     stateCurrent: true,
@@ -191,7 +191,17 @@ describe('paneState', () => {
     // The moment between the holder going and the hub ending the
     // subscription: a pane that read it as a session to resume would restart
     // a session somebody had just stopped.
-    expect(paneState(input({ everHeld: true }))).toMatchObject({ kind: 'ended' });
+    expect(paneState(input({ ran: true }))).toMatchObject({ kind: 'ended' });
+  });
+
+  it('says a session stopped, and waits for a press, once a pane has seen it run anywhere', () => {
+    // Somebody quit their own claude in another terminal: the pane saw it
+    // running outside agentplex, and now nothing runs it. That is a session
+    // that stopped, not one that was already stopped when the pane opened.
+    const state = paneState(input({ ran: true }));
+    expect(state).toMatchObject({ kind: 'ended', action: 'resume' });
+    if (state.kind !== 'ended') return;
+    expect(state.words).toContain('stopped');
   });
 
   it('does not read a dropped or draining machine as the session ending', () => {
@@ -208,8 +218,7 @@ describe('paneState', () => {
       'session-started',
     );
     expect(
-      paneState(input({ terminal: { ended: 'session-ended' }, everHeld: true, start: waiting }))
-        .kind,
+      paneState(input({ terminal: { ended: 'session-ended' }, ran: true, start: waiting })).kind,
     ).toBe('starting');
   });
 
