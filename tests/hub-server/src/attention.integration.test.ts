@@ -104,6 +104,7 @@ function descriptor(
     sessionId: sessionIdSchema.parse(sessionId),
     provider: 'claude',
     status,
+    process: 'none',
     updatedAt,
     cwd: '/Users/robert/code/agentplex',
     branch: null,

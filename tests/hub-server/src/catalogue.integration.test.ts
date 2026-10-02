@@ -81,6 +81,7 @@ function descriptor(storeId: StoreId, sessionId: string, title: string | null): 
     sessionId: sessionIdSchema.parse(sessionId),
     provider: 'claude',
     status: 'idle',
+    process: 'none',
     updatedAt: START,
     cwd: null,
     branch: null,

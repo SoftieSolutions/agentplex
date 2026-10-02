@@ -90,6 +90,7 @@ function descriptor(sessionId: string, cwd: string | null = null): SessionDescri
     sessionId: sessionIdSchema.parse(sessionId),
     provider: 'claude',
     status: 'idle',
+    process: 'none',
     updatedAt: NOW,
     cwd,
     branch: null,

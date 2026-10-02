@@ -34,6 +34,7 @@ function descriptorOf(
     sessionId: sessionIdSchema.parse(sessionId),
     provider: 'claude',
     status: 'working',
+    process: 'running',
     updatedAt: START,
     cwd: '/volumes/work',
     branch: 'master',

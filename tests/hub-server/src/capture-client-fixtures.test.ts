@@ -581,6 +581,11 @@ function descriptor(
     sessionId: sessionIdSchema.parse(sessionId),
     provider,
     status,
+    // A working row is one its server is running, and every other row is one
+    // its server looked for a process on and found none. The hub lowers that
+    // `none` on a store two servers mount, so the captured frames carry the
+    // three words a client has to draw.
+    process: status === 'working' ? 'running' : 'none',
     updatedAt,
     cwd,
     branch,

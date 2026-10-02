@@ -166,6 +166,7 @@ function tellingSession(status: SessionDescriptor['status'], updatedAt: number):
     sessionId: EDGE.sessionId,
     provider: 'claude',
     status,
+    process: 'none',
     updatedAt,
     cwd: TELLING_CWD,
     branch: TELLING_BRANCH,

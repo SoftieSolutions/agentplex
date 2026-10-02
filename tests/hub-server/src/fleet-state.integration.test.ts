@@ -235,6 +235,9 @@ function session(
     sessionId: sessionIdSchema.parse(id),
     provider: 'claude',
     status,
+    // What a real server says: `working` is a row its adapter verified a
+    // process for, and any other row is one it looked at and found none.
+    process: status === 'working' ? 'running' : 'none',
     updatedAt: START,
     cwd: '/volumes/claude/work',
     ...(model === undefined ? {} : { model }),

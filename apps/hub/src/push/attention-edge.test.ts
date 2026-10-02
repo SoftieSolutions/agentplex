@@ -81,6 +81,7 @@ function session(id: string, options: SessionOptions = {}): SessionDescriptor {
     sessionId: sessionIdSchema.parse(id),
     provider: 'claude',
     status: options.status ?? 'awaiting-permission',
+    process: 'none',
     updatedAt: options.updatedAt ?? START,
     // The three fields a notification may never carry. They are here because a
     // real descriptor has them, and the test below reads the event for them.

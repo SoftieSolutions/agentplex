@@ -161,6 +161,7 @@ function row(
       sessionId: QUIET,
       provider: 'claude',
       status: 'awaiting-input',
+      process: 'none',
       updatedAt: 1,
       cwd: null,
       branch: null,

@@ -103,6 +103,7 @@ function descriptor(sessionId: string): SessionDescriptor {
     sessionId: sessionIdSchema.parse(sessionId),
     provider: 'claude',
     status: 'awaiting-permission',
+    process: 'none',
     updatedAt: START - 60_000,
     cwd: '/Users/robert/code/agentplex',
     branch: null,
