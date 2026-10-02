@@ -23,8 +23,18 @@ import type { HubStore } from '../store/hub-store.js';
  * this seam, which is why the seam takes the target rather than either.
  */
 const NOTHING = (): null => null;
+const NO_WATCH = (): void => {};
 
-export function useTerminalWatch(store: HubStore, target: ClientTerminalTarget): void {
-  const subscribe = useCallback(() => store.watchTerminal(target), [store, target]);
+/**
+ * `null` declares no interest at all, which is how a session pane says it has
+ * nothing to watch: a session no process runs has no terminal, and a subscribe
+ * to one is a refusal the hub would only have to send. The hook is still
+ * called, so the pane's hooks stay in one order whichever it is showing.
+ */
+export function useTerminalWatch(store: HubStore, target: ClientTerminalTarget | null): void {
+  const subscribe = useCallback(
+    () => (target === null ? NO_WATCH : store.watchTerminal(target)),
+    [store, target],
+  );
   useSyncExternalStore(subscribe, NOTHING);
 }

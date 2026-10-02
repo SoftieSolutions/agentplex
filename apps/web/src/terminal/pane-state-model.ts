@@ -3,6 +3,7 @@ import type {
   MachineState,
   Provider,
   ServerView,
+  SessionDescriptor,
   SessionRow,
   StoreId,
   SubscriptionEndReason,
@@ -252,12 +253,14 @@ function unsupportedReasons(
  * own prompt -- and no project, because the directory is the one its own
  * transcript recorded and the hub refuses a resume that names one.
  */
-export function resumeCommand(row: SessionRow): HubCommand {
+export function resumeCommand(
+  session: Pick<SessionDescriptor, 'storeId' | 'sessionId' | 'provider'>,
+): HubCommand {
   return {
     type: 'session-start',
-    storeId: row.descriptor.storeId,
-    sessionId: row.descriptor.sessionId,
-    provider: row.descriptor.provider,
+    storeId: session.storeId,
+    sessionId: session.sessionId,
+    provider: session.provider,
     prompt: null,
     server: null,
     project: null,
