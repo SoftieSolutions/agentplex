@@ -1,0 +1,137 @@
+import type { FrameId, MachineState, SessionRef } from '@agentplex/protocol';
+import type { Reply } from './answers.js';
+import type { HubCommand } from './commands.js';
+
+/**
+ * What this page has learnt about resuming one session, kept for as long as
+ * the page is, by the session and not by the pane looking at it.
+ *
+ * A pane is not the thing that lasts. Splitting it, closing its sibling, or
+ * leaving the layout and coming back mounts it again from nothing, and a pane
+ * that kept these facts in its own state would open on a session somebody
+ * just stopped as though it had never seen it run -- and restart it. So the
+ * facts that stop a pane resuming on its own live here, in the store every
+ * pane already reads, and a remounted pane picks them up where the last one
+ * left them.
+ *
+ * By session and not by pane means a second pane on the session reads the
+ * first one's facts too, which errs the safe way: what any pane on this page
+ * saw running is never restarted behind anybody's back by another.
+ */
+export interface ResumeMemory {
+  /**
+   * Whether a process was seen running this session: held by agentplex, run
+   * outside it, ended under a pane, or stopped from this page. A session that
+   * ran is resumed only by a press.
+   */
+  readonly ran: boolean;
+  /**
+   * The last start this page sent for it, until a state shows the session
+   * held -- which is that start's answer, and after which an ending is an
+   * ending and not "still starting".
+   */
+  readonly start: FrameId | null;
+  /**
+   * Whether a state that arrived after the hub answered that start still
+   * showed nothing running the session.
+   *
+   * A server reports a hold only for a live terminal, so a resume that exits
+   * before its machine reports again is never seen held, and a pane waiting
+   * for the holder would wait for ever with nothing to press. This is the
+   * pane's way out. It can be early -- another machine's report can move the
+   * state before the starting one's does -- and the holder appearing still
+   * beats it, so the cost of early is a button shown for a moment.
+   */
+  readonly lapsed: boolean;
+}
+
+export type ResumeMemories = ReadonlyMap<string, ResumeMemory>;
+
+export const NO_RESUME_MEMORY: ResumeMemory = { ran: false, start: null, lapsed: false };
+
+type Addressed = Pick<SessionRef, 'storeId' | 'sessionId'>;
+
+function keyOf(ref: Addressed): string {
+  return JSON.stringify([ref.storeId, ref.sessionId]);
+}
+
+export function resumeMemoryOf(memories: ResumeMemories, ref: Addressed): ResumeMemory {
+  return memories.get(keyOf(ref)) ?? NO_RESUME_MEMORY;
+}
+
+function withMemory(
+  memories: ResumeMemories,
+  ref: Addressed,
+  change: (memory: ResumeMemory) => ResumeMemory,
+): ResumeMemories {
+  const before = resumeMemoryOf(memories, ref);
+  const after = change(before);
+  if (after.ran === before.ran && after.start === before.start && after.lapsed === before.lapsed) {
+    return memories;
+  }
+  return new Map(memories).set(keyOf(ref), after);
+}
+
+/** A pane saw a process run the session. The same memories back when it already knew. */
+export function rememberRan(memories: ResumeMemories, ref: Addressed): ResumeMemories {
+  return withMemory(memories, ref, (memory) => ({ ...memory, ran: true }));
+}
+
+/**
+ * What a command this page sent says about a session: a start that names one
+ * is that session's start, and a stop is a session somebody here watched run.
+ */
+export function rememberCommand(
+  memories: ResumeMemories,
+  command: HubCommand,
+  id: FrameId,
+): ResumeMemories {
+  switch (command.type) {
+    case 'session-start': {
+      const { storeId, sessionId } = command;
+      if (sessionId === null) return memories;
+      return withMemory(memories, { storeId, sessionId }, (memory) => ({
+        ...memory,
+        start: id,
+        lapsed: false,
+      }));
+    }
+    case 'session-stop':
+      return rememberRan(memories, command);
+    default:
+      return memories;
+  }
+}
+
+/**
+ * What a state says about each remembered start: held answers it, and nothing
+ * running it after the hub said it started means it lapsed.
+ *
+ * `replies` are the answers already received, so an answer among them came
+ * before this state did.
+ */
+export function rememberState(
+  memories: ResumeMemories,
+  state: MachineState,
+  replies: ReadonlyMap<FrameId, Reply>,
+): ResumeMemories {
+  let next = memories;
+  for (const store of state.stores) {
+    for (const row of store.sessions) {
+      const ref = { storeId: store.storeId, sessionId: row.descriptor.sessionId };
+      const { start } = resumeMemoryOf(next, ref);
+      if (start === null) continue;
+      if (row.holder !== null) {
+        next = withMemory(next, ref, () => NO_RESUME_MEMORY_RAN);
+      } else if (
+        row.descriptor.process === 'none' &&
+        replies.get(start)?.type === 'session-started'
+      ) {
+        next = withMemory(next, ref, (memory) => ({ ...memory, lapsed: true }));
+      }
+    }
+  }
+  return next;
+}
+
+const NO_RESUME_MEMORY_RAN: ResumeMemory = { ran: true, start: null, lapsed: false };

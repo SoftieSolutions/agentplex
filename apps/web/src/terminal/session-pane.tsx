@@ -12,12 +12,14 @@ import {
   assertNever,
   type ClientTerminalTarget,
   type PendingApproval,
+  type Provider,
   type SessionRef,
   type TerminalSize,
 } from '@agentplex/protocol';
 
-import { refusalTo } from '../store/answers.js';
+import { followUp, refusalTo } from '../store/answers.js';
 import type { HubStore } from '../store/hub-store.js';
+import { resumeMemoryOf } from '../store/resume-memory.js';
 import { terminalKey } from '../store/terminals.js';
 import type { TerminalWatchView } from '../store/views.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
@@ -56,11 +58,7 @@ import {
   type CrumbRole,
 } from './presentation.js';
 import { projectForSession, type SessionProject } from '../sessions/approval-policy-model.js';
-import {
-  approvalsOldestFirst,
-  toneForSession,
-  wordsForSession,
-} from '../sessions/session-list-model.js';
+import { approvalsOldestFirst } from '../sessions/session-list-model.js';
 import { PauseButton } from '../sessions/pause-button.js';
 import { StopButton } from '../sessions/stop-button.js';
 import { ToneDot } from '../ui/tone-dot.js';
@@ -76,6 +74,13 @@ import { TranscriptPanel } from './transcript-panel.js';
 import { chunkTerminalInput } from './terminal-input.js';
 import { TerminalView } from './terminal-view.js';
 import { useTerminalWatch } from './use-terminal-watch.js';
+import {
+  headerTone,
+  headerWords,
+  paneState,
+  resumeCommand,
+  type PaneState,
+} from './pane-state-model.js';
 
 /**
  * The open-session screen (mockup 7c): header row, tab strip, terminal, steer
@@ -266,6 +271,117 @@ function hasCoarsePointer(): boolean {
   return window.matchMedia('(pointer: coarse)').matches;
 }
 
+/**
+ * Where the row stood on the last render: absent, held, or published with
+ * nobody holding it.
+ *
+ * Three and not a boolean because the move into held means two different
+ * things depending on where it came from. From no row at all, the pane has
+ * been watching by address the whole time and its subscription is the one a
+ * held session wants. From an unheld row, the pane was watching nothing -- or
+ * watching a record the hub refused or ended -- and only a fresh target makes
+ * the store subscribe again.
+ */
+type RowStanding = 'no-row' | 'held' | 'unheld';
+
+/** What the pane remembers about the holder across renders. */
+interface HeldMemory {
+  /** The session this memory is about; a different one starts it over. */
+  readonly ref: SessionRef;
+  readonly last: RowStanding;
+  /** Whether this pane has seen the session held since it opened. */
+  readonly everHeld: boolean;
+  /**
+   * The address the terminal is watched by.
+   *
+   * Kept as one object, so the watch is not given back and retaken on every
+   * render, and replaced on each move from unheld into held: a new object is
+   * what makes the store subscribe again for a record it refused or ended,
+   * where the same object would leave the pane on that record's refusal. A
+   * pane addresses a session; the start handle the target union also allows
+   * belongs to a spawn the provider has not named, which no address can name.
+   */
+  readonly target: ClientTerminalTarget;
+}
+
+function addressOf(ref: SessionRef): ClientTerminalTarget {
+  return { by: 'session', storeId: ref.storeId, sessionId: ref.sessionId };
+}
+
+/** The control a pane state offers, as the words on it. */
+const ACTION_WORDS = { resume: 'Resume', 'try-again': 'Try again' } as const;
+
+interface PaneStateNoticeProps {
+  readonly pane: PaneState;
+  readonly scheme: Scheme;
+  /** The ref callback that sends the pane's own resume when its element appears. */
+  readonly autoResume: (node: HTMLElement | null) => void;
+  /** A press of the state's control: a resume, either way. */
+  readonly onAction: () => void;
+  /** Whether a press can go now. A start is intent about now, so it is never queued. */
+  readonly canAct: boolean;
+}
+
+/**
+ * What a pane draws in place of the terminal, said in full.
+ *
+ * Loud on purpose. Every one of these is a session somebody opened expecting a
+ * terminal, and each needs a different thing done -- wait, press, go to the
+ * machine, install a provider -- so each says which, in a sentence, where the
+ * terminal would have been.
+ */
+function PaneStateNotice({
+  pane,
+  scheme,
+  autoResume,
+  onAction,
+  canAct,
+}: PaneStateNoticeProps): JSX.Element | null {
+  if (pane.kind === 'held' || pane.kind === 'unknown-row') return null;
+  return (
+    <Stack
+      gap={8}
+      px={18}
+      py={16}
+      data-pane-state={pane.kind}
+      role="status"
+      style={{ flex: pane.kind === 'ended' ? 'none' : 1 }}
+    >
+      {pane.kind === 'refused' ? (
+        <Text fz={13} data-pane-refusal style={{ color: colorForToneText('blocked', scheme) }}>
+          {`the hub would not resume this session: ${pane.words}`}
+        </Text>
+      ) : (
+        <Text fz={13} style={{ color: colorForRole('text', scheme) }}>
+          {pane.words}
+        </Text>
+      )}
+      {pane.kind === 'cannot-tell' && (
+        <Text fz={12} style={{ color: colorForToneText('needs-you', scheme) }}>
+          {pane.warning}
+        </Text>
+      )}
+      {pane.kind === 'unsupported' && (
+        <Stack component="ul" gap={4} m={0} pl={18}>
+          {pane.reasons.map((reason) => (
+            <Text component="li" key={reason} fz={12} c="dimmed" data-pane-reason>
+              {reason}
+            </Text>
+          ))}
+        </Stack>
+      )}
+      {pane.kind === 'starting' && pane.send && <span ref={autoResume} hidden />}
+      {pane.action !== null && (
+        <Group>
+          <Button size="xs" data-pane-action={pane.action} disabled={!canAct} onClick={onAction}>
+            {ACTION_WORDS[pane.action]}
+          </Button>
+        </Group>
+      )}
+    </Stack>
+  );
+}
+
 export interface SessionPaneProps {
   readonly sessionRef: SessionRef;
   /** The page's one hub store, handed down through the layout. */
@@ -309,16 +425,126 @@ export function SessionPane({
    */
   const form = useShellForm();
   const snapshot = useHubSnapshot(hub);
-  // A pane addresses a session; the start handle the target union also allows
-  // belongs to a spawn the provider has not named, which no address can name
-  // either. Memoized on the ref so the watch is not given back and retaken on
-  // every render.
-  const target = useMemo<ClientTerminalTarget>(
-    () => ({ by: 'session', storeId: sessionRef.storeId, sessionId: sessionRef.sessionId }),
-    [sessionRef],
-  );
+  const state = snapshot.machineState;
+  const row = findSessionRow(state, sessionRef);
+  const standing: RowStanding = row === null ? 'no-row' : row.holder !== null ? 'held' : 'unheld';
+  /**
+   * The holder as this pane has seen it, kept at render rather than watched
+   * for: React's own pattern for a value derived from the previous render, and
+   * the set is guarded by the comparison so it settles in one extra pass.
+   *
+   * What has to outlive the pane -- that the session ran, and the start sent
+   * for it -- is not here but in the store's resume memory, read below: a
+   * split or a trip away from the layout mounts this pane again from nothing,
+   * and this memory goes with it.
+   */
+  const [held, setHeld] = useState<HeldMemory>(() => ({
+    ref: sessionRef,
+    last: standing,
+    everHeld: standing === 'held',
+    target: addressOf(sessionRef),
+  }));
+  if (held.ref !== sessionRef || held.last !== standing) {
+    const sameSession = held.ref === sessionRef;
+    setHeld({
+      ref: sessionRef,
+      last: standing,
+      everHeld: (sameSession && held.everHeld) || standing === 'held',
+      target:
+        !sameSession || (held.last === 'unheld' && standing === 'held')
+          ? addressOf(sessionRef)
+          : held.target,
+    });
+  }
+  /**
+   * Whether this pane watches a terminal at all.
+   *
+   * A held session has one. A pane whose row the state does not hold keeps the
+   * watch it always had, because a pending pane becomes a session pane before
+   * the scan that names its session lands, and its terminal is that one. And a
+   * pane that has seen the session held keeps watching after the holder goes,
+   * so what the terminal printed last stays on screen under the ending. Every
+   * other pane is looking at a session with no terminal in agentplex, and a
+   * subscribe would only be a refusal the hub had to send.
+   */
+  const watching = standing !== 'unheld' || held.everHeld;
+  const target: ClientTerminalTarget | null = watching ? held.target : null;
   useTerminalWatch(hub, target);
-  const terminal: TerminalWatchView | null = snapshot.terminals.get(terminalKey(target)) ?? null;
+  const terminal: TerminalWatchView | null =
+    target === null ? null : (snapshot.terminals.get(terminalKey(target)) ?? null);
+  /**
+   * Whether the hub said the session ended under this pane's watch, read off
+   * the address whether or not the pane still watches it.
+   *
+   * A pending pane watches by address with no row, and the row that arrives
+   * unheld ends that watch -- on the very render where the ending is the one
+   * fact that says this is a session that just ran, not one to resume. The
+   * store keeps the record until the watch is given back after that render
+   * commits, so this render still reads it, and the note below keeps it.
+   */
+  const endedHere = snapshot.terminals.get(terminalKey(held.target))?.ended === 'session-ended';
+  const memory = resumeMemoryOf(snapshot.resumes, sessionRef);
+  const pane: PaneState = paneState({
+    row,
+    state,
+    start:
+      memory.start === null ? null : followUp(memory.start, snapshot.answers, 'session-started'),
+    terminal: endedHere ? { ended: 'session-ended' } : terminal,
+    ran: held.everHeld || memory.ran,
+    startLapsed: memory.lapsed,
+    stateCurrent: snapshot.machineStateCurrent,
+    phase: snapshot.phase,
+  });
+  const provider: Provider | null = row?.descriptor.provider ?? null;
+  /**
+   * The resume this pane sends on its own, once per session on this page.
+   *
+   * A ref callback on the element drawn only while the model says to send,
+   * rather than an effect: the send happens because that element appeared,
+   * which is the event, and a callback ref is React's hook for it. The guard
+   * reads the store as it is now rather than the render's copy, because React
+   * 19's StrictMode runs a ref callback, its cleanup and the callback again on
+   * mount, and the second run must find the start the first one remembered.
+   * The hub refuses a second start of a session already being started
+   * besides, so a duplicate that got past this would cost a sentence and not a
+   * second process.
+   */
+  const autoResume = useCallback(
+    (node: HTMLElement | null): void => {
+      if (node === null || provider === null) return;
+      const now = resumeMemoryOf(hub.getSnapshot().resumes, sessionRef);
+      if (now.ran || now.start !== null) return;
+      hub.sendCommand(
+        resumeCommand({ storeId: sessionRef.storeId, sessionId: sessionRef.sessionId, provider }),
+      );
+    },
+    [hub, sessionRef, provider],
+  );
+  /** A resume somebody pressed for: no guard, because the press is the intent. */
+  const pressResume = useCallback((): void => {
+    if (provider === null) return;
+    hub.sendCommand(
+      resumeCommand({ storeId: sessionRef.storeId, sessionId: sessionRef.sessionId, provider }),
+    );
+  }, [hub, sessionRef, provider]);
+  /**
+   * Tells the store this pane saw the session run, so that no later mount of
+   * a pane on it resumes it on its own. The same callback-ref event as the
+   * resume: drawn while the pane sees a process and the store does not yet
+   * know, and gone once it does.
+   *
+   * Running counts whoever runs it -- agentplex, or somebody's own claude in
+   * another terminal -- and so does an ending the hub reported. A pane opened
+   * on a session already not running resumes it; a session that stops while
+   * a pane watches it was stopped by somebody, and waits for a press.
+   */
+  const noteRan = useCallback(
+    (node: HTMLElement | null): void => {
+      if (node !== null) hub.noteRan(sessionRef);
+    },
+    [hub, sessionRef],
+  );
+  const sawRunning = standing === 'held' || endedHere || row?.descriptor.process === 'running';
   /**
    * The tree, for the one question the panel asks of it: which project this
    * session is filed under, and therefore whose standing policy decides what it
@@ -522,12 +748,20 @@ export function SessionPane({
    */
   const sendInput = useCallback(
     (data: string): boolean => {
+      // Addressed by session whether or not this pane watches the terminal:
+      // the steer bar is drawn in every state, and what it types into a
+      // session nothing runs comes back as the hub's refusal, worded below.
+      const address: ClientTerminalTarget = target ?? {
+        by: 'session',
+        storeId: sessionRef.storeId,
+        sessionId: sessionRef.sessionId,
+      };
       for (const piece of chunkTerminalInput(data)) {
-        if (!hub.sendTerminalInput(target, piece).delivered) return false;
+        if (!hub.sendTerminalInput(address, piece).delivered) return false;
       }
       return true;
     },
-    [hub, target],
+    [hub, target, sessionRef],
   );
 
   // The one thing about the viewer the process on the other machine has to be
@@ -535,7 +769,7 @@ export function SessionPane({
   // that produces these.
   const sendResize = useCallback(
     (size: TerminalSize): void => {
-      hub.sendTerminalResize(target, size);
+      if (target !== null) hub.sendTerminalResize(target, size);
     },
     [hub, target],
   );
@@ -654,13 +888,13 @@ export function SessionPane({
     setReplayPosition(null);
   }, []);
 
-  const state = snapshot.machineState;
-  const row = findSessionRow(state, sessionRef);
   // The whole row and not the status alone: a session set down at a boundary
-  // is drawn paused whatever its transcript last said, and the word beside the
-  // dot says pausing for the interval before the boundary is reached.
-  const tone = toneForSession(row);
-  const word = wordsForSession(row);
+  // is drawn paused whatever its transcript last said, the word beside the
+  // dot says pausing for the interval before the boundary is reached, and a
+  // row nothing holds or runs says so rather than what its transcript last
+  // said it was waiting for.
+  const tone = headerTone(row);
+  const word = headerWords(row);
   const crumbs = breadcrumb(row, sessionRef);
   // The one tone that means something is happening as you look at it, which is
   // the whole of what the mockup animates. Read off the tone rather than off
@@ -771,6 +1005,25 @@ export function SessionPane({
    * down the same terminal-input path whether or not an emulator is mounted to
    * echo it.
    */
+  /**
+   * Whether the terminal is drawn: for a held session, for a row the state
+   * does not hold (the watch it always had), and under an ending, so what the
+   * session printed last stays above the words about it.
+   */
+  const showsTerminal =
+    pane.kind === 'held' ||
+    pane.kind === 'unknown-row' ||
+    (pane.kind === 'ended' && terminal !== null);
+  const paneStateNotice = (
+    <PaneStateNotice
+      pane={pane}
+      scheme={scheme}
+      autoResume={autoResume}
+      onAction={pressResume}
+      canAct={snapshot.phase === 'connected'}
+    />
+  );
+
   function paneBody(tab: ShownTab): JSX.Element {
     switch (tab) {
       case TERMINAL_TAB:
@@ -791,54 +1044,64 @@ export function SessionPane({
               flexDirection: 'column',
             }}
           >
-            {finding && (
-              <FindBar
-                search={paneSearch}
-                truncated={() => terminalIsPartial(terminal)}
-                scheme={scheme}
-                onClose={closeFind}
-                inputRef={findRef}
-              />
-            )}
+            {showsTerminal ? (
+              <>
+                {finding && (
+                  <FindBar
+                    search={paneSearch}
+                    truncated={() => terminalIsPartial(terminal)}
+                    scheme={scheme}
+                    onClose={closeFind}
+                    inputRef={findRef}
+                  />
+                )}
 
-            {terminal === null ? (
-              // The watch is declared in a subscription, which React runs
-              // after the first commit, so there is one frame in which this
-              // pane has no feed to hand an emulator. The same well, painted,
-              // rather than an emulator built against a buffer that is about
-              // to be replaced.
-              <Box style={{ flex: 1, background: colorForRole('terminalBackground', scheme) }} />
+                {terminal === null ? (
+                  // The watch is declared in a subscription, which React runs
+                  // after the first commit, so there is one frame in which this
+                  // pane has no feed to hand an emulator. The same well, painted,
+                  // rather than an emulator built against a buffer that is about
+                  // to be replaced.
+                  <Box
+                    style={{ flex: 1, background: colorForRole('terminalBackground', scheme) }}
+                  />
+                ) : (
+                  <TerminalView
+                    feed={terminal.feed}
+                    scheme={scheme}
+                    onData={sendInput}
+                    onResize={sendResize}
+                    emulatorReady={emulatorReady}
+                    emulators={emulators}
+                  />
+                )}
+
+                {feed !== null && pane.kind !== 'ended' && (
+                  <Text
+                    fz={11}
+                    px={18}
+                    py={6}
+                    style={{ color: colorForToneText('blocked', scheme), borderTop: border }}
+                  >
+                    {feed}
+                  </Text>
+                )}
+
+                {scope !== null && (
+                  <Text
+                    fz={11}
+                    px={18}
+                    py={6}
+                    style={{ color: colorForRole('textFaint', scheme), borderTop: border }}
+                  >
+                    {scope}
+                  </Text>
+                )}
+
+                {pane.kind === 'ended' && paneStateNotice}
+              </>
             ) : (
-              <TerminalView
-                feed={terminal.feed}
-                scheme={scheme}
-                onData={sendInput}
-                onResize={sendResize}
-                emulatorReady={emulatorReady}
-                emulators={emulators}
-              />
-            )}
-
-            {feed !== null && (
-              <Text
-                fz={11}
-                px={18}
-                py={6}
-                style={{ color: colorForToneText('blocked', scheme), borderTop: border }}
-              >
-                {feed}
-              </Text>
-            )}
-
-            {scope !== null && (
-              <Text
-                fz={11}
-                px={18}
-                py={6}
-                style={{ color: colorForRole('textFaint', scheme), borderTop: border }}
-              >
-                {scope}
-              </Text>
+              paneStateNotice
             )}
 
             {notice !== null && (
@@ -899,6 +1162,7 @@ export function SessionPane({
       // pty. React's onKeyDownCapture is the capture-phase listener.
       onKeyDownCapture={(event) => registry.handleKeyDown(event)}
     >
+      {sawRunning && !memory.ran && <span ref={noteRan} hidden />}
       <Group gap={10} px={18} py={10} style={{ borderBottom: border }} wrap="nowrap">
         {/* The three readings of one row, each from a function in
             presentation.ts, each marked with a `data-` attribute the suite
@@ -1025,22 +1289,27 @@ export function SessionPane({
            * colour is the state says more than a glyph that is the same
            * picture whatever the state, and status here is a tone by rule.
            */}
-          <Group
-            gap={6}
-            wrap="nowrap"
-            px={10}
-            py={4}
-            style={{ borderRadius: 6, background: colorForRole('raised', scheme) }}
-          >
-            <Box
-              w={6}
-              h={6}
-              style={{ borderRadius: '50%', background: colorForTone(attachment.tone, scheme) }}
-            />
-            <Text fz={12} fw={600} role="status" style={{ whiteSpace: 'nowrap' }}>
-              {attachment.words}
-            </Text>
-          </Group>
+          {/* Drawn only while there is a terminal to be attached to: over a
+              session nothing in agentplex runs, "Attaching" would promise a
+              subscribe this pane is deliberately not sending. */}
+          {watching && (
+            <Group
+              gap={6}
+              wrap="nowrap"
+              px={10}
+              py={4}
+              style={{ borderRadius: 6, background: colorForRole('raised', scheme) }}
+            >
+              <Box
+                w={6}
+                h={6}
+                style={{ borderRadius: '50%', background: colorForTone(attachment.tone, scheme) }}
+              />
+              <Text fz={12} fw={600} role="status" style={{ whiteSpace: 'nowrap' }}>
+                {attachment.words}
+              </Text>
+            </Group>
+          )}
         </Group>
       </Group>
 
