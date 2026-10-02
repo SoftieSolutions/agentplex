@@ -45,11 +45,16 @@ export function pendingSession(
   if (started !== null && started.sessionId !== null) {
     return { storeId: started.storeId, sessionId: started.sessionId };
   }
-  // A spawn: nobody knows the id until the provider writes it, and the first
-  // thing that can say so is the terminal the pane is already watching. The
-  // store takes it off the hub's own frames -- the subscription's reply, or a
-  // chunk that carries both names -- which is the server's reading of its own
-  // store report, relayed. Provenance, not proximity.
+  // A spawn: nobody knows the id until the provider writes it. The hub says
+  // so to the client that started it, off the store report that paired the
+  // start with an id, whether or not a terminal is open on it -- which is the
+  // only word a pane that never attached will get.
+  const named = start?.named ?? null;
+  if (named !== null) return named;
+  // Failing that, the terminal the pane is already watching. The store takes
+  // it off the hub's own frames -- the subscription's reply, or a chunk that
+  // carries both names -- which is the server's reading of its own store
+  // report, relayed. Provenance, not proximity.
   return terminal?.session ?? null;
 }
 

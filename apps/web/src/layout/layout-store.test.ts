@@ -76,7 +76,14 @@ function fakeHub() {
     },
     /** The hub answers a start, the way it answers a resume: with the session. */
     started(view: StartedView): void {
-      starts = new Map([...starts, [view.replyTo, { started: view, refusal: null }]]);
+      const entry = starts.get(view.replyTo) ?? { started: null, refusal: null, named: null };
+      starts = new Map([...starts, [view.replyTo, { ...entry, started: view }]]);
+      notify();
+    },
+    /** The hub tells the client that started a spawn which session it became. */
+    named(startId: FrameId, session: SessionRef): void {
+      const entry = starts.get(startId) ?? { started: null, refusal: null, named: null };
+      starts = new Map([...starts, [startId, { ...entry, named: session }]]);
       notify();
     },
   };
@@ -421,6 +428,18 @@ describe('a pending pane', () => {
 
     // A start that named a session is answered with it, so the pane can stop
     // being pending before a byte has arrived. Correlated by `replyTo`.
+    expect(h.store.getSnapshot().tree).toEqual(sessionPane(SESSION));
+  });
+
+  it('becomes the session a spawn was named, with no terminal open on it', () => {
+    const h = harness();
+    h.answer(serializePaneLayout(DEFAULT_TREE));
+    h.store.showPendingSession(7);
+
+    h.named(7, SESSION);
+
+    // No watch at all: the hub tells the client that started the spawn which
+    // session it became, and that is enough to rebind the pane.
     expect(h.store.getSnapshot().tree).toEqual(sessionPane(SESSION));
   });
 
