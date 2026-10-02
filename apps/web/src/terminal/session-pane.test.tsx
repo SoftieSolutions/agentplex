@@ -2488,6 +2488,55 @@ describe('a pane on a session nothing holds', () => {
     expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
   });
 
+  it('does not restart a session stopped from it when a split remounts it', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumed);
+    const spike = pane(connected.hub, 'store-agentplex', 'session-spike-wasm');
+    await mount(spike);
+    const stop = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="stop session-spike-wasm"]',
+    );
+    if (stop === null) throw new Error('a held, stoppable session offered no Stop');
+    await click(stop);
+    expect(ofType(sentSince(connected), 'session-stop')).toHaveLength(1);
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+
+    // A split puts the pane under a split node, which is a different element
+    // in the same place: React mounts the pane again from nothing.
+    await rerender(<div data-split>{spike}</div>);
+
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+    expect(action()?.textContent).toBe('Resume');
+  });
+
+  it('does not restart a session it saw held when it is opened again after it ended', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumed);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+  });
+
+  it('shows its own start, and sends no second, when it is remounted while starting', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    const spike = pane(connected.hub, 'store-agentplex', 'session-spike-wasm');
+    await mount(spike);
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+
+    await rerender(<div data-split>{spike}</div>);
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+  });
+
   it('says not running in the header for a row nothing holds and no process runs', async () => {
     const connected = await connectedTo(hubFrames.machineStatePopulated);
     await mount(pane(connected.hub, 'store-universe', 'session-docs-sweep'));

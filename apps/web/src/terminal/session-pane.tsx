@@ -11,7 +11,6 @@ import {
 import {
   assertNever,
   type ClientTerminalTarget,
-  type FrameId,
   type PendingApproval,
   type Provider,
   type SessionRef,
@@ -20,6 +19,7 @@ import {
 
 import { followUp, refusalTo } from '../store/answers.js';
 import type { HubStore } from '../store/hub-store.js';
+import { resumeMemoryOf } from '../store/resume-memory.js';
 import { terminalKey } from '../store/terminals.js';
 import type { TerminalWatchView } from '../store/views.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
@@ -433,9 +433,10 @@ export function SessionPane({
    * for: React's own pattern for a value derived from the previous render, and
    * the set is guarded by the comparison so it settles in one extra pass.
    *
-   * Entering held also forgets this pane's start. That start is answered by
-   * the holder appearing, and a pane that kept it would read a later ending as
-   * "still starting" instead of as the ending it is.
+   * What has to outlive the pane -- that the session ran, and the start sent
+   * for it -- is not here but in the store's resume memory, read below: a
+   * split or a trip away from the layout mounts this pane again from nothing,
+   * and this memory goes with it.
    */
   const [held, setHeld] = useState<HeldMemory>(() => ({
     ref: sessionRef,
@@ -443,7 +444,6 @@ export function SessionPane({
     everHeld: standing === 'held',
     target: addressOf(sessionRef),
   }));
-  const [asked, setAsked] = useState<FrameId | null>(null);
   if (held.ref !== sessionRef || held.last !== standing) {
     const sameSession = held.ref === sessionRef;
     setHeld({
@@ -455,7 +455,6 @@ export function SessionPane({
           ? addressOf(sessionRef)
           : held.target,
     });
-    if (!sameSession || standing === 'held') setAsked(null);
   }
   /**
    * Whether this pane watches a terminal at all.
@@ -473,49 +472,61 @@ export function SessionPane({
   useTerminalWatch(hub, target);
   const terminal: TerminalWatchView | null =
     target === null ? null : (snapshot.terminals.get(terminalKey(target)) ?? null);
+  const memory = resumeMemoryOf(snapshot.resumes, sessionRef);
   const pane: PaneState = paneState({
     row,
     state,
-    start: asked === null ? null : followUp(asked, snapshot.answers, 'session-started'),
+    start:
+      memory.start === null ? null : followUp(memory.start, snapshot.answers, 'session-started'),
     terminal,
-    everHeld: held.everHeld,
+    everHeld: held.everHeld || memory.ran,
     phase: snapshot.phase,
   });
   const provider: Provider | null = row?.descriptor.provider ?? null;
   /**
-   * The resume this pane sends on its own, once per session it is pointed at.
+   * The resume this pane sends on its own, once per session on this page.
    *
    * A ref callback on the element drawn only while the model says to send,
    * rather than an effect: the send happens because that element appeared,
-   * which is the event, and a callback ref is React's hook for it. The guard is
-   * a ref because React 19's StrictMode runs a ref callback, its cleanup and
-   * the callback again on mount, and the second run must find the first's
-   * mark. The hub refuses a second start of a session already being started
+   * which is the event, and a callback ref is React's hook for it. The guard
+   * reads the store as it is now rather than the render's copy, because React
+   * 19's StrictMode runs a ref callback, its cleanup and the callback again on
+   * mount, and the second run must find the start the first one remembered.
+   * The hub refuses a second start of a session already being started
    * besides, so a duplicate that got past this would cost a sentence and not a
    * second process.
    */
-  const autoResumed = useRef<string | null>(null);
   const autoResume = useCallback(
     (node: HTMLElement | null): void => {
       if (node === null || provider === null) return;
-      const key = `${sessionRef.storeId}/${sessionRef.sessionId}`;
-      if (autoResumed.current === key) return;
-      autoResumed.current = key;
-      const outcome = hub.sendCommand(
+      const now = resumeMemoryOf(hub.getSnapshot().resumes, sessionRef);
+      if (now.ran || now.start !== null) return;
+      hub.sendCommand(
         resumeCommand({ storeId: sessionRef.storeId, sessionId: sessionRef.sessionId, provider }),
       );
-      if (outcome.accepted) setAsked(outcome.id);
     },
     [hub, sessionRef, provider],
   );
   /** A resume somebody pressed for: no guard, because the press is the intent. */
   const pressResume = useCallback((): void => {
     if (provider === null) return;
-    const outcome = hub.sendCommand(
+    hub.sendCommand(
       resumeCommand({ storeId: sessionRef.storeId, sessionId: sessionRef.sessionId, provider }),
     );
-    if (outcome.accepted) setAsked(outcome.id);
   }, [hub, sessionRef, provider]);
+  /**
+   * Tells the store this pane saw the session run, so that no later mount of
+   * a pane on it resumes it on its own. The same callback-ref event as the
+   * resume: drawn while the pane sees a process and the store does not yet
+   * know, and gone once it does.
+   */
+  const noteRan = useCallback(
+    (node: HTMLElement | null): void => {
+      if (node !== null) hub.noteRan(sessionRef);
+    },
+    [hub, sessionRef],
+  );
+  const sawRunning = standing === 'held';
   /**
    * The tree, for the one question the panel asks of it: which project this
    * session is filed under, and therefore whose standing policy decides what it
@@ -1133,6 +1144,7 @@ export function SessionPane({
       // pty. React's onKeyDownCapture is the capture-phase listener.
       onKeyDownCapture={(event) => registry.handleKeyDown(event)}
     >
+      {sawRunning && !memory.ran && <span ref={noteRan} hidden />}
       <Group gap={10} px={18} py={10} style={{ borderBottom: border }} wrap="nowrap">
         {/* The three readings of one row, each from a function in
             presentation.ts, each marked with a `data-` attribute the suite

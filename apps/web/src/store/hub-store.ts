@@ -5,6 +5,7 @@ import {
   type CatalogueQuery,
   type ClientTerminalTarget,
   type FrameId,
+  type SessionRef,
   type TerminalSize,
 } from '@agentplex/protocol';
 import { DEFAULT_FEED_BYTES } from '../terminal/chunk-feed.js';
@@ -21,6 +22,7 @@ import {
 import { createConnection, type StoreSocket } from './connection.js';
 import type { FrameIds } from './frame-ids.js';
 import { createGraphReplies } from './graph-replies.js';
+import { rememberCommand, rememberRan, rememberState } from './resume-memory.js';
 import { createSessionReplies } from './session-replies.js';
 import { createTerminals } from './terminals.js';
 import type { Timers } from './timers.js';
@@ -108,6 +110,12 @@ export interface HubStore {
    * what a pane can see for itself is not worth a frame back.
    */
   sendTerminalResize(target: ClientTerminalTarget, size: TerminalSize): void;
+  /**
+   * A pane saw a process run this session -- held, run outside agentplex, or
+   * ended under it -- so no pane on this page resumes it on its own again.
+   * Silent when the store already knew.
+   */
+  noteRan(session: SessionRef): void;
   /**
    * Standing interest in one terminal, replayed on every reconnection.
    *
@@ -248,6 +256,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     runHistories: new Map(),
     pushPublicKey: null,
     transcripts: new Map(),
+    resumes: new Map(),
   };
 
   const queue: { readonly id: FrameId; readonly command: HubCommand }[] = [];
@@ -406,7 +415,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // No client-side version arithmetic: the hub already never re-sends a
         // version on one connection, and a fresh connection starts with the
         // whole current state. The latest frame received is the state.
-        update({ machineState: frame.state });
+        update({
+          machineState: frame.state,
+          resumes: rememberState(snapshot.resumes, frame.state),
+        });
         return;
       }
       case 'layout': {
@@ -700,7 +712,13 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // Owed from now, and replaced without a notification: the one reader
         // is whoever sent it, who has the id only once this returns, and a
         // listener that sends on a change would be told first and send again.
-        snapshot = { ...snapshot, answers: answersWith(snapshot.answers.replies) };
+        // The resume memory goes the same way: a pane's own guard reads it
+        // from the store, not from a notification.
+        snapshot = {
+          ...snapshot,
+          answers: answersWith(snapshot.answers.replies),
+          resumes: rememberCommand(snapshot.resumes, command, id),
+        };
         sessions.asked(command, id);
         wire.send(encodeClientFrame({ ...command, id }));
         return { accepted: true, id, delivery: 'sent' };
@@ -717,6 +735,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       update({
         commandQueue: queueView(snapshot.commandQueue.overflowed),
         answers: answersWith(snapshot.answers.replies),
+        resumes: rememberCommand(snapshot.resumes, command, id),
       });
       sessions.asked(command, id);
       return { accepted: true, id, delivery: 'queued' };
@@ -757,6 +776,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     },
 
     sendTerminalResize: terminals.resize,
+
+    noteRan(session: SessionRef): void {
+      const resumes = rememberRan(snapshot.resumes, session);
+      if (resumes !== snapshot.resumes) update({ resumes });
+    },
 
     watchTerminal: terminals.watch,
 

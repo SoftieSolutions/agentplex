@@ -21,6 +21,7 @@ import type {
   StoreId,
   SubscriptionEndReason,
 } from '@agentplex/protocol';
+import type { ResumeMemories } from './resume-memory.js';
 import type { TerminalFeed } from '../terminal/chunk-feed.js';
 import type { Answers } from './answers.js';
 
@@ -419,4 +420,14 @@ export interface HubSnapshot {
    * opened should show.
    */
   readonly transcripts: ReadonlyMap<FrameId, TranscriptView>;
+  /**
+   * What this page has learnt about resuming each session: whether a process
+   * was seen running it, and the start it last sent for it.
+   *
+   * The store's and not a pane's, because a pane remounts -- a split, a closed
+   * sibling, a trip away from the layout -- and a pane that forgot would
+   * restart a session it had watched somebody stop. `resume-memory.ts` argues
+   * it. Kept across a teardown too: what ran on this page still ran.
+   */
+  readonly resumes: ResumeMemories;
 }
