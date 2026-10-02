@@ -594,6 +594,14 @@ describe('createClaudeAdapter.discover, a live claude that has not typed yet', (
     expect(found.sessions).toEqual([]);
   });
 
+  it('lists nothing for an entry whose live pid it cannot date', async () => {
+    // In doubt is not verified. A row here would claim a live process on the
+    // strength of a pid that may have been handed to anything since.
+    const found = await discoverOver({ [ENTRY]: REGISTRY_ENTRY }, { undatable: [PID] });
+
+    expect(found.sessions).toEqual([]);
+  });
+
   it('lists a verified entry whose transcript has no turn in it yet', async () => {
     // A transcript with no turn is not a session on its own; a live process
     // running it is.

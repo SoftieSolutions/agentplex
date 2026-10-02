@@ -167,6 +167,8 @@ async function start(): Promise<Harness> {
     // Fixed at construction, as the fake probe's table is: the process is
     // registered up front and only becomes visible once its entry is written.
     probe: createFakeProcessProbe({ processes: { [PID]: START } }),
+    // The controller's home, so the two answer for one account.
+    homeDirectory: HOME,
   });
 
   // The machine's durable half, kept across dials as a server keeps it.
