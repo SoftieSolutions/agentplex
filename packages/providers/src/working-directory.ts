@@ -63,7 +63,16 @@ export function parseWorkingDirectory(
   const cwd = resolve(candidate);
   const storeRoot = resolve(store.path);
 
-  if (cwd === storeRoot || contains(storeRoot, cwd)) {
+  if (cwd === storeRoot) {
+    return {
+      ok: false,
+      problem:
+        `${cwd} is the store: a store holds a provider's own state, ` +
+        'and an agent started there would be editing the transcripts agentplex reads',
+    };
+  }
+
+  if (contains(storeRoot, cwd)) {
     return {
       ok: false,
       problem:

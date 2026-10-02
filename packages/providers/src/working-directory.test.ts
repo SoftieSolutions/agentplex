@@ -49,19 +49,28 @@ describe('parseWorkingDirectory', () => {
   it('refuses the store itself', () => {
     const result = parseWorkingDirectory('/volumes/claude', STORE);
 
+    // Named as the store, not as something inside it: a reader told the
+    // store is inside itself has to work out that the two paths are equal.
     expect(result.ok).toBe(false);
-    expect(problem(result)).toContain('inside the store');
+    expect(problem(result)).toContain('is the store');
+    expect(problem(result)).not.toContain('inside the store at');
   });
 
   it('refuses a directory inside the store', () => {
     // The rule that carries over from v1: a store holds the provider's own
     // state, and an agent running there would be editing the transcripts
     // agentplex reads to find out what the agent is doing.
-    expect(parseWorkingDirectory('/volumes/claude/projects', STORE).ok).toBe(false);
+    const result = parseWorkingDirectory('/volumes/claude/projects', STORE);
+
+    expect(result.ok).toBe(false);
+    expect(problem(result)).toContain('inside the store at');
   });
 
   it('refuses a path that climbs into the store rather than naming it', () => {
-    expect(parseWorkingDirectory('/volumes/claude/../claude/projects', STORE).ok).toBe(false);
+    const result = parseWorkingDirectory('/volumes/claude/../claude/projects', STORE);
+
+    expect(result.ok).toBe(false);
+    expect(problem(result)).toContain('inside the store at');
   });
 
   it('allows a sibling whose name merely starts with the store path', () => {
