@@ -2716,6 +2716,14 @@
                                     "unknown"
                                   ]
                                 },
+                                "process": {
+                                  "type": "string",
+                                  "enum": [
+                                    "running",
+                                    "none",
+                                    "unknown"
+                                  ]
+                                },
                                 "updatedAt": {
                                   "type": "integer",
                                   "minimum": 0,
@@ -3011,6 +3019,7 @@
                                 "sessionId",
                                 "provider",
                                 "status",
+                                "process",
                                 "updatedAt",
                                 "cwd",
                                 "branch",
@@ -4976,6 +4985,14 @@
                                   "unknown"
                                 ]
                               },
+                              "process": {
+                                "type": "string",
+                                "enum": [
+                                  "running",
+                                  "none",
+                                  "unknown"
+                                ]
+                              },
                               "updatedAt": {
                                 "type": "integer",
                                 "minimum": 0,
@@ -5271,6 +5288,7 @@
                               "sessionId",
                               "provider",
                               "status",
+                              "process",
                               "updatedAt",
                               "cwd",
                               "branch",

@@ -67,6 +67,13 @@ const fakeTranscriptSchema = z.object({
    * one without the other would be describing no provider that exists.
    */
   pid: z.int().positive().nullish(),
+  /**
+   * What this made-up provider could tell about the session's process. Absent
+   * follows the pid: a fixture that names one verified a process, and one that
+   * names none looked and found nothing. `unknown` has to be asked for, as a
+   * provider with no registry or an unreadable one would.
+   */
+  process: z.enum(['verified', 'none', 'unknown']).optional(),
   /** This made-up provider records neither, and `null` is what that looks like. */
   cwd: z.string().min(1).nullish(),
   title: z.string().min(1).nullish(),
@@ -438,6 +445,7 @@ function parseTranscript(name: string, contents: string) {
       updatedAt: parsed.data.updatedAt,
       running: parsed.data.running ?? false,
       pid: parsed.data.pid ?? null,
+      process: parsed.data.process ?? ((parsed.data.pid ?? null) === null ? 'none' : 'verified'),
       cwd: parsed.data.cwd ?? null,
       title: parsed.data.title ?? null,
       usage: parsed.data.usage ?? null,

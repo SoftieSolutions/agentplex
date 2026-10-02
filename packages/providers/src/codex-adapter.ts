@@ -291,6 +291,9 @@ async function readRollout(
     running: false,
     // Always, for the same reason.
     pid: null,
+    // Not `none`: `running: false` under-claims a status, and `none` would
+    // over-claim leave to resume. With nothing to look in, nobody looked.
+    process: 'unknown',
     cwd: parsed.rollout.cwd,
     title: names.get(sessionId.data) ?? null,
     usage: parsed.rollout.usage,

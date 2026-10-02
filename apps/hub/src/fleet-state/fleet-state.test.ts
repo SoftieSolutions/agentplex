@@ -85,6 +85,7 @@ function session(id: string, overrides: Partial<SessionDescriptor> = {}): Sessio
     sessionId: sessionIdSchema.parse(id),
     provider: 'claude',
     status: 'idle',
+    process: 'none',
     updatedAt: START,
     cwd: '/srv/work',
     branch: null,
@@ -254,14 +255,14 @@ describe('two servers on one volume', () => {
       holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
-      sessions: [session('session-1', { status: 'working' })],
+      sessions: [session('session-1', { status: 'working', process: 'running' })],
       reportedAt: START,
     });
     reducer.applySessions({
       holding: [],
       registrationId: 'registration-ec2' as ServerRegistrationId,
       storeId: store('store-work'),
-      sessions: [session('session-1', { status: 'idle' })],
+      sessions: [session('session-1', { status: 'idle', process: 'none' })],
       reportedAt: START,
     });
 
@@ -270,6 +271,91 @@ describe('two servers on one volume', () => {
     // The one server that could see a process is the one whose row is shown.
     expect(row?.source).toBe('registration-laptop');
     expect(row?.descriptor.status).toBe('working');
+  });
+
+  describe('whether a process runs the session', () => {
+    function report(
+      reducer: FleetState,
+      registration: string,
+      process: SessionDescriptor['process'],
+      reportedAt = START,
+    ): void {
+      reducer.applySessions({
+        holding: [],
+        registrationId: registration as ServerRegistrationId,
+        storeId: store('store-work'),
+        sessions: [session('session-1', { process })],
+        reportedAt,
+      });
+    }
+
+    function publishedProcess(reducer: FleetState): unknown {
+      const [machineStore] = reducer.published().stores;
+      return machineStore?.sessions[0]?.descriptor.process;
+    }
+
+    it('never publishes none for a store two servers mount', () => {
+      // Each server looked only at its own machine. `none` from one says
+      // nothing about a process the other runs, and it is the word a client
+      // reads as leave to resume.
+      const reducer = twoServers();
+      report(reducer, 'registration-laptop', 'none');
+      report(reducer, 'registration-ec2', 'none');
+
+      const [row] = only(reducer.snapshot().stores).sessions;
+      expect(row?.descriptor.process).toBe('unknown');
+      expect(publishedProcess(reducer)).toBe('unknown');
+    });
+
+    it('lowers none even when only one of the two servers has reported yet', () => {
+      // The other machine mounts the store; that it has not scanned yet does
+      // not mean nothing runs the session there.
+      const reducer = twoServers();
+      report(reducer, 'registration-laptop', 'none');
+
+      expect(publishedProcess(reducer)).toBe('unknown');
+    });
+
+    it('keeps running, which is a sighting whichever machine made it', () => {
+      const reducer = twoServers();
+      report(reducer, 'registration-laptop', 'running');
+      report(reducer, 'registration-ec2', 'none');
+
+      expect(publishedProcess(reducer)).toBe('running');
+    });
+
+    it('keeps none for a store only one server mounts', () => {
+      const reducer = reduce();
+      reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+      report(reducer, 'registration-laptop', 'none');
+
+      expect(publishedProcess(reducer)).toBe('none');
+    });
+
+    it('publishes none again once the other server is unpaired', () => {
+      const reducer = twoServers();
+      report(reducer, 'registration-laptop', 'none');
+      report(reducer, 'registration-ec2', 'none');
+      expect(publishedProcess(reducer)).toBe('unknown');
+
+      reducer.applyConnection(connection('ec2', 'stopped', ['store-work']));
+
+      expect(publishedProcess(reducer)).toBe('none');
+    });
+
+    it('moves the version for a report that changes only the process', () => {
+      // A process that exits at a prompt changes nothing else a scan reads,
+      // and the resume a client offers turns on exactly this field.
+      const reducer = reduce();
+      reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+      report(reducer, 'registration-laptop', 'running');
+      const before = reducer.snapshot().version;
+
+      report(reducer, 'registration-laptop', 'none', START + 30_000);
+
+      expect(reducer.snapshot().version).toBeGreaterThan(before);
+      expect(publishedProcess(reducer)).toBe('none');
+    });
   });
 
   it('keeps a session that one server has stopped reporting while the other still does', () => {

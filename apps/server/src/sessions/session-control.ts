@@ -432,7 +432,13 @@ export function createSessionController(
       // resumed elsewhere is a different session that happens to share a
       // history, and every relative path in that history now points somewhere
       // else.
-      const { sessions: known } = await discover(store);
+      const { sessions: known, origins } = await discover(store);
+      // The same join a report makes, made here off the same scan. A terminal
+      // this server spawned is not bound to its session until a report finds
+      // it, and in that window a resume would start a second process on the
+      // transcript its own first one is writing; bound, it meets the hold
+      // rule in `terminals.resume` below like any session this server runs.
+      bindSpawned(store.storeId, known, origins);
       const descriptor = known.find((one) => one.sessionId === request.sessionId);
       if (descriptor === undefined) {
         return {
@@ -441,6 +447,12 @@ export function createSessionController(
           problem: 'this server cannot find that session in that store',
           hold: null,
         };
+      }
+
+      const refusal = runningElsewhere(session, origins.get(session.sessionId)?.pid ?? null);
+      if (refusal !== null) {
+        logger.info('session resume refused', { ...session, problem: refusal });
+        return { ok: false, code: 'refused', problem: refusal, hold: null };
       }
 
       const opened = await approvals?.open(store, adapter.permissionHook);
@@ -701,6 +713,32 @@ export function createSessionController(
       logger.warn('session unreadable', { provider, subject, problem });
     }
     return { sessions: found.sessions, origins: found.origins };
+  }
+
+  /**
+   * Why a resume must not start, when the provider's adapter verified a
+   * process on the session that is not this server's to hold -- or `null`.
+   *
+   * Two processes on one transcript interleave their writes into it, and the
+   * session is damaged for both, so a verified pid this server did not fork
+   * is a refusal. A session this server holds itself is left to the hold
+   * rule, which names the hold. A pid one of this server's live terminals
+   * owns while holding some other session is this server's process too, and
+   * the words say so rather than blaming a terminal outside agentplex.
+   *
+   * Only a verified pid refuses. An adapter that could not look reports none,
+   * and refusing on that would make every session of a provider without a
+   * registry unresumable. The pid never reaches the words: it is this
+   * machine's process table, and the hub has no use for it.
+   */
+  function runningElsewhere(session: SessionRef, pid: number | null): string | null {
+    if (pid === null || terminals.isRunning(session)) return null;
+    const ours = terminals.terminals.some(
+      (terminal) => terminal.run.exit === null && terminal.run.pid === pid,
+    );
+    return ours
+      ? 'this server is already running that session'
+      : 'that session is running outside agentplex on this machine';
   }
 
   /** What this server is running in a store, in the form the hub reads it. */

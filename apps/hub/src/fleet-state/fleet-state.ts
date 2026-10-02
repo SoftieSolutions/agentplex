@@ -856,6 +856,27 @@ function lastOf(moments: readonly (number | null)[]): number | null {
 }
 
 /**
+ * The chosen reading, with `process: 'none'` lowered to `unknown` when more
+ * than one server mounts the store.
+ *
+ * The one field the hub changes on a descriptor, and only ever downward. A
+ * server that says `none` looked at its own machine; a second machine
+ * mounting the same store may be running the session, and the server that
+ * reported cannot see that process. `none` is the word a client reads as
+ * leave to resume, so publishing it here would turn one machine's honest
+ * reading into a claim about the fleet. `unknown` is true of every reading,
+ * so the row still describes the session no server contradicts. `running` is
+ * a sighting wherever it was made and is left alone.
+ *
+ * Counted by servers that mount the store rather than servers that reported
+ * it: a machine that has not scanned yet can still be running the session.
+ */
+function processAcross(descriptor: SessionDescriptor, mountedBy: number): SessionDescriptor {
+  if (mountedBy <= 1 || descriptor.process !== 'none') return descriptor;
+  return { ...descriptor, process: 'unknown' };
+}
+
+/**
  * One store's session list, unified across the servers that reported it.
  *
  * Every server's reading of a session is gathered, one is chosen whole, and
@@ -916,7 +937,7 @@ function buildSessionRows(
     const ref = { storeId, sessionId: chosen.descriptor.sessionId };
     rows.push({
       ref,
-      descriptor: chosen.descriptor,
+      descriptor: processAcross(chosen.descriptor, servers.length),
       source: chosen.registrationId,
       reportedBy: gathered.map((reading) => reading.registrationId).sort(),
       reportedAt: chosen.reportedAt,

@@ -98,7 +98,27 @@ export interface ClaudeRegistry {
    * minted.
    */
   readonly live: ReadonlyMap<string, ClaudeRegistryEntry>;
+  /**
+   * Sessions an entry names under a live pid this server could not date.
+   *
+   * Such a pid is as likely the session's own process as a recycled one, so it
+   * proves neither that the session runs nor that it does not. Kept per
+   * session because the entry was read and says which session it is about;
+   * every other session in the store is still answered by the look.
+   */
+  readonly inDoubt: ReadonlySet<string>;
   readonly problems: readonly DiscoveryProblem[];
+  /**
+   * Whether this server saw every entry in the registry.
+   *
+   * `false` for a directory that is there and cannot be listed, and for one
+   * holding an entry that would not read or would not parse. An absent
+   * directory is a look that found no process, because Claude Code writes an
+   * entry for every process it starts; an unlistable one is no look, and an
+   * entry that cannot be read could name any session in the store. Either way
+   * a session missing from `live` then says nothing about whether it runs.
+   */
+  readonly readable: boolean;
 }
 
 export function parseClaudeRegistryEntry(contents: string): ClaudeRegistryEntry | null {
@@ -127,18 +147,25 @@ export async function readClaudeRegistry(
   probe: ProcessProbe,
 ): Promise<ClaudeRegistry> {
   const live = new Map<string, ClaudeRegistryEntry>();
+  const inDoubt = new Set<string>();
 
   const listing = await files.listDirectory(sessions);
   // Absent is the normal state of a store no Claude Code process has run in.
-  if (listing.kind === 'missing') return { live, problems: [] };
+  if (listing.kind === 'missing') return { live, inDoubt, problems: [], readable: true };
   // Present and unreadable is not. The directory is mode 0700, so a daemon
   // running as another user sees none of it and every session silently loses
   // its permission prompts — a misconfiguration only the user can fix, and one
   // they will never find if this stays quiet.
   if (listing.kind === 'failed') {
-    return { live, problems: [{ subject: sessions, problem: listing.reason }] };
+    return {
+      live,
+      inDoubt,
+      problems: [{ subject: sessions, problem: listing.reason }],
+      readable: false,
+    };
   }
 
+  let sawEveryEntry = true;
   for (const dirent of listing.entries) {
     // Claude Code keeps `<pid>.<hash>.key` files in here too. The pid in the
     // name is not read: the entry states its own pid, and that is the one the
@@ -146,40 +173,50 @@ export async function readClaudeRegistry(
     if (dirent.kind !== 'file' || !dirent.name.endsWith(ENTRY_SUFFIX)) continue;
 
     const read = await files.readFile(join(sessions, dirent.name));
-    if (read.kind !== 'read') continue;
+    // Removed since the listing: an entry that is no longer there names no
+    // process, the same as one that was never written.
+    if (read.kind === 'missing') continue;
 
-    const entry = parseClaudeRegistryEntry(read.contents);
+    const entry = read.kind === 'read' ? parseClaudeRegistryEntry(read.contents) : null;
     // Silently. These files are rewritten on every status change, so a torn
     // read is routine and transient, and a problem that appears and vanishes
-    // on its own teaches a user nothing.
-    if (entry === null) continue;
+    // on its own teaches a user nothing. It still costs the look its
+    // completeness: until the file is read, it could name any session here.
+    if (entry === null) {
+      sawEveryEntry = false;
+      continue;
+    }
 
-    if (!(await isTheProcessItRegistered(entry, probe))) continue;
-    keepTheCurrentOne(live, entry);
+    const verdict = await whichProcessItIs(entry, probe);
+    if (verdict === 'registered') keepTheCurrentOne(live, entry);
+    else if (verdict === 'undatable') inDoubt.add(entry.sessionId);
   }
 
-  return { live, problems: [] };
+  return { live, inDoubt, problems: [], readable: sawEveryEntry };
 }
 
 /**
  * Alive, and the same process — the two halves that are worthless apart.
  *
+ * `gone` is a verified answer: the pid is dead, or it was issued again after
+ * the entry was written. `undatable` is no answer at all.
+ *
  * Liveness is asked first and the date second on purpose: a process that exits
- * between the two questions cannot be dated, so the race resolves to "not
- * verified". It can cost a true claim and cannot manufacture a false one.
+ * between the two questions cannot be dated, so the race resolves to
+ * `undatable`. It can cost a true claim and cannot manufacture a false one.
  */
-async function isTheProcessItRegistered(
+async function whichProcessItIs(
   entry: ClaudeRegistryEntry,
   probe: ProcessProbe,
-): Promise<boolean> {
-  if (!(await probe.isAlive(entry.pid))) return false;
+): Promise<'registered' | 'gone' | 'undatable'> {
+  if (!(await probe.isAlive(entry.pid))) return 'gone';
 
   const startedAt = await probe.startedAt(entry.pid);
   // An undatable pid is precisely the pid a recycled one is indistinguishable
-  // from, so it is refused rather than assumed innocent.
-  if (startedAt === null) return false;
+  // from, so it is refused as proof of a process, and as proof of none.
+  if (startedAt === null) return 'undatable';
 
-  return startedAt <= entry.startedAt + PID_RECYCLE_TOLERANCE_MS;
+  return startedAt <= entry.startedAt + PID_RECYCLE_TOLERANCE_MS ? 'registered' : 'gone';
 }
 
 /**

@@ -88,6 +88,7 @@ function descriptor(sessionId: string, status: SessionStatus): SessionDescriptor
     sessionId: sessionIdSchema.parse(sessionId),
     provider: 'claude',
     status,
+    process: 'none',
     updatedAt: START,
     cwd: '/srv/work',
     branch: null,

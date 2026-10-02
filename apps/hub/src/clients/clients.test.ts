@@ -101,6 +101,7 @@ function session(id: string): SessionDescriptor {
     sessionId: sessionIdSchema.parse(id),
     provider: 'claude',
     status: 'idle',
+    process: 'none',
     updatedAt: START,
     cwd: '/srv/work',
     branch: null,

@@ -41,6 +41,7 @@ function descriptor(
     sessionId: sessionIdSchema.parse(sessionId),
     provider: 'claude',
     status: 'idle',
+    process: 'none',
     updatedAt: NOW,
     cwd,
     branch: null,

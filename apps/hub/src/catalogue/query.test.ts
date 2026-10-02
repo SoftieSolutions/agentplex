@@ -158,6 +158,7 @@ function fleet(readings: readonly Reading[]): MachineState {
             sessionId: sessionIdSchema.parse(reading.sessionId),
             provider: reading.provider ?? 'claude',
             status: reading.status ?? 'idle',
+            process: 'none',
             updatedAt: reading.updatedAt ?? START,
             cwd: reading.cwd ?? null,
             branch: null,

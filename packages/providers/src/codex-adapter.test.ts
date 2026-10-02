@@ -70,6 +70,7 @@ describe('createCodexAdapter.discover', () => {
         running: false,
         // codex keeps no process registry, so there is never a pid to name.
         pid: null,
+        process: 'unknown',
         cwd: CWD,
         title: 'Reply with pineapple',
         // codex's own running thread total, with the cached part taken back
@@ -208,6 +209,17 @@ describe('createCodexAdapter.discover', () => {
     const discovered = await adapter.discover(STORE);
 
     expect(discovered.sessions).toMatchObject([{ sessionId: PENDING_ID, running: false }]);
+  });
+
+  it('cannot say whether a process runs a session, so never says none', async () => {
+    // `running: false` above is the under-claim a status wants; `none` here
+    // would be an over-claim, because it reads as leave to resume. With no
+    // registry to look in, the honest word is that nobody looked.
+    const adapter = adapterOver({ files: { [PENDING_PATH]: PENDING_TOOL_CALL } });
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(discovered.sessions.map((session) => session.process)).toEqual(['unknown']);
   });
 
   it('reports nothing and complains about nothing in a store codex has not touched', async () => {

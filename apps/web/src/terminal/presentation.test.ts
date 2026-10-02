@@ -60,6 +60,7 @@ function stateWith(overrides?: {
               sessionId: 'sess-1',
               provider: 'claude',
               status: 'working',
+              process: 'running',
               updatedAt: 1_756_000_000_000,
               cwd: '/home/robert/code/universe',
               branch: null,

@@ -169,6 +169,7 @@ describe('a catalogue item', () => {
         sessionId: sessionIdSchema.parse('session-1'),
         provider: 'claude',
         status: 'working',
+        process: 'running',
         updatedAt: 1_756_000_000_000,
         cwd: '/Users/robert/code/agentplex',
         branch: 'fix/auth-refresh',
