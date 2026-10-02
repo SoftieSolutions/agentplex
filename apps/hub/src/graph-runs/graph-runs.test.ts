@@ -205,7 +205,11 @@ function scriptedAgent(): ScriptedAgent {
   };
 }
 
-/** A HUMAN executor the suite answers by hand, recording what it was built for. */
+/**
+ * A HUMAN executor the suite answers by hand, recording what it was built
+ * for. Each answer goes to the request asked last and not yet answered, so
+ * two gates in flight take two answers.
+ */
 interface ScriptedHuman extends HumanExecutor {
   readonly runs: HumanRun[];
   grant(): void;
@@ -214,22 +218,23 @@ interface ScriptedHuman extends HumanExecutor {
 
 function scriptedHuman(): ScriptedHuman {
   const runs: HumanRun[] = [];
-  let answer: ((granted: boolean) => void) | null = null;
+  const asked: ((granted: boolean) => void)[] = [];
   return {
     runs,
-    grant: () => answer?.(true),
-    deny: () => answer?.(false),
+    grant: () => asked.pop()?.(true),
+    deny: () => asked.pop()?.(false),
     forRun(run) {
       runs.push(run);
       return (node, input, context) =>
         new Promise((resolve) => {
           context.waiting();
-          answer = (granted) =>
+          asked.push((granted) =>
             resolve(
               granted
                 ? { ok: true, carried: input, output: null, next: null }
                 : { ok: false, problem: `a person denied ${node.label}` },
-            );
+            ),
+          );
         });
     },
   };
@@ -946,6 +951,51 @@ describe('graph runs', () => {
       expect(row?.steps).toHaveLength(4);
     });
 
+    it('reads running, not waiting, while another branch waits out a retry’s backoff', async () => {
+      const patient = graphDocumentSchema.parse({
+        ...FANNED,
+        nodes: FANNED.nodes.map((node) =>
+          node.id === 'review' ? { ...node, retry: { max: 1, backoff: 5 } } : node,
+        ),
+      });
+      const h = build();
+      h.agent.answerWith('fail');
+      const nodeId = await publishedGraph(h, patient);
+      const started = await h.runs.start(nodeId, {});
+      if (!started.ok) throw new Error(started.problem);
+      await settle();
+
+      // The agent's first attempt failed and its branch is waiting out the
+      // backoff; the gate is asking a person. The agent will run again
+      // without anyone answering, so the run is not parked on a person.
+      expect(h.timers.delays).toEqual([5_000]);
+      expect(h.published.at(-1)).toMatchObject({
+        status: 'running',
+        steps: [
+          { nodeId: 'start', outcome: 'succeeded' },
+          { nodeId: 'review', attempt: 0, outcome: 'failed' },
+          { nodeId: 'gate', attempt: 0, outcome: 'waiting' },
+        ],
+      });
+      expect(await h.runs.open(nodeId, started.runId)).toMatchObject({ status: 'running' });
+      expect(await h.runs.latest(nodeId)).toMatchObject({ status: 'running' });
+      expect((await h.runs.history(nodeId)).map((run) => run.status)).toEqual(['running']);
+
+      // The retry succeeds: now the person is all the run is waiting on.
+      h.agent.answerWith('succeed');
+      h.timers.fireAll();
+      await settle();
+      expect(h.published.at(-1)).toMatchObject({
+        status: 'waiting',
+        steps: [
+          { nodeId: 'start', outcome: 'succeeded' },
+          { nodeId: 'review', attempt: 0, outcome: 'failed' },
+          { nodeId: 'gate', attempt: 0, outcome: 'waiting' },
+          { nodeId: 'review', attempt: 1, outcome: 'succeeded' },
+        ],
+      });
+    });
+
     it('keeps a record for each of two overlapping visits of one node, so neither ends the other', async () => {
       // Two branches reach one gate that is no JOIN, so the gate is run
       // twice, the second before the first has ended. Each visit is its own
@@ -1119,6 +1169,65 @@ describe('graph runs', () => {
       expect(await readRun(db(), running?.runId ?? started.runId)).toMatchObject({
         status: 'cancelled',
       });
+    });
+
+    it('fails at a JOIN whose merged branches are over the input bound, starting no child and leaving every row readable', async () => {
+      // Two gates each hand on the 9,000-character run input; merged under
+      // the JOIN that is about 18,000, which no input may be. Were it handed
+      // on, the SUB-GRAPH would number a child whose row no read can parse.
+      const h = build();
+      const child = await childGraph(h);
+      const wideJoin = graphDocumentSchema.parse({
+        nodes: [
+          TRIGGER,
+          {
+            ...BASE,
+            id: 'gate',
+            kind: 'human',
+            label: 'Ship it',
+            approvers: ['robert'],
+            timeoutMinutes: null,
+          },
+          {
+            ...BASE,
+            id: 'second',
+            kind: 'human',
+            label: 'Docs ok',
+            approvers: ['ana'],
+            timeoutMinutes: null,
+          },
+          { ...BASE, id: 'both', kind: 'join', label: 'Both' },
+          { ...BASE, id: 'lint', kind: 'subgraph', label: 'Lint suite', graph: child, version: 1 },
+        ],
+        edges: [
+          { from: 'start', to: 'gate' },
+          { from: 'start', to: 'second' },
+          { from: 'gate', to: 'both' },
+          { from: 'second', to: 'both' },
+          { from: 'both', to: 'lint' },
+        ],
+      });
+      const parent = await publishedGraph(h, wideJoin, 'release-pipeline');
+
+      const started = await h.runs.start(parent, { text: 'x'.repeat(9_000) });
+      if (!started.ok) throw new Error(started.problem);
+      await settle();
+      h.human.grant();
+      await settle();
+      h.human.grant();
+      await settle();
+
+      const parentEnd = h.published.filter((state) => state.nodeId === parent).at(-1);
+      expect(parentEnd?.status).toBe('failed');
+      expect(parentEnd?.reason).toMatch(
+        /^the JOIN node Both cannot go on: the outputs of its incoming branches, merged, come to \d+ characters, and an input is at most 16000 characters serialised$/,
+      );
+      expect(parentEnd?.steps.some((step) => step.nodeId === 'lint')).toBe(false);
+      // No child was numbered, and every read of the parent still answers.
+      expect(await childrenOf(db(), started.runId, graphNodeIdSchema.parse('lint'))).toEqual([]);
+      expect(await h.runs.history(child)).toEqual([]);
+      expect(await h.runs.open(parent, started.runId)).toMatchObject({ status: 'failed' });
+      expect(await readRun(db(), started.runId)).toMatchObject({ status: 'failed' });
     });
 
     it('counts a child toward the one-run-per-graph cap, and retries under the node’s policy', async () => {

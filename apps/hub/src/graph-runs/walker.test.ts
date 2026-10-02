@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GRAPH_NODES_MAX,
   GRAPH_RUN_OUTPUT_MAX_CHARS,
   graphDocumentSchema,
+  ROUTE_INPUT_MAX_CHARS,
   graphRunIdSchema,
   nodeIdSchema,
   type ApprovalOutcome,
@@ -1222,6 +1224,55 @@ describe('walk', () => {
       expect(reviewer.calls).toHaveLength(1);
     });
 
+    /** An AGENT executor that hands on what it was given and records which nodes it ran. */
+    function passing(): { execute: Executor<'agent'>; readonly ran: string[] } {
+      const ran: string[] = [];
+      return {
+        ran,
+        execute: async (node, input) => {
+          ran.push(node.id);
+          return { ok: true, carried: input, output: null, next: null };
+        },
+      };
+    }
+
+    it('fails naming the JOIN when its branches’ outputs merged are over the input bound, and goes no further', async () => {
+      // Each branch hands on the 9,000-character run input, which is within
+      // the bound; the two merged under the join are twice that, which is not.
+      const wide = { text: 'x'.repeat(9_000) };
+      const merged = { branches: { review: wide, docs: wide } };
+      const agents = passing();
+      const run = drive(FANNED, wide, table(agents.execute));
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason: `the JOIN node Both reviews cannot go on: the outputs of its incoming branches, merged, come to ${String(JSON.stringify(merged).length)} characters, and an input is at most ${String(ROUTE_INPUT_MAX_CHARS)} characters serialised`,
+      });
+      // Nothing after the join was handed the oversized value.
+      expect(agents.ran).toEqual(['review', 'docs']);
+      expect(run.steps.some((step) => step.nodeId === 'both' || step.nodeId === 'merge')).toBe(
+        false,
+      );
+    });
+
+    it('fails the run end, rather than hand on an output over the input bound, when its last branches merged are too wide', async () => {
+      const wide = { text: 'x'.repeat(9_000) };
+      const merged = { branches: { review: wide, docs: wide } };
+      const open = document({
+        nodes: [TRIGGER, AGENT, DOCS_AGENT],
+        edges: [
+          { from: 'start', to: 'review' },
+          { from: 'start', to: 'docs' },
+        ],
+      });
+      const run = drive(open, wide, table(passing().execute));
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason: `the run cannot end on its 2 last branches: their outputs, merged, come to ${String(JSON.stringify(merged).length)} characters, and an input is at most ${String(ROUTE_INPUT_MAX_CHARS)} characters serialised`,
+      });
+    });
+
     it('fails naming the HUMAN node whose wait ran out, while a HUMAN on another branch waits unbounded', async () => {
       // The real HUMAN executor over the approvals fake. The untimed gate's
       // edge is listed first, so were the timeout to take back every request
@@ -1385,7 +1436,44 @@ describe('walk', () => {
       const outcome = await run.done;
       if (outcome.status !== 'failed') return;
       expect(outcome.reason).toContain('Rust reviewer');
-      expect(outcome.reason).toContain('looping');
+      expect(outcome.reason).toContain('so it is looping');
+      expect(outcome.reason).not.toContain('not looping');
+    });
+
+    it('stops a run with no loop whose merges multiplied its steps past the bound, and does not call it looping', async () => {
+      // Five diamonds in a row, none closed by a JOIN: each fans out to two
+      // agents that meet at a third, which therefore runs once per branch
+      // and doubles what reaches the next diamond. No edge leads back, so no
+      // branch ever comes round to a node it passed, and the bound is hit by
+      // the doubling alone.
+      const nodes: unknown[] = [TRIGGER];
+      const edges: { from: string; to: string }[] = [];
+      let from = 'start';
+      for (let level = 1; level <= 5; level += 1) {
+        const [left, right, meet] = [`a${String(level)}`, `b${String(level)}`, `m${String(level)}`];
+        for (const id of [left, right, meet]) nodes.push({ ...AGENT, id, label: id });
+        edges.push(
+          { from, to: left },
+          { from, to: right },
+          { from: left, to: meet },
+          { from: right, to: meet },
+        );
+        from = meet;
+      }
+      const run = drive(
+        document({ nodes, edges }),
+        {},
+        table(agent(async () => ({ ok: true })).execute),
+      );
+
+      const outcome = await run.done;
+      expect(outcome.status).toBe('failed');
+      if (outcome.status !== 'failed') return;
+      expect(outcome.reason).toMatch(
+        new RegExp(
+          `^the run reached [ab]\\d as its ${String(GRAPH_NODES_MAX + 1)}th step, more than the ${String(GRAPH_NODES_MAX)} steps a run may take; no branch came back round to a node it had passed, so it is not looping: a node that is no JOIN runs once for each branch that reaches it, and those runs multiplied past the bound$`,
+        ),
+      );
     });
   });
 });

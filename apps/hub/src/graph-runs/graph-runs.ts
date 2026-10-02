@@ -209,6 +209,8 @@ interface ActiveRun {
   steps: GraphRunStep[];
   /** Where each open record sits in `steps`, by the record number the walk reports it under. */
   readonly open: Map<number, number>;
+  /** Branches waiting out a retry's backoff, as the walk last reported: running, with no open record. */
+  retrying: number;
   walk: Walk | null;
   /** The state the queued flush will publish, or `null` when none is queued. */
   pending: GraphRunState | null;
@@ -303,8 +305,15 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
    * with another branch parked at a person -- `waiting` when every attempt
    * in flight is waiting on one. Off the list rather than a flag beside it,
    * so the status and the strip's step records can never say two things.
+   *
+   * The one branch the list cannot show is one between two attempts: its
+   * last is recorded `failed`, and it will try again when its backoff ends
+   * whether or not anybody answers anything. The walk counts those, and a
+   * run with one is `running` -- not parked on a person, which is what
+   * `waiting` tells whoever reads it.
    */
   const openStatus = (run: ActiveRun): GraphRunState['status'] =>
+    run.retrying > 0 ||
     run.steps.some((step) => step.outcome === 'running') ||
     !run.steps.some((step) => step.outcome === 'waiting')
       ? 'running'
@@ -424,6 +433,7 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
         step: 0,
         steps: [],
         open: new Map(),
+        retrying: 0,
         walk: null,
         pending: null,
         writes: Promise.resolve(),
@@ -458,9 +468,10 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
         join: joinExecutor,
       },
       timers,
-      onStep: (step, reached, id) => {
+      onStep: (step, reached, id, retrying) => {
         record(run, step, id);
         run.step = reached;
+        run.retrying = retrying;
         const steps = [...run.steps];
         write(run, 'steps', () => replaceSteps(database, run.runId, steps));
         publish(run, stateOf(run, openStatus(run), null));

@@ -42,6 +42,14 @@ import type { Database, Queryable } from '../db/database.js';
  * read back is a bug or a damaged database, and either is something to stop
  * on rather than a run to draw.
  *
+ * The input is parsed on the way in too. A row is read back whole by every
+ * listing it is in, so an input the read refuses breaks the run's own screen
+ * and its parent's list of children with it; the way to keep a row readable
+ * is never to write one the schema would refuse. `RouteInput` as a type is
+ * only a claim -- a value merged out of several inputs carries the type and
+ * may be wider than any one input may be -- so the claim is checked here,
+ * where the row is made, rather than trusted from whoever built the value.
+ *
  * ## A child is a row like any other
  *
  * A run a SUB-GRAPH step started is inserted here the way a run a person
@@ -125,7 +133,9 @@ const COLUMNS =
  *
  * Throws on a version the graph never had -- the foreign key's word -- which
  * is a caller that did not read the graph first rather than something to
- * answer in a sentence here.
+ * answer in a sentence here. Throws too, before anything is numbered, on an
+ * input the read would refuse: a caller that built one is the bug, and the
+ * walk parses what it merges so that none does.
  */
 export async function insertRun(
   database: Database,
@@ -133,6 +143,11 @@ export async function insertRun(
   clock: Clock,
   run: NewRun,
 ): Promise<{ readonly runId: GraphRunId; readonly number: number; readonly startedAt: number }> {
+  const input = routeInputSchema.safeParse(run.input);
+  if (!input.success) {
+    const why = input.error.issues.map((issue) => issue.message).join('; ');
+    throw new Error(`a run input is refused before it is written: ${why}`);
+  }
   return database.transaction(async (tx) => {
     const highest = await tx.query(
       'SELECT coalesce(max(number), 0) AS highest FROM graph_runs WHERE graph_node_id = ?',
@@ -149,7 +164,7 @@ export async function insertRun(
         run.graphNodeId,
         run.version,
         number,
-        JSON.stringify(run.input),
+        JSON.stringify(input.data),
         startedAt,
         run.parent?.runId ?? null,
         run.parent?.nodeId ?? null,

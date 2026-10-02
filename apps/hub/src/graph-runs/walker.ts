@@ -5,6 +5,7 @@ import {
   GRAPH_RUN_OUTPUT_MAX_CHARS,
   graphIncoming,
   parseRouteCondition,
+  routeInputSchema,
   type GraphDocument,
   type GraphNode,
   type GraphNodeId,
@@ -70,7 +71,23 @@ import type { Timers } from '@agentplex/node-shared';
  * JOIN which two branches ended at holds a list of what each carried.
  *
  * `reached` is one counter for the run, however many branches add to it, so
- * the bound that stops a loop is the same bound for a run that fans out.
+ * the bound that stops a loop is the same bound for a run that fans out. It
+ * is not only a loop that meets it: a node that is no JOIN runs once per
+ * arrival, so a chain of such merges doubles what reaches the next one, and
+ * a graph with no cycle at all can take more steps than it has nodes. The
+ * sentence says which it was. Each branch carries the nodes behind it --
+ * every node on the causal chain that led to it, a JOIN's going on carrying
+ * all its arrivals' -- and only a branch reaching a node already behind it
+ * has come back round; a run where none did is called looping by nobody.
+ *
+ * ## A merge is parsed, never assumed to fit
+ *
+ * A JOIN's going on and a run ending on several branches both build one
+ * value out of many, and each part may be as wide as a route input is
+ * allowed to be. So the merged value goes through `routeInputSchema` before
+ * anything is handed it, and a merge over the bound fails the run there,
+ * naming the JOIN or the run's end, rather than hand a ROUTER, a SUB-GRAPH's
+ * child row or a parent run a value the protocol says no input may be.
  *
  * A simulation walks the branches `in-turn`: one after another in the order
  * they were reached, so the path it answers with reads in a stable order and
@@ -212,8 +229,14 @@ export interface WalkDependencies {
    * far -- the `step` of `step 3/9` -- and which record it is: the same number
    * on every report of one attempt and on no other attempt's, so two visits
    * of one node in flight at once are two records and not one.
+   *
+   * `retrying` is how many branches are waiting out a retry's backoff as the
+   * record is made. Such a branch has no open record -- its last attempt is
+   * recorded `failed` -- and yet it will run again with nobody's say-so, so
+   * a run whose only open records are people being asked is not waiting on
+   * them while one is above zero.
    */
-  readonly onStep: (step: GraphRunStep, reached: number, record: number) => void;
+  readonly onStep: (step: GraphRunStep, reached: number, record: number, retrying: number) => void;
   /**
    * Called once, synchronously, with how the run ended, after the last
    * `onStep` and before `done` resolves.
@@ -365,6 +388,35 @@ function createCancellation(): Cancellation & { cancel(): void } {
   };
 }
 
+/** What a branch hands a JOIN: its output, and the nodes behind it. */
+interface Arrival {
+  readonly carried: RouteInput;
+  readonly behind: ReadonlySet<GraphNodeId>;
+}
+
+/** A branch about to start: where, with what, and the nodes behind it. */
+interface Going extends Arrival {
+  readonly node: GraphNode;
+}
+
+/**
+ * A merged value read as the route input it is about to be handed on as, or
+ * the end of a sentence saying how wide it came to and why it is not one.
+ */
+function asInput(
+  value: Record<string, unknown>,
+):
+  | { readonly ok: true; readonly input: RouteInput }
+  | { readonly ok: false; readonly problem: string } {
+  const parsed = routeInputSchema.safeParse(value);
+  if (parsed.success) return { ok: true, input: parsed.data };
+  const why = parsed.error.issues.map((issue) => issue.message).join('; ');
+  return {
+    ok: false,
+    problem: `come to ${String(JSON.stringify(value).length)} characters, and ${why}`,
+  };
+}
+
 export function walk(
   document: GraphDocument,
   input: RouteInput,
@@ -388,10 +440,14 @@ export function walk(
   let failure: Extract<WalkOutcome, { status: 'failed' }> | null = null;
   /** Nodes reached across every branch: one counter, so the loop bound holds for the run. */
   let reached = 0;
+  /** Whether any branch has reached a node already behind it: what makes the bound a loop. */
+  let looped = false;
+  /** Branches between two attempts of a node, waiting out its backoff. */
+  let retrying = 0;
   /** Branches started and not yet ended. The run ends when the last one does. */
   let live = 0;
   /** Branches waiting their turn, in the order they were reached; only `in-turn` queues. */
-  const queue: { readonly node: GraphNode; readonly carried: RouteInput }[] = [];
+  const queue: Going[] = [];
   /**
    * What each branch that ended at a node with nowhere to go carried out, by
    * that node, in the order they ended: two branches can end at one node.
@@ -403,7 +459,7 @@ export function walk(
    * What has reached each JOIN and not yet gone on through it, by the node it
    * came from, oldest first: one node can arrive again before the others have.
    */
-  const arrivals = new Map<GraphNodeId, Map<GraphNodeId, RouteInput[]>>();
+  const arrivals = new Map<GraphNodeId, Map<GraphNodeId, Arrival[]>>();
   /** How many times each JOIN has gone on, for the sentence a leftover arrival ends the run with. */
   const joined = new Map<GraphNodeId, number>();
 
@@ -477,23 +533,41 @@ export function walk(
    * `graphIncoming` names -- once every one of them has one waiting. `null`
    * while any is still out. An arrival from a node already waiting queues
    * behind it rather than replacing it, and goes on with the next set.
+   *
+   * What goes on is every arrival's output under its node, parsed as the
+   * route input it is about to be; a set whose outputs merged are no input
+   * is the problem the run fails with, naming the join.
    */
-  const arrive = (join: GraphNode, from: GraphNodeId, carried: RouteInput): RouteInput | null => {
+  const arrive = (
+    join: GraphNode,
+    from: GraphNodeId,
+    arrival: Arrival,
+  ): { readonly going: Arrival } | { readonly problem: string } | null => {
     const expected = graphIncoming(document, join.id);
-    const held = arrivals.get(join.id) ?? new Map<GraphNodeId, RouteInput[]>();
+    const held = arrivals.get(join.id) ?? new Map<GraphNodeId, Arrival[]>();
     arrivals.set(join.id, held);
-    held.set(from, [...(held.get(from) ?? []), carried]);
+    held.set(from, [...(held.get(from) ?? []), arrival]);
     if (expected.some((id) => (held.get(id) ?? []).length === 0)) return null;
     const branches: Record<string, RouteInput> = {};
+    const behind = new Set<GraphNodeId>();
     for (const id of expected) {
-      const [output, ...later] = held.get(id) ?? [];
-      if (output !== undefined) branches[id] = output;
+      const [oldest, ...later] = held.get(id) ?? [];
+      if (oldest !== undefined) {
+        branches[id] = oldest.carried;
+        for (const passed of oldest.behind) behind.add(passed);
+      }
       if (later.length === 0) held.delete(id);
       else held.set(id, later);
     }
     if (held.size === 0) arrivals.delete(join.id);
     joined.set(join.id, (joined.get(join.id) ?? 0) + 1);
-    return { branches };
+    const merged = asInput({ branches });
+    if (!merged.ok) {
+      return {
+        problem: `the JOIN node ${nameOf(join)} cannot go on: the outputs of its incoming branches, merged, ${merged.problem}`,
+      };
+    }
+    return { going: { carried: merged.input, behind } };
   };
 
   /** How the run ended, once no branch is left: said once, synchronously. */
@@ -534,13 +608,26 @@ export function walk(
     if (only !== undefined && alongside.length === 0) {
       return end({ status: 'succeeded', output: only });
     }
+    if (ended.length === 0) return end({ status: 'succeeded', output: input });
     const branches: Record<string, RouteInput | RouteInput[]> = {};
+    let count = 0;
     for (const node of ended) {
       const outputs = leaves.get(node.id) ?? [];
       const [first, ...rest] = outputs;
       if (first !== undefined) branches[node.id] = rest.length === 0 ? first : outputs;
+      count += outputs.length;
     }
-    return end({ status: 'succeeded', output: ended.length === 0 ? input : { branches } });
+    // What a run ends with is a route input -- a SUB-GRAPH step hands it on
+    // to its parent's next node -- so it is parsed as one, and a merge too
+    // wide to be one fails the run here rather than in a parent's row.
+    const merged = asInput({ branches });
+    if (!merged.ok) {
+      return end({
+        status: 'failed',
+        reason: `the run cannot end on its ${String(count)} last branches: their outputs, merged, ${merged.problem}`,
+      });
+    }
+    return end({ status: 'succeeded', output: merged.input });
   };
 
   /** A branch has ended: start the next in turn, or end the run when none is left. */
@@ -548,7 +635,7 @@ export function walk(
     live -= 1;
     const next = queue.shift();
     if (next !== undefined && !halt.cancelled) {
-      start(next.node, next.carried);
+      start(next);
       return;
     }
     queue.length = 0;
@@ -556,14 +643,14 @@ export function walk(
   };
 
   /** Starts a branch now, or queues it behind the one walking when branches take turns. */
-  const spawn = (node: GraphNode, carried: RouteInput): void => {
-    if (inTurn) queue.push({ node, carried });
-    else start(node, carried);
+  const spawn = (going: Going): void => {
+    if (inTurn) queue.push(going);
+    else start(going);
   };
 
-  const start = (node: GraphNode, carried: RouteInput): void => {
+  const start = (going: Going): void => {
     live += 1;
-    void branch(node, carried);
+    void branch(going);
   };
 
   /** How to record a step of one attempt at one node, with the child it named if any. */
@@ -585,7 +672,7 @@ export function walk(
     let child: GraphRunChild | null = null;
     const recordId = (records += 1);
     const record: Recorder = (outcome, output) =>
-      onStep({ nodeId: node.id, attempt, outcome, output, child }, reached, recordId);
+      onStep({ nodeId: node.id, attempt, outcome, output, child }, reached, recordId, retrying);
     record('running', null);
     try {
       const attempted = await execute(carried, {
@@ -657,8 +744,12 @@ export function walk(
           ? { ended: 'failed', reason, retryable: false, record }
           : { ended: 'failed', reason, record };
       }
+      // Counted before the record, so the record already says a branch is
+      // between attempts, and uncounted before the next attempt's.
+      retrying += 1;
       record('failed', null);
       const waited = await wait(node.retry.backoff * 1_000);
+      retrying -= 1;
       if (!waited) return { ended: 'halted', record: null };
     }
   }
@@ -670,16 +761,22 @@ export function walk(
    * the `finally`, synchronously at the branch's last step, so the run's end
    * is said in the same stretch as that step.
    */
-  async function branch(first: GraphNode, firstCarried: RouteInput): Promise<void> {
-    let node = first;
-    let carried = firstCarried;
+  async function branch(first: Going): Promise<void> {
+    let node = first.node;
+    let carried = first.carried;
+    // This branch's own copy: a fan-out hands each of its branches the same set.
+    const behind = new Set(first.behind);
     try {
       for (;;) {
         if (halt.cancelled) return;
         reached += 1;
+        if (behind.has(node.id)) looped = true;
+        behind.add(node.id);
         if (reached > GRAPH_NODES_MAX) {
           fail(
-            `the run reached ${nameOf(node)} as its ${String(reached)}th step, more nodes than a graph holds, so it is looping`,
+            looped
+              ? `the run reached ${nameOf(node)} as its ${String(reached)}th step, more nodes than a graph holds, so it is looping`
+              : `the run reached ${nameOf(node)} as its ${String(reached)}th step, more than the ${String(GRAPH_NODES_MAX)} steps a run may take; no branch came back round to a node it had passed, so it is not looping: a node that is no JOIN runs once for each branch that reaches it, and those runs multiplied past the bound`,
           );
           return;
         }
@@ -717,25 +814,31 @@ export function walk(
           return;
         }
 
-        const going: { readonly node: GraphNode; readonly carried: RouteInput }[] = [];
+        const going: Going[] = [];
         for (const next of followed.next) {
           if (next.kind !== 'join') {
-            going.push({ node: next, carried });
+            going.push({ node: next, carried, behind });
             continue;
           }
-          const merged = arrive(next, node.id, carried);
-          if (merged !== null) going.push({ node: next, carried: merged });
+          const merged = arrive(next, node.id, { carried, behind: new Set(behind) });
+          if (merged === null) continue;
+          if ('problem' in merged) {
+            fail(merged.problem);
+            return;
+          }
+          going.push({ node: next, ...merged.going });
         }
         const [only, ...others] = going;
         if (only === undefined) return;
         if (others.length > 0) {
           // A fan-out: each branch its own, started in the order the edges
           // are listed, and this one ends here.
-          for (const each of going) spawn(each.node, each.carried);
+          for (const each of going) spawn(each);
           return;
         }
         node = only.node;
         carried = only.carried;
+        for (const passed of only.behind) behind.add(passed);
       }
     } catch (error) {
       fail(`the walk broke at ${nameOf(node)}: ${String(error)}`);
@@ -752,7 +855,7 @@ export function walk(
       reason: `a run starts at the one TRIGGER node, and this document has ${String(triggers.length)}`,
     });
   } else {
-    start(trigger, input);
+    start({ node: trigger, carried: input, behind: new Set() });
   }
 
   return { done, cancel: () => cancellation.cancel() };

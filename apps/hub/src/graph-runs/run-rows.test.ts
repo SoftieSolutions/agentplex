@@ -4,6 +4,7 @@ import {
   graphNodeIdSchema,
   graphRunIdSchema,
   nodeIdSchema,
+  ROUTE_INPUT_MAX_CHARS,
   type GraphRunStep,
   type NodeId,
 } from '@agentplex/protocol';
@@ -187,6 +188,24 @@ describe('run rows', () => {
       reason: null,
       endedAt: NOW + 5,
     });
+  });
+
+  it('refuses to write an input no read could parse back, and numbers nothing for it', async () => {
+    // The type says RouteInput, and a type is a claim: a value built out of
+    // several inputs can be wider than any one may be. Written, it would be
+    // a row that breaks every read of it and every listing it is in.
+    const graph = await publishedGraph();
+
+    await expect(
+      insertRun(db(), ids, clock, {
+        graphNodeId: graph,
+        version: 1,
+        input: { text: 'x'.repeat(ROUTE_INPUT_MAX_CHARS) },
+      }),
+    ).rejects.toThrow(
+      `a run input is refused before it is written: an input is at most ${String(ROUTE_INPUT_MAX_CHARS)} characters serialised`,
+    );
+    expect(await listRuns(db(), graph)).toEqual([]);
   });
 
   it('admits only a final status as an end, so endRun cannot write an open one', () => {
