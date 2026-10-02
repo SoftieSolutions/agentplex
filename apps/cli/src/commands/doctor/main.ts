@@ -84,8 +84,12 @@ export async function main(): Promise<void> {
   // has no `--prefix` of its own, and a flag it read to find the file would be
   // one no daemon accepts. A file that will not be read is carried into the
   // report rather than refusing it; see `readRecordedSettings`.
+  // `$HOME` rather than `os.homedir()`, for the reason setup argues: under
+  // `sudo` the two name different accounts. Read once, for the settings file
+  // and for the adapters below.
+  const home = process.env['HOME'] ?? '';
   const recorded = await readRecordedSettings(
-    { home: process.env['HOME'] ?? '', prefix: null, system: false },
+    { home, prefix: null, system: false },
     nodeInstallationFiles,
   );
 
@@ -119,9 +123,12 @@ export async function main(): Promise<void> {
   // the composition the provider seam owns, and it reaches no further than a
   // store filesystem and a one-shot runner: a doctor that could be handed
   // something able to open a pty would not be this program any more.
+  // The home is handed over for the composition's sake: the doctor spawns
+  // nothing, so no launch it could plan is ever started.
   const providers = createRegisteredProviders({
     files: nodeProviderFiles,
     runner: processRunner,
+    homeDirectory: home,
   });
 
   // The same preflight the server runs at boot. One implementation, so the two

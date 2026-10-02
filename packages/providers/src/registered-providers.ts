@@ -53,14 +53,24 @@ export interface RegisteredProvidersDependencies {
    * configuration this parameter exists to carry.
    */
   readonly runner: ProcessRunner;
+  /**
+   * The home of the account the adapters' launches run as.
+   *
+   * Taken rather than read for the same reason as the runner: `main` is the
+   * one place that reads this process's surroundings, and the server and setup
+   * read it differently on purpose (setup runs under sudo). Claude uses it to
+   * leave `CLAUDE_CONFIG_DIR` unset for the account's own `~/.claude`.
+   */
+  readonly homeDirectory: string;
 }
 
 export function createRegisteredProviders({
   files,
   runner,
+  homeDirectory,
 }: RegisteredProvidersDependencies): ProviderRegistry {
   return createProviderRegistry([
-    createClaudeAdapter({ files, probe: createNodeProcessProbe({ runner }) }),
+    createClaudeAdapter({ files, probe: createNodeProcessProbe({ runner }), homeDirectory }),
     // The line AGX-174 said the next adapter would be. It takes `files` and
     // nothing else: codex keeps no process registry, so there is no probe to
     // hand it, and the dependency this function already carried was enough.

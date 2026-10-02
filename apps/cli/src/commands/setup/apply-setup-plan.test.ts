@@ -85,7 +85,11 @@ function bareMachine(auth: ProcessOutcome = LOGGED_OUT): FakeMachine {
 
 function claudeOnly() {
   return createProviderRegistry([
-    createClaudeAdapter({ files: createFakeProviderFiles(), probe: createFakeProcessProbe({}) }),
+    createClaudeAdapter({
+      files: createFakeProviderFiles(),
+      probe: createFakeProcessProbe({}),
+      homeDirectory: '/home/dev',
+    }),
   ]);
 }
 

@@ -197,6 +197,7 @@ describe('the operation registry', () => {
         createClaudeAdapter({
           files: createFakeProviderFiles(),
           probe: createFakeProcessProbe({}),
+          homeDirectory: '/home/agentplex',
         }),
       ]),
     });

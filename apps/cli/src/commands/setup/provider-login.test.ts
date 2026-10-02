@@ -124,7 +124,13 @@ function machineWhoseLoginWorks(options: {
 
 function providerRegistry() {
   return createProviderRegistry([
-    createClaudeAdapter({ files: createFakeProviderFiles(), probe: createFakeProcessProbe({}) }),
+    createClaudeAdapter({
+      files: createFakeProviderFiles(),
+      probe: createFakeProcessProbe({}),
+      // The account setup runs as, on purpose: the store is that account's own
+      // `~/.claude`, which is the store setup offers by default.
+      homeDirectory: HOME,
+    }),
   ]);
 }
 
@@ -194,11 +200,14 @@ describe('offerProviderLogin', () => {
   });
 
   it('runs the login in the store the sessions will run against', async () => {
-    // A login that writes into whichever home directory setup happens to run as
-    // leaves the store exactly as logged out as it was, and nothing says so.
+    // The store is the account's own `~/.claude`, which Claude Code finds with
+    // no `CLAUDE_CONFIG_DIR` at all -- and naming it would move the login's
+    // credentials to a keychain item and global config that a session started
+    // without the variable never reads. Absent is what lands the login where a
+    // session in this store looks.
     const attempt = await offer();
 
-    expect(attempt.fake.opened[0]?.env['CLAUDE_CONFIG_DIR']).toBe(STORE.path);
+    expect(attempt.fake.opened[0]?.env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
     // And the working directory is the home, never the store: a launch is
     // refused for a cwd inside the store it runs against.
     expect(attempt.fake.opened[0]?.cwd).toBe(HOME);

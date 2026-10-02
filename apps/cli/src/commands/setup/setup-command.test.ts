@@ -143,6 +143,7 @@ async function run(
         createClaudeAdapter({
           files: createFakeProviderFiles(),
           probe: createFakeProcessProbe({}),
+          homeDirectory: '/home/dev',
         }),
       ]),
     files,

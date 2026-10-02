@@ -42,6 +42,12 @@ const SESSIONS = `${STORE.path}/${CLAUDE_SESSIONS_DIRECTORY}`;
 const PID = 71_484;
 const PROCESS_STARTED_AT = Date.parse('2026-09-03T03:28:48Z');
 
+/**
+ * The home of the account the server runs as. `STORE` is not under it, so
+ * every launch below names its store; the default-store case has its own test.
+ */
+const HOME = '/home/dev';
+
 function adapterOver(
   files: Parameters<typeof createFakeProviderFiles>[0],
   probe: Parameters<typeof createFakeProcessProbe>[0] = {},
@@ -49,6 +55,7 @@ function adapterOver(
   return createClaudeAdapter({
     files: createFakeProviderFiles(files),
     probe: createFakeProcessProbe(probe),
+    homeDirectory: HOME,
   });
 }
 
@@ -478,6 +485,40 @@ describe('createClaudeAdapter.spawn', () => {
     expect(spawned.ok && spawned.plan.scrubEnvPrefixes).toContain('CLAUDE');
   });
 
+  it("leaves the account's own Claude config alone in its default store", () => {
+    // Naming `~/.claude` in `CLAUDE_CONFIG_DIR` moves Claude Code's global
+    // config and keychain item away from the account's, so the session opens
+    // on onboarding, logged out. Unset, the transcript lands in the same place.
+    const defaultStore = storeDescriptorSchema.parse({
+      storeId: 'store-a',
+      path: `${HOME}/.claude`,
+    });
+    const adapter = adapterOver({});
+    const spawned = adapter.spawn({ store: defaultStore, cwd: CWD, prompt: null, approval: null });
+    const resumed = adapter.resume({
+      store: defaultStore,
+      session: SESSION,
+      cwd: CWD,
+      approval: null,
+    });
+
+    expect(spawned.ok && spawned.plan.env).toEqual({});
+    expect(resumed.ok && resumed.plan.env).toEqual({});
+  });
+
+  it('gives a login the environment a session gets, for one store and one home', () => {
+    // A login that landed its credentials somewhere a session does not look
+    // would be a login that changed nothing.
+    const adapter = adapterOver({});
+    for (const path of [STORE.path, `${HOME}/.claude`]) {
+      const store = storeDescriptorSchema.parse({ storeId: 'store-a', path });
+      const spawned = adapter.spawn({ store, cwd: CWD, prompt: null, approval: null });
+      const login = adapter.provisioning.login({ store, cwd: CWD });
+      if (!spawned.ok || !login.ok) throw new Error('both launches plan');
+      expect(login.plan.env).toEqual(spawned.plan.env);
+    }
+  });
+
   it('refuses a working directory inside the store', () => {
     const spawned = adapterOver({}).spawn({
       store: STORE,
@@ -676,7 +717,11 @@ describe('createClaudeAdapter.discover, scan after scan', () => {
         [`${PROJECT}/40839ba3-652f-4c07-8404-43fcd03ba122.jsonl`]: NO_TURNS,
       },
     });
-    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const adapter = createClaudeAdapter({
+      files,
+      probe: createFakeProcessProbe(),
+      homeDirectory: HOME,
+    });
 
     const first = await adapter.discover(STORE);
     const readBefore = files.reads.length;
@@ -690,7 +735,11 @@ describe('createClaudeAdapter.discover, scan after scan', () => {
 
   it('reads a transcript again once a turn is appended, and reports what it added', async () => {
     const files = createFakeProviderFiles({ files: { [TRANSCRIPT]: EARLIER } });
-    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const adapter = createClaudeAdapter({
+      files,
+      probe: createFakeProcessProbe(),
+      homeDirectory: HOME,
+    });
     const [before] = (await adapter.discover(STORE)).sessions;
 
     files.write(TRANSCRIPT, COMPLETED_TURN);
@@ -709,7 +758,11 @@ describe('createClaudeAdapter.discover, scan after scan', () => {
     // The answer has to be the one an adapter that never saw the longer file
     // would give.
     const files = createFakeProviderFiles({ files: { [TRANSCRIPT]: COMPLETED_TURN } });
-    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const adapter = createClaudeAdapter({
+      files,
+      probe: createFakeProcessProbe(),
+      homeDirectory: HOME,
+    });
     await adapter.discover(STORE);
 
     files.write(TRANSCRIPT, EARLIER);
@@ -725,7 +778,11 @@ describe('createClaudeAdapter.discover, scan after scan', () => {
       files: { [TRANSCRIPT]: COMPLETED_TURN },
       mtimes: { [TRANSCRIPT]: 1_000 },
     });
-    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const adapter = createClaudeAdapter({
+      files,
+      probe: createFakeProcessProbe(),
+      homeDirectory: HOME,
+    });
     await adapter.discover(STORE);
 
     files.write(TRANSCRIPT, COMPLETED_TURN, 2_000);
@@ -748,6 +805,7 @@ describe('createClaudeAdapter.discover, scan after scan', () => {
     const adapter = createClaudeAdapter({
       files,
       probe: createFakeProcessProbe({ processes: { [PID]: PROCESS_STARTED_AT } }),
+      homeDirectory: HOME,
     });
     const [waiting] = (await adapter.discover(STORE)).sessions;
 
@@ -764,7 +822,11 @@ describe('createClaudeAdapter.discover, scan after scan', () => {
   it('names a damaged transcript on every scan, without reading it again', async () => {
     const damaged = `${PROJECT}/dddddddd-0000-4000-8000-000000000000.jsonl`;
     const files = createFakeProviderFiles({ files: { [damaged]: 'not json at all\n' } });
-    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const adapter = createClaudeAdapter({
+      files,
+      probe: createFakeProcessProbe(),
+      homeDirectory: HOME,
+    });
     const first = await adapter.discover(STORE);
 
     const readBefore = files.reads.length;
@@ -785,7 +847,11 @@ describe('createClaudeAdapter.discover, scan after scan', () => {
       files: { [unreadable]: COMPLETED_TURN },
       unreadable: [unreadable],
     });
-    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const adapter = createClaudeAdapter({
+      files,
+      probe: createFakeProcessProbe(),
+      homeDirectory: HOME,
+    });
     await adapter.discover(STORE);
 
     const readBefore = files.reads.length;
@@ -803,7 +869,11 @@ describe('createClaudeAdapter.discover, scan after scan', () => {
       files: { [TRANSCRIPT]: COMPLETED_TURN, [unstatable]: COMPLETED_TURN },
       unstatable: [unstatable],
     });
-    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const adapter = createClaudeAdapter({
+      files,
+      probe: createFakeProcessProbe(),
+      homeDirectory: HOME,
+    });
 
     const discovered = await adapter.discover(STORE);
 
@@ -819,7 +889,11 @@ describe('createClaudeAdapter.discover, scan after scan', () => {
       files: { [TRANSCRIPT]: COMPLETED_TURN },
       mtimes: { [TRANSCRIPT]: 1_000 },
     });
-    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const adapter = createClaudeAdapter({
+      files,
+      probe: createFakeProcessProbe(),
+      homeDirectory: HOME,
+    });
     await adapter.discover(STORE);
 
     files.remove(TRANSCRIPT);
@@ -843,7 +917,11 @@ describe('createClaudeAdapter.discover, scan after scan', () => {
     const files = createFakeProviderFiles({
       files: { [TRANSCRIPT]: COMPLETED_TURN, [inB]: PENDING_TOOL_USE },
     });
-    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const adapter = createClaudeAdapter({
+      files,
+      probe: createFakeProcessProbe(),
+      homeDirectory: HOME,
+    });
 
     await adapter.discover(STORE);
     await adapter.discover(storeB);

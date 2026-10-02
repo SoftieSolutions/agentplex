@@ -167,6 +167,9 @@ async function run(
           createClaudeAdapter({
             files: createFakeProviderFiles(),
             probe: createFakeProcessProbe({}),
+            // The account setup runs as, on purpose: `STORE` is its own
+            // `~/.claude`, the store setup offers by default.
+            homeDirectory: HOME,
           }),
         ]),
       files,
@@ -520,9 +523,10 @@ describe('the setup wizard', () => {
     expect(wizard.ptys.opened.map((request) => [request.command, ...request.args])).toEqual([
       ['claude', 'auth', 'login'],
     ]);
-    // In the store the sessions will run against, not in whichever home the
-    // setup process happens to have.
-    expect(wizard.ptys.opened[0]?.env['CLAUDE_CONFIG_DIR']).toBe(STORE);
+    // In the store the sessions will run against. That store is the account's
+    // own `~/.claude`, so the variable is absent: naming it would send the
+    // credentials to a keychain item and global config no session reads.
+    expect(wizard.ptys.opened[0]?.env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
     // And what the login printed reached the operator.
     expect(wizard.terminal.attachedOutput.join('')).toContain('https://example.invalid/');
   });

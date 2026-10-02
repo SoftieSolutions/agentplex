@@ -17,6 +17,8 @@ const COMPLETED_TURN = fixture('claude-completed-turn.jsonl');
 const CODEX_COMPLETED_TURN = fixture('codex-completed-turn.jsonl');
 
 const STORE = storeDescriptorSchema.parse({ storeId: 'store-a', path: '/volumes/claude' });
+/** The server account's home, which only a launch reads. */
+const HOME = '/home/dev';
 const SESSION_ID = '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde';
 const TRANSCRIPT = `${STORE.path}/${CLAUDE_PROJECTS_DIRECTORY}/-Users-dev-Code-agentplex/${SESSION_ID}.jsonl`;
 
@@ -27,6 +29,7 @@ function registeredOver(files: Record<string, string> = {}) {
   return createRegisteredProviders({
     files: createFakeProviderFiles({ files }),
     runner: createFakeProcessRunner(),
+    homeDirectory: HOME,
   });
 }
 
@@ -51,6 +54,32 @@ describe('createRegisteredProviders', () => {
 
     expect(discovered.problems).toEqual([]);
     expect(discovered.sessions.map((session) => session.sessionId)).toEqual([SESSION_ID]);
+  });
+
+  it('hands its adapters the home it was given', () => {
+    // The home is what tells a claude launch that a store is the account's
+    // own `~/.claude`, where naming it would cost the child its config. The
+    // composition passes it on rather than reading one of its own.
+    const lookup = registeredOver().lookup('claude');
+    if (!lookup.ok) throw new Error(lookup.problem);
+    const store = (path: string) => storeDescriptorSchema.parse({ storeId: 'store-a', path });
+    const CWD = '/home/dev/Code/agentplex';
+
+    const home = lookup.adapter.spawn({
+      store: store(`${HOME}/.claude`),
+      cwd: CWD,
+      prompt: null,
+      approval: null,
+    });
+    const elsewhere = lookup.adapter.spawn({
+      store: STORE,
+      cwd: CWD,
+      prompt: null,
+      approval: null,
+    });
+
+    expect(home.ok && home.plan.env).toEqual({});
+    expect(elsewhere.ok && elsewhere.plan.env).toEqual({ CLAUDE_CONFIG_DIR: STORE.path });
   });
 
   it('builds the codex adapter over that same filesystem', async () => {

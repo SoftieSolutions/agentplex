@@ -75,9 +75,20 @@ export interface ClaudeAdapterDependencies {
    * `sysctl` or a pid that recycles on cue.
    */
   readonly probe: ProcessProbe;
+  /**
+   * The home of the account the server runs as, which is how a launch knows a
+   * store is that account's own `~/.claude` and must not be named to the child
+   * (see `CLAUDE_CONFIG_DIR`). Injected because only an entrypoint may read
+   * it, and a test must be able to say whose home it is.
+   */
+  readonly homeDirectory: string;
 }
 
-export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies): ProviderAdapter {
+export function createClaudeAdapter({
+  files,
+  probe,
+  homeDirectory,
+}: ClaudeAdapterDependencies): ProviderAdapter {
   // Held for the life of the adapter, which is the life of the server: what a
   // transcript parsed to last scan is the answer this scan too, until its size
   // or mtime moves. The parse is what is kept and not the session built from
@@ -121,6 +132,7 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
         request.cwd,
         request.prompt === null ? [] : [request.prompt],
         request.approval,
+        homeDirectory,
       );
     },
 
@@ -133,6 +145,7 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
         request.cwd,
         ['--resume', request.session.sessionId],
         request.approval,
+        homeDirectory,
       );
     },
 
@@ -160,8 +173,9 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
     // Provisioning holds no store and no filesystem, so it is built once here
     // rather than taken as a dependency: what it answers about Claude Code is
     // true of every Claude Code, and an adapter that had to be handed one would
-    // be an adapter a caller could hand the wrong one.
-    provisioning: createClaudeProvisioning(),
+    // be an adapter a caller could hand the wrong one. It takes this adapter's
+    // home, so that a login and a session in one store get one environment.
+    provisioning: createClaudeProvisioning({ homeDirectory }),
 
     // The one provider in this build that can be made to ask. What goes in the
     // file is this adapter's; writing it, and removing it when the launch ends,

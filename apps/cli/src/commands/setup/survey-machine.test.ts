@@ -35,7 +35,11 @@ const LOCAL = '/home/dev/.local/bin';
 
 function providers() {
   return createProviderRegistry([
-    createClaudeAdapter({ files: createFakeProviderFiles(), probe: createFakeProcessProbe({}) }),
+    createClaudeAdapter({
+      files: createFakeProviderFiles(),
+      probe: createFakeProcessProbe({}),
+      homeDirectory: HOME,
+    }),
   ]);
 }
 
