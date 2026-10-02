@@ -292,6 +292,114 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
   const logger = dependencies.logger.child({ part: 'sessions' });
 
   /**
+   * The sessions a start naming them is on its way for, as `store/session`.
+   *
+   * Only starts that name a session: a fresh spawn has no id for a second
+   * spawn to collide with, and two of them are two sessions.
+   */
+  const startsInFlight = new Set<string>();
+
+  /**
+   * Route a start and put it to the machine chosen, once the directory is
+   * settled and the claim on the session is taken.
+   */
+  async function launch(
+    request: StartSessionRequest,
+    directory: string | null,
+  ): Promise<StartOutcome> {
+    const routed = routeStart(state.snapshot(), {
+      storeId: request.storeId,
+      sessionId: request.sessionId,
+      provider: request.provider,
+      server: request.server,
+    });
+    if (!routed.ok) {
+      logger.info('start refused', {
+        storeId: request.storeId,
+        sessionId: request.sessionId,
+        problem: routed.problem,
+      });
+      return routed;
+    }
+
+    const { registrationId } = routed.server;
+    // Minted after the routing and before the instruction: a start that was
+    // refused never happened, and naming one would put an id in a log that
+    // nothing on any machine will ever report back.
+    const startId = startIdSchema.parse(ids.newId());
+    const answered = await connections.ask(registrationId, {
+      type: 'session-start',
+      startId,
+      storeId: request.storeId,
+      sessionId: request.sessionId,
+      provider: request.provider,
+      prompt: request.prompt,
+      directory,
+    });
+
+    if (!answered.ok) {
+      logger.info('the server refused a start', {
+        registrationId,
+        storeId: request.storeId,
+        problem: answered.problem,
+      });
+      return refusal(answered, registrationId);
+    }
+
+    // Narrowed on the frame the server sent rather than assumed from what was
+    // asked: a peer that answered a start with a stop is a peer that is out
+    // of step, and taking its word for the wrong thing would put a session in
+    // front of a user that nothing is running.
+    if (answered.answer.type !== 'session-started') {
+      logger.error('the server answered a start with something else', {
+        registrationId,
+        answered: answered.answer.type,
+      });
+      return {
+        ok: false,
+        code: 'internal',
+        problem: 'the server answered a start with something else',
+        holder: null,
+      };
+    }
+
+    logger.info('session started', {
+      registrationId,
+      storeId: answered.answer.storeId,
+      sessionId: answered.answer.sessionId,
+      startId,
+    });
+
+    // What the session was started to do, told to whoever keeps that, and
+    // never told to a server: the prompt reached the agent on the
+    // instruction above, as one argv element the adapter placed, and this
+    // path only records it. A failure here costs the label and not the
+    // session, which is running whatever this hub manages to write down.
+    try {
+      await onStarted({
+        startId,
+        storeId: answered.answer.storeId,
+        sessionId: answered.answer.sessionId,
+        prompt: request.prompt,
+      });
+    } catch (error) {
+      logger.warn('a started session kept no task', {
+        startId,
+        storeId: answered.answer.storeId,
+        problem: String(error),
+      });
+    }
+
+    return {
+      ok: true,
+      storeId: answered.answer.storeId,
+      sessionId: answered.answer.sessionId,
+      server: registrationId,
+      startId,
+    };
+  }
+
+  /**
    * The half a pause and a resume share: the routing, the question put to
    * the server, and the refusal. One function so that the routing and the
    * refusal cannot drift between them; what each makes of the answer is its
@@ -393,96 +501,35 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
         }
       }
 
-      const routed = routeStart(state.snapshot(), {
-        storeId: request.storeId,
-        sessionId: request.sessionId,
-        provider: request.provider,
-        server: request.server,
-      });
-      if (!routed.ok) {
-        logger.info('start refused', {
-          storeId: request.storeId,
-          sessionId: request.sessionId,
-          problem: routed.problem,
-        });
-        return routed;
+      // A resume already on its way holds nothing yet: the holder appears only
+      // once the server has answered and reported, so the routing would send a
+      // second start of the same session exactly where it sent the first, and
+      // two processes would write one transcript. Checked and claimed in one
+      // synchronous stretch -- no await between the two -- so two starts that
+      // arrive together cannot both pass, and released whatever the machine
+      // answered, so a refusal or a dropped socket does not wedge the session.
+      const claim = request.sessionId === null ? null : `${request.storeId}/${request.sessionId}`;
+      if (claim !== null) {
+        if (startsInFlight.has(claim)) {
+          logger.info('start refused', {
+            storeId: request.storeId,
+            sessionId: request.sessionId,
+            problem: 'already being started',
+          });
+          return {
+            ok: false,
+            code: 'refused',
+            problem: 'that session is already being started',
+            holder: null,
+          };
+        }
+        startsInFlight.add(claim);
       }
-
-      const { registrationId } = routed.server;
-      // Minted after the routing and before the instruction: a start that was
-      // refused never happened, and naming one would put an id in a log that
-      // nothing on any machine will ever report back.
-      const startId = startIdSchema.parse(ids.newId());
-      const answered = await connections.ask(registrationId, {
-        type: 'session-start',
-        startId,
-        storeId: request.storeId,
-        sessionId: request.sessionId,
-        provider: request.provider,
-        prompt: request.prompt,
-        directory,
-      });
-
-      if (!answered.ok) {
-        logger.info('the server refused a start', {
-          registrationId,
-          storeId: request.storeId,
-          problem: answered.problem,
-        });
-        return refusal(answered, registrationId);
-      }
-
-      // Narrowed on the frame the server sent rather than assumed from what was
-      // asked: a peer that answered a start with a stop is a peer that is out
-      // of step, and taking its word for the wrong thing would put a session in
-      // front of a user that nothing is running.
-      if (answered.answer.type !== 'session-started') {
-        logger.error('the server answered a start with something else', {
-          registrationId,
-          answered: answered.answer.type,
-        });
-        return {
-          ok: false,
-          code: 'internal',
-          problem: 'the server answered a start with something else',
-          holder: null,
-        };
-      }
-
-      logger.info('session started', {
-        registrationId,
-        storeId: answered.answer.storeId,
-        sessionId: answered.answer.sessionId,
-        startId,
-      });
-
-      // What the session was started to do, told to whoever keeps that, and
-      // never told to a server: the prompt reached the agent on the
-      // instruction above, as one argv element the adapter placed, and this
-      // path only records it. A failure here costs the label and not the
-      // session, which is running whatever this hub manages to write down.
       try {
-        await onStarted({
-          startId,
-          storeId: answered.answer.storeId,
-          sessionId: answered.answer.sessionId,
-          prompt: request.prompt,
-        });
-      } catch (error) {
-        logger.warn('a started session kept no task', {
-          startId,
-          storeId: answered.answer.storeId,
-          problem: String(error),
-        });
+        return await launch(request, directory);
+      } finally {
+        if (claim !== null) startsInFlight.delete(claim);
       }
-
-      return {
-        ok: true,
-        storeId: answered.answer.storeId,
-        sessionId: answered.answer.sessionId,
-        server: registrationId,
-        startId,
-      };
     },
 
     async stop(request: StopSessionRequest): Promise<SessionOutcome> {
