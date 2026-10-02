@@ -179,6 +179,46 @@ export function isNarrowed(shape: CatalogueShape): boolean {
 }
 
 /**
+ * How many narrowings the catalogue's popover counts on its badge: a provider
+ * and a status, each counted when the shape holds one.
+ *
+ * Read off the shape and not off what the popover happens to draw. A section
+ * goes away when the fleet stops offering a choice, and a count that went with
+ * it would say nothing is narrowing while the hub is still answering a
+ * narrower question -- so this does not under-claim, and the popover keeps a
+ * section drawn for as long as its field is held, so that whatever is counted
+ * here is a control somebody can reach and clear.
+ *
+ * Not `server`: that field is the machine selector's, written by the one
+ * control above both tabs, and counting it here would hang a second badge on
+ * a choice the selector already shows. Not the view, the grouping or the sort
+ * either: they arrange the answer rather than narrow it. Not `search`: no
+ * control in the app writes it any more, and the palette asks its own query.
+ */
+export function catalogueNarrowingCount(shape: CatalogueShape): number {
+  return (
+    (shape.filter.provider === undefined ? 0 : 1) + (shape.filter.status === undefined ? 0 : 1)
+  );
+}
+
+/**
+ * The shape with the popover's narrowings taken off, which is what its Clear
+ * does: the provider and the status go, and everything else stays.
+ *
+ * `server` stays because it is the selector's -- a Clear in this popover that
+ * reset the machine would be one control quietly writing another's fact, and
+ * the cards beside the tree would change with it. The view, the grouping and
+ * the sort stay because they are how somebody likes the answer laid out, not
+ * a narrowing of it.
+ */
+export function withoutNarrowings(shape: CatalogueShape): CatalogueShape {
+  const filter = { ...shape.filter };
+  delete filter.provider;
+  delete filter.status;
+  return { ...shape, filter };
+}
+
+/**
  * The pages held so far, as one answer.
  *
  * `version` is what makes an append safe: a page computed at a version other

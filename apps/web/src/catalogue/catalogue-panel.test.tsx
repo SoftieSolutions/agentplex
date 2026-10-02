@@ -46,6 +46,11 @@ import { fakeCatalogueStore } from './fake-catalogue-store.js';
  * panel draws its own only where nobody above is drawing one; and the
  * narrowing is no longer the tree view's alone, because a box drawn over both
  * views and working in one is a control that lies by sitting there.
+ *
+ * Since AGX-368 the sort and the narrowings are in a popover beside the box
+ * rather than stacked over the tree, and the catalogue search box is gone.
+ * What the popover does when open is `catalogue-filters.test.tsx`'s; what
+ * this pins is where it is drawn, with the popover closed.
  */
 
 declare global {
@@ -407,6 +412,56 @@ describe('the catalogue panel', () => {
     expect(words()).toContain('plan.md');
     expect(words()).not.toContain('spike-wasm');
     expect(words()).toContain('1 hidden by filter');
+  });
+
+  /** Every control a closed popover keeps off the panel, by its name. */
+  const IN_THE_POPOVER = ['Sort by', 'Group by', 'Provider', 'Status'];
+
+  function stray(): string[] {
+    return IN_THE_POPOVER.filter(
+      (label) => container.querySelector(`[aria-label="${label}"]`) !== null,
+    );
+  }
+
+  /**
+   * What every text box on the panel is called. The catalogue search box that
+   * used to sit over the tree is gone, and asking for every box rather than
+   * for that one by name is what says no other took its place.
+   */
+  function textBoxes(): (string | null)[] {
+    return [...container.querySelectorAll('input:not([type="radio"])')].map((input) =>
+      input.getAttribute('aria-label'),
+    );
+  }
+
+  it('draws one box and one popover trigger beside it where nobody above draws a row', async () => {
+    await mount(
+      heldPages(hubFrames.catalogueTreePage),
+      { state: stateFrom(hubFrames.machineStatePopulated), layout: [] },
+      { shape: AS_LIST },
+    );
+
+    expect(textBoxes()).toEqual(['Filter tree']);
+    expect(container.querySelectorAll('button[aria-label="Filters"]')).toHaveLength(1);
+    // The fleet offers providers and statuses and the list view offers a
+    // grouping, so every one of them would be drawn if any were left here.
+    expect(stray()).toEqual([]);
+    expect(container.querySelector('[aria-label="View"]')).not.toBeNull();
+  });
+
+  it('draws neither box nor trigger while a row above it holds the letters', async () => {
+    await mount(
+      heldPages(hubFrames.catalogueTreePage),
+      { state: stateFrom(hubFrames.machineStatePopulated), layout: [] },
+      { shape: AS_LIST, filter: 'plan' },
+    );
+
+    // The sidebar's row draws both, with the catalogue's popover beside its
+    // box: a second trigger here would be two popovers writing one question.
+    expect(textBoxes()).toEqual([]);
+    expect(container.querySelector('button[aria-label="Filters"]')).toBeNull();
+    expect(stray()).toEqual([]);
+    expect(container.querySelector('[aria-label="View"]')).not.toBeNull();
   });
 
   it('draws its own box in the list view too, where nobody above draws one', async () => {

@@ -3,6 +3,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
+import { NO_PAGES, pageAdopted, type CataloguePages } from '../catalogue/catalogue-model.js';
+import { fakeCatalogueStore } from '../catalogue/fake-catalogue-store.js';
 import {
   createSessionFiltersStore,
   type SessionFiltersStore,
@@ -80,6 +82,16 @@ function stateFrom(text: string): MachineState {
   return parsed.value.state;
 }
 
+/** A page of the tree as a hub really answered one. */
+function heldPages(text: string): CataloguePages {
+  const parsed = parseTextFrame(parseHubFrame, text);
+  if (!parsed.ok || parsed.value.type !== 'catalogue-page') {
+    throw new Error('the fixture is not a catalogue page');
+  }
+  const { items, nextCursor, total, version } = parsed.value;
+  return pageAdopted(NO_PAGES, { items, nextCursor, total, version }, 'replace');
+}
+
 /** Two machines, two stores, two providers, one project, four statuses. */
 const populated = stateFrom(hubFrames.machineStatePopulated);
 /** One machine, one store, one provider, two statuses. */
@@ -128,7 +140,11 @@ describe('the sidebar filter row', () => {
    * running, so every assertion about the popover waited on animation frames
    * whose length is the machine's rather than the code's.
    */
-  function draw(state: MachineState = populated, text = '', popover = true): void {
+  function draw(
+    state: MachineState = populated,
+    text = '',
+    popover: 'sessions' | 'catalogue' = 'sessions',
+  ): void {
     act(() => {
       root = createRoot(container);
       root.render(
@@ -138,17 +154,29 @@ describe('the sidebar filter row', () => {
           defaultColorScheme="dark"
           env="test"
         >
-          <SidebarFilter
-            state={state}
-            filters={filters}
-            machine={null}
-            label="Filter sessions"
-            text={text}
-            onText={(value) => typed.push(value)}
-            popover={popover}
-            scheme="dark"
-            now={() => NOW}
-          />
+          {popover === 'sessions' ? (
+            <SidebarFilter
+              popover="sessions"
+              state={state}
+              filters={filters}
+              machine={null}
+              label="Filter sessions"
+              text={text}
+              onText={(value) => typed.push(value)}
+              scheme="dark"
+              now={() => NOW}
+            />
+          ) : (
+            <SidebarFilter
+              popover="catalogue"
+              catalogue={fakeCatalogueStore(heldPages(hubFrames.catalogueTreePage))}
+              state={state}
+              label="Filter tree"
+              text={text}
+              onText={(value) => typed.push(value)}
+              scheme="dark"
+            />
+          )}
         </MantineProvider>,
       );
     });
@@ -216,7 +244,7 @@ describe('the sidebar filter row', () => {
   /** The `N filters - M hidden` line, or `null` when the row drew none. */
   function summary(): string | null {
     const found = [...container.querySelectorAll('span')].find((span) =>
-      (span.textContent ?? '').endsWith(' hidden'),
+      /^\d+ filters?/.test(span.textContent ?? ''),
     );
     return found?.textContent ?? null;
   }
@@ -384,17 +412,16 @@ describe('the sidebar filter row', () => {
     expect(trigger().getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('draws the box alone where the popover was not asked for', () => {
-    // Everything the popover holds narrows sessions. Over a reading that is
-    // not the sessions there is nothing for it to narrow that a person can
-    // see, so the trigger, the badge and the line all go with it and the box
-    // -- which narrows whatever is under it -- stays.
+  it("draws the catalogue's popover over the tree, which no session narrowing reaches", () => {
+    // The row carries whichever reading's narrowings are under it. The
+    // sessions' two narrowings here narrow nothing on the Projects tab, so
+    // neither the badge nor the line may count them there.
     filters.set({ machine: 'registration-mbp-robert', chip: 'needs-you' });
-    draw(populated, '', false);
+    draw(populated, '', 'catalogue');
 
-    expect(container.querySelector('button[aria-label="Filters"]')).toBeNull();
+    expect(trigger().textContent).toBe('');
     expect(summary()).toBeNull();
-    expect(container.querySelector('input[aria-label="Filter sessions"]')).not.toBeNull();
+    expect(container.querySelector('input[aria-label="Filter tree"]')).not.toBeNull();
   });
 
   it('carries the name it was given on the box, and hands the typing back', () => {

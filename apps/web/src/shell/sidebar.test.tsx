@@ -3,8 +3,14 @@ import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
-import { NO_PAGES, pageAdopted, type CataloguePages } from '../catalogue/catalogue-model.js';
-import { fakeCatalogueStore } from '../catalogue/fake-catalogue-store.js';
+import {
+  DEFAULT_SHAPE,
+  NO_PAGES,
+  pageAdopted,
+  withFilter,
+  type CataloguePages,
+} from '../catalogue/catalogue-model.js';
+import { fakeCatalogueStore, type FakeCatalogueStore } from '../catalogue/fake-catalogue-store.js';
 import { appSessionFiltersStore } from '../sessions/session-filters-store.js';
 import { SessionListScreen } from '../sessions/session-list-screen.js';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
@@ -18,8 +24,8 @@ import { Sidebar } from './sidebar.js';
 
 /**
  * The filter row where it is actually mounted: over whichever tab is showing,
- * with the tab deciding what the letters narrow and whether the sessions'
- * narrowings come with them.
+ * with the tab deciding what the letters narrow and whose narrowings the
+ * popover beside them carries.
  *
  * The row itself, the popover and every count in it are `sidebar-filter`'s and
  * are pinned next door. What only this mounting can answer is the wiring: that
@@ -105,6 +111,7 @@ describe('the sidebar filter row, mounted', () => {
   let columnRoot: Root | null = null;
   let mainRoot: Root | null = null;
   let store: HubStore;
+  let catalogue: FakeCatalogueStore;
   let sockets: ReturnType<typeof createFakeSocketFactory>;
 
   beforeEach(() => {
@@ -154,6 +161,7 @@ describe('the sidebar filter row, mounted', () => {
    * the socket as well because the list screen reads its own.
    */
   async function mount(state: MachineState | null = populated): Promise<void> {
+    catalogue = fakeCatalogueStore(heldPages(hubFrames.catalogueTreePage));
     await act(async () => {
       columnRoot = createRoot(column);
       columnRoot.render(
@@ -162,7 +170,7 @@ describe('the sidebar filter row, mounted', () => {
             store={store}
             state={state}
             layout={[]}
-            catalogue={fakeCatalogueStore(heldPages(hubFrames.catalogueTreePage))}
+            catalogue={catalogue}
             machine={null}
             onPickMachine={() => {}}
             destination="sessions"
@@ -200,15 +208,18 @@ describe('the sidebar filter row, mounted', () => {
     return only;
   }
 
-  /** The popover's trigger, or `null` on a tab that is not offered one. */
+  /** The popover's trigger, or `null` where the row drew none. */
   function trigger(): HTMLButtonElement | null {
     return column.querySelector<HTMLButtonElement>('button[aria-label="Filters"]');
   }
 
-  /** The `N filters - M hidden` line, or `null` where the row drew none. */
+  /**
+   * The `N filters` line, with the sessions' `- M hidden` after it on that
+   * tab, or `null` where the row drew none.
+   */
   function summary(): string | null {
     const found = [...column.querySelectorAll('span')].find((span) =>
-      (span.textContent ?? '').endsWith(' hidden'),
+      /^\d+ filters?/.test(span.textContent ?? ''),
     );
     return found?.textContent ?? null;
   }
@@ -251,23 +262,31 @@ describe('the sidebar filter row, mounted', () => {
     expect(box().getAttribute('aria-label')).toBe('Filter sessions');
   });
 
-  it('hangs the narrowings off the Sessions tab and leaves the tree the box', async () => {
+  it("counts the catalogue's narrowings on the Projects tab and the sessions' on the other", async () => {
     await mount();
     await act(() => {
       appSessionFiltersStore(store).set({ machine: 'registration-mbp-robert' });
     });
 
-    // Every narrowing in the popover narrows sessions, and the tab is not the
-    // route: with a session or a document open beside the tree, the popover
-    // would be narrowing nothing a person on this tab can see while its hidden
-    // count sat above a tree that publishes a hidden count of its own.
-    expect(trigger()).toBeNull();
+    // The session narrowing narrows nothing on this tab -- with a session or a
+    // document open beside the tree there are no cards to narrow -- so the
+    // popover here is the catalogue's and counts none of it.
+    expect(trigger()).not.toBeNull();
+    expect(trigger()?.textContent).toBe('');
     expect(summary()).toBeNull();
+    box();
+
+    await act(() => {
+      catalogue.reshape(withFilter(DEFAULT_SHAPE, { field: 'provider', value: 'codex' }));
+    });
+
+    expect(trigger()?.textContent).toBe('1');
+    expect(summary()).toBe('1 filter');
 
     await showSessions();
 
-    expect(trigger()).not.toBeNull();
     expect(summary()).toBe('1 filter · 3 hidden');
+    box();
   });
 
   it('narrows the tree with the letters typed on the Projects tab', async () => {
