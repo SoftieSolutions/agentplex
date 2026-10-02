@@ -221,6 +221,7 @@ export type {
   SessionHold,
   PauseTaken,
   SessionPause,
+  SessionProcess,
   SessionStartTag,
   SessionStatus,
   SessionUsage,

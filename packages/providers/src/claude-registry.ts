@@ -99,6 +99,15 @@ export interface ClaudeRegistry {
    */
   readonly live: ReadonlyMap<string, ClaudeRegistryEntry>;
   readonly problems: readonly DiscoveryProblem[];
+  /**
+   * Whether this server could look at the registry at all.
+   *
+   * `false` only for a directory that is there and cannot be listed. An
+   * absent one is a look that found no process, because Claude Code writes an
+   * entry for every process it starts; an unlistable one is no look, and a
+   * session missing from `live` then says nothing about whether it runs.
+   */
+  readonly readable: boolean;
 }
 
 export function parseClaudeRegistryEntry(contents: string): ClaudeRegistryEntry | null {
@@ -130,13 +139,17 @@ export async function readClaudeRegistry(
 
   const listing = await files.listDirectory(sessions);
   // Absent is the normal state of a store no Claude Code process has run in.
-  if (listing.kind === 'missing') return { live, problems: [] };
+  if (listing.kind === 'missing') return { live, problems: [], readable: true };
   // Present and unreadable is not. The directory is mode 0700, so a daemon
   // running as another user sees none of it and every session silently loses
   // its permission prompts — a misconfiguration only the user can fix, and one
   // they will never find if this stays quiet.
   if (listing.kind === 'failed') {
-    return { live, problems: [{ subject: sessions, problem: listing.reason }] };
+    return {
+      live,
+      problems: [{ subject: sessions, problem: listing.reason }],
+      readable: false,
+    };
   }
 
   for (const dirent of listing.entries) {
@@ -158,7 +171,7 @@ export async function readClaudeRegistry(
     keepTheCurrentOne(live, entry);
   }
 
-  return { live, problems: [] };
+  return { live, problems: [], readable: true };
 }
 
 /**

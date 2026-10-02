@@ -158,6 +158,9 @@ export interface ProviderDiscovery {
   readonly problems: readonly DiscoveryProblem[];
 }
 
+/** What an adapter could tell about a session's process; see `DiscoveredSession.process`. */
+export type DiscoveredProcess = 'verified' | 'none' | 'unknown';
+
 export interface DiscoveredSession {
   /**
    * The provider's own id for the session, parsed out of the provider's own
@@ -203,6 +206,22 @@ export interface DiscoveredSession {
    * would be a registry's stale claim standing in for a process.
    */
   readonly pid: number | null;
+  /**
+   * Whether the adapter could tell that a process runs this session.
+   *
+   * `verified` is a process the adapter proved alive, the one `pid` names.
+   * `none` is a look that found no such process: the provider's registry was
+   * read and named none alive for this session. `unknown` is no look: a
+   * provider that keeps no registry, or one this server could not read.
+   *
+   * Required for the reason `usage` is, and with a third word for the reason
+   * the wire's `process` has one. An adapter that cannot look must say so,
+   * because a caller reads `none` as leave to resume, and two processes on one
+   * transcript damage it for both. The caller adds what it knows about the
+   * terminals it spawned itself; this is only what the provider's own files
+   * say.
+   */
+  readonly process: DiscoveredProcess;
   /**
    * Where the session was working, read out of the provider's own files.
    *

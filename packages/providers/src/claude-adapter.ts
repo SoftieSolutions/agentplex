@@ -262,6 +262,10 @@ async function readProject(
         // `live` holds only entries whose process was verified, so a pid read
         // off it is a process and not a registry's stale claim.
         pid: entry?.pid ?? null,
+        // A registry this server could list and that named no live process is
+        // a look that found none. One it could not list is no look, and says
+        // so rather than lending a client leave to resume.
+        process: entry !== undefined ? 'verified' : registry.readable ? 'none' : 'unknown',
         cwd: parsed.transcript.cwd,
         title: parsed.transcript.title,
         usage: parsed.transcript.usage,

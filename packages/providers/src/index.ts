@@ -8,6 +8,7 @@ export { TRANSCRIPT_TAIL_MAX_BYTES } from './provider-adapter.js';
 export type {
   AuthProbe,
   AuthState,
+  DiscoveredProcess,
   DiscoveredSession,
   DiscoveryProblem,
   InstallPlan,

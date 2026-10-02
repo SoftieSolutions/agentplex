@@ -109,13 +109,15 @@ describe('readClaudeRegistry', () => {
     );
 
     expect(registry.problems).toEqual([]);
+    expect(registry.readable).toBe(true);
     expect(registry.live.get(SESSION_ID)?.status).toBe('busy');
   });
 
-  it('refuses an entry whose pid is gone', async () => {
+  it('refuses an entry whose pid is gone, and was still able to look', async () => {
     const registry = await registryOver({ [`${SESSIONS}/${PID}.json`]: CAPTURED }, {});
 
     expect(registry.live.size).toBe(0);
+    expect(registry.readable).toBe(true);
   });
 
   it('refuses a recycled pid, which is alive and is not the same process', async () => {
@@ -184,7 +186,9 @@ describe('readClaudeRegistry', () => {
   it('says nothing about a store whose provider keeps no registry', async () => {
     const registry = await registryOver({}, {});
 
-    expect(registry).toEqual({ live: new Map(), problems: [] });
+    // Absent is a look that found nothing, not a failure to look: no Claude
+    // Code process has registered here, so none is running.
+    expect(registry).toEqual({ live: new Map(), problems: [], readable: true });
   });
 
   it('reports a registry it is not allowed to read, and keeps going', async () => {
@@ -195,6 +199,7 @@ describe('readClaudeRegistry', () => {
     const registry = await registryOver({}, {}, [SESSIONS]);
 
     expect(registry.live.size).toBe(0);
+    expect(registry.readable).toBe(false);
     expect(registry.problems).toEqual([
       { subject: SESSIONS, problem: expect.stringContaining('EACCES') },
     ]);

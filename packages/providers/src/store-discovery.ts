@@ -2,12 +2,24 @@ import type {
   Provider,
   SessionDescriptor,
   SessionId,
+  SessionProcess,
   SessionRef,
   StoreDescriptor,
 } from '@agentplex/protocol';
 import type { Clock } from '@agentplex/node-shared';
-import type { DiscoveryProblem, ProviderAdapter } from './provider-adapter.js';
+import type { DiscoveredProcess, DiscoveryProblem, ProviderAdapter } from './provider-adapter.js';
 import type { ProviderRegistry } from './provider-registry.js';
+
+/**
+ * An adapter's answer in the wire's words. `verified` is the adapter's word
+ * because only it proved the process; the wire says `running` because by then
+ * the server's own terminals count as a sighting too.
+ */
+const WIRE_PROCESS: Readonly<Record<DiscoveredProcess, SessionProcess>> = {
+  verified: 'running',
+  none: 'none',
+  unknown: 'unknown',
+};
 
 /**
  * Every session in one store, whichever provider left it there.
@@ -126,6 +138,11 @@ async function discoverWithAdapter(
         running: session.running || liveness.isRunning(ref),
         now,
       }),
+      // A terminal this server spawned is a sighting of its own, and the one
+      // the adapter's registry can lag behind; otherwise the adapter's answer
+      // stands, renamed into the wire's words. `unknown` is never promoted to
+      // `none`: a look nobody made is not a look that found nothing.
+      process: liveness.isRunning(ref) ? 'running' : WIRE_PROCESS[session.process],
       updatedAt: session.updatedAt,
       // Carried, not re-derived. Only the adapter can read these out of a
       // provider's own format, and anything above it that tried to guess a cwd

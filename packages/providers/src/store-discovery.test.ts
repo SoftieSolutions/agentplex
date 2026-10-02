@@ -49,6 +49,7 @@ describe('discoverStoreSessions', () => {
         sessionId: 'session-a',
         provider: 'claude',
         status: 'awaiting-permission',
+        process: 'none',
         updatedAt: NOW - 1_000,
         cwd: '/work',
         branch: null,
@@ -63,6 +64,7 @@ describe('discoverStoreSessions', () => {
         sessionId: 'session-b',
         provider: 'claude',
         status: 'idle',
+        process: 'none',
         updatedAt: NOW - 1_000,
         cwd: '/work',
         branch: null,
@@ -329,6 +331,52 @@ describe('discoverStoreSessions', () => {
       { signal: 'progressing', updatedAt: NOW - 1_000, running: true, now: NOW },
     ]);
     expect(discovered.sessions[0]?.status).toBe('working');
+  });
+
+  describe('whether a process runs the session', () => {
+    function madeUp(fields: Record<string, unknown>): string {
+      return JSON.stringify({ signal: 'quiet', updatedAt: NOW - 1_000, ...fields });
+    }
+
+    async function processOf(
+      fields: Record<string, unknown>,
+      live: SessionLiveness = nothingRunning,
+    ): Promise<unknown> {
+      const files = createFakeProviderFiles({
+        files: { [`${transcriptsAt('claude')}/session-a.json`]: madeUp(fields) },
+      });
+      const discovered = await discoverStoreSessions(STORE, {
+        registry: createProviderRegistry([createFakeProviderAdapter({ files })]),
+        clock,
+        liveness: live,
+      });
+      return discovered.sessions[0]?.process;
+    }
+
+    it('says running for a process the adapter verified', async () => {
+      expect(await processOf({ running: true, pid: 4242, process: 'verified' })).toBe('running');
+    });
+
+    it('says running for a terminal this server spawned, whatever the adapter found', async () => {
+      // The adapter looked and found nothing, and this server is running the
+      // session itself: its own terminal is a sighting the registry may not
+      // have caught up with yet.
+      expect(await processOf({ process: 'none' }, liveness('session-a'))).toBe('running');
+      expect(await processOf({ process: 'unknown' }, liveness('session-a'))).toBe('running');
+    });
+
+    it('says none only when the adapter looked and this server runs nothing', async () => {
+      expect(await processOf({ process: 'none' })).toBe('none');
+    });
+
+    it('says unknown when the adapter could not look and this server runs nothing', async () => {
+      expect(await processOf({ process: 'unknown' })).toBe('unknown');
+    });
+
+    it('defaults a made-up session to verified when it names a pid, and none when not', async () => {
+      expect(await processOf({ running: true, pid: 4242 })).toBe('running');
+      expect(await processOf({})).toBe('none');
+    });
   });
 
   it('lets a provider with no directory in this store cost itself and not the store', async () => {

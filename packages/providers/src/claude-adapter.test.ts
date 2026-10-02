@@ -79,6 +79,10 @@ describe('createClaudeAdapter.discover', () => {
         running: false,
         // No registry entry in this store, so no process this adapter verified.
         pid: null,
+        // No `sessions/` directory at all: Claude Code writes an entry for
+        // every process it starts, so an absent registry is a look that found
+        // none, not a failure to look.
+        process: 'none',
         cwd: '/Users/dev/Code/agentplex',
         title: 'Docker compose without hub',
         // Two API responses across four lines, counted once each. The
@@ -354,6 +358,21 @@ describe('createClaudeAdapter.discover, against the session registry', () => {
     expect(found.session.pid).toBe(PID);
   });
 
+  it('says a verified registry entry is a process running the session', async () => {
+    const found = await discoverOne({ [TRANSCRIPT]: PENDING_TOOL_USE, [ENTRY]: REGISTRY_ENTRY });
+
+    expect(found.session.process).toBe('verified');
+  });
+
+  it('says no process runs a session whose registry entry outlived its pid', async () => {
+    const found = await discoverOne(
+      { [TRANSCRIPT]: PENDING_TOOL_USE, [ENTRY]: REGISTRY_ENTRY },
+      {},
+    );
+
+    expect(found.session.process).toBe('none');
+  });
+
   it('keeps the AGX-17 answer when the registry entry outlived its process', async () => {
     // The entry is still on disk — they always are — and its pid is gone.
     const found = await discoverOne(
@@ -387,6 +406,22 @@ describe('createClaudeAdapter.discover, against the session registry', () => {
     const discovered = await adapter.discover(STORE);
 
     expect(discovered.sessions.map((session) => session.sessionId)).toEqual([SESSION_ID]);
+    expect(discovered.problems).toEqual([
+      { subject: SESSIONS, problem: expect.stringContaining('EACCES') },
+    ]);
+  });
+
+  it('cannot say whether a process runs a session when the registry is unreadable', async () => {
+    // Not `none`. A registry this server may not list is no look at all, and
+    // `none` is the word a client reads as permission to resume.
+    const adapter = adapterOver(
+      { files: { [TRANSCRIPT]: PENDING_TOOL_USE }, unreadable: [SESSIONS] },
+      {},
+    );
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(discovered.sessions.map((session) => session.process)).toEqual(['unknown']);
     expect(discovered.problems).toEqual([
       { subject: SESSIONS, problem: expect.stringContaining('EACCES') },
     ]);
