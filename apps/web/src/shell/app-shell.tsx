@@ -239,9 +239,8 @@ export function AppShell({
    * it had already narrowed to would be the list's filter wearing a dialog.
    * `palette-model.ts` is where that argument lives.
    *
-   * One node for both chromes, so the trigger the top bar draws beside the mark
-   * and the row the phone draws under its header are the same control over the
-   * same fleet.
+   * One node for both chromes, so the trigger the top bar centres and the row
+   * the phone draws under its header are the same control over the same fleet.
    *
    * The sessions are this half of the answer; the other half is the hub's, and
    * `paletteSearch` above is what asks it. Both are handed in because a dialog
