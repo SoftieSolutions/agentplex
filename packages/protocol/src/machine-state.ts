@@ -444,7 +444,9 @@ export type SessionProject = z.infer<typeof sessionProjectSchema>;
  * One field is the exception, and it only ever moves down. A server that says
  * `process: 'none'` has looked on its own machine; it cannot see a process on
  * another machine that mounts the same store. So when more than one server
- * reports the session, the hub publishes `none` as `unknown`. That lowers a
+ * mounts the store, the hub publishes `none` as `unknown` — counting every
+ * server that mounts it, including one whose reading is stale and one that has
+ * not reported yet, since either can be running the session. That lowers a
  * claim rather than assembling one: `unknown` is true of every reading, and
  * `none` would invite a resume beside a process the reporting server never
  * saw.
