@@ -182,12 +182,15 @@ function viewsOf(state: MachineState | null): ReadonlyMap<ServerRegistrationId, 
  *
  * Online only, because "All machines" is a claim about the machines somebody
  * can reach. Current only, because the header has no room for an age, and a
- * figure that cannot carry its age must not be an old one. A machine with no
- * reading is left out rather than counted as zero.
+ * figure that cannot carry its age must not be an old one. Not draining,
+ * because a draining row draws its drain instead of its figure, and the header
+ * must not average a number no row shows. A machine with no reading is left
+ * out rather than counted as zero.
  */
 function meanRoundTrip(state: MachineState | null, now: number): number | null {
   const figures = (state?.servers ?? []).flatMap((view) =>
     view.phase === 'connected' &&
+    view.draining === null &&
     view.roundTrip !== null &&
     now - view.roundTrip.measuredAt <= ROUND_TRIP_FRESH_MS
       ? [view.roundTrip.ms]

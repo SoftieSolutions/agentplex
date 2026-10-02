@@ -248,6 +248,17 @@ describe('the fleet round trip', () => {
     );
   });
 
+  it('leaves out a draining machine, whose row draws no figure either', () => {
+    // The row says the machine is shutting down instead of how fast it
+    // answers, so a header that still averaged its figure would carry a number
+    // no row on the screen accounts for.
+    const drain = stateFrom(hubFrames.machineStateDraining).servers[0]?.draining ?? null;
+    if (drain === null) throw new Error('the captured drain has no drain');
+    const draining: ServerView = { ...timed(410), draining: drain };
+    const fleet = fleetTimedAt(['mbp-robert', timed(12)], ['gpu-box-01', draining]);
+    expect(machineSelector(fleet, null, NOW).latencyMs).toBe(12);
+  });
+
   it('rounds the mean to a whole millisecond, which is all a round trip is measured in', () => {
     const fleet = fleetTimedAt(['mbp-robert', timed(12)], ['gpu-box-01', timed(61)]);
     expect(machineSelector(fleet, null, NOW).latencyMs).toBe(37);
