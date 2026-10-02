@@ -5,8 +5,10 @@ import {
   parseTextFrame,
   providerSchema,
   sessionRefSchema,
+  type FrameId,
   type MachineState,
 } from '@agentplex/protocol';
+import { NO_ANSWERS, rememberAnswer, type Reply } from './answers.js';
 import { hubFrames } from './hub-frames.fixture.js';
 import {
   NO_RESUME_MEMORY,
@@ -32,6 +34,13 @@ function stateFrom(text: string): MachineState {
 }
 
 const NONE: ResumeMemories = new Map();
+const NO_REPLIES = NO_ANSWERS.replies;
+
+function replyFrom(text: string, replyTo: FrameId): Reply {
+  const parsed = parseTextFrame(parseHubFrame, text);
+  if (!parsed.ok || parsed.value.type !== 'session-started') throw new Error('not a start answer');
+  return { ...parsed.value, replyTo };
+}
 
 function startOf(ref: typeof SPIKE) {
   return {
@@ -52,7 +61,7 @@ describe('resume memory', () => {
 
   it('remembers the start this page sent for a session, by that session', () => {
     const memories = rememberCommand(NONE, startOf(SPIKE), FIRST);
-    expect(resumeMemoryOf(memories, SPIKE)).toEqual({ ran: false, start: FIRST });
+    expect(resumeMemoryOf(memories, SPIKE)).toEqual({ ran: false, start: FIRST, lapsed: false });
     expect(resumeMemoryOf(memories, OTHER)).toEqual(NO_RESUME_MEMORY);
   });
 
@@ -68,13 +77,26 @@ describe('resume memory', () => {
 
   it('forgets a start once a state shows the session held, and keeps that it ran', () => {
     const asked = rememberCommand(NONE, startOf(SPIKE), FIRST);
-    const held = rememberState(asked, stateFrom(hubFrames.machineStateResumed));
-    expect(resumeMemoryOf(held, SPIKE)).toEqual({ ran: true, start: null });
+    const held = rememberState(asked, stateFrom(hubFrames.machineStateResumed), NO_REPLIES);
+    expect(resumeMemoryOf(held, SPIKE)).toEqual({ ran: true, start: null, lapsed: false });
   });
 
-  it('keeps a start while the state shows nothing holding the session', () => {
+  it('keeps a start still owed its answer while the state shows nothing running it', () => {
     const asked = rememberCommand(NONE, startOf(SPIKE), FIRST);
-    expect(rememberState(asked, stateFrom(hubFrames.machineStateResumable))).toBe(asked);
+    expect(rememberState(asked, stateFrom(hubFrames.machineStateResumable), NO_REPLIES)).toBe(
+      asked,
+    );
+  });
+
+  it('marks an answered start lapsed when a state after the answer shows nothing running it', () => {
+    const asked = rememberCommand(NONE, startOf(SPIKE), FIRST);
+    const replies = rememberAnswer(NO_REPLIES, replyFrom(hubFrames.sessionStartedResumed, FIRST));
+    const lapsed = rememberState(asked, stateFrom(hubFrames.machineStateResumable), replies);
+    expect(resumeMemoryOf(lapsed, SPIKE)).toEqual({ ran: false, start: FIRST, lapsed: true });
+
+    // Asking again is a fresh start, owed its own answer.
+    const again = rememberCommand(lapsed, startOf(SPIKE), frameIdSchema.parse(8));
+    expect(resumeMemoryOf(again, SPIKE).lapsed).toBe(false);
   });
 
   it('records a run once, and hands back the same memories after', () => {

@@ -417,7 +417,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // whole current state. The latest frame received is the state.
         update({
           machineState: frame.state,
-          resumes: rememberState(snapshot.resumes, frame.state),
+          resumes: rememberState(snapshot.resumes, frame.state, snapshot.answers.replies),
         });
         return;
       }
