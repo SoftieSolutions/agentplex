@@ -320,10 +320,11 @@ describe('the sidebar filter row, mounted', () => {
     await type('plan');
 
     // The document matched, its project and folder are where it is, and the
-    // session outside them is the one node the box took away.
+    // session and the empty folder outside them are the two nodes the box
+    // took away.
     expect(column.textContent).toContain('plan.md');
     expect(column.textContent).not.toContain('spike-wasm');
-    expect(column.textContent).toContain('1 hidden by filter');
+    expect(column.textContent).toContain('2 hidden by filter');
   });
 
   it('leaves the cards alone while the letters belong to the tree', async () => {

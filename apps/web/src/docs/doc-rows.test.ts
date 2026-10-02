@@ -26,7 +26,10 @@ const empty = layoutFrom(hubFrames.layout);
 
 describe('the documents under a project', () => {
   it('groups the tree by project, keeping the hub order', () => {
+    // HOME first, because the hub sends it first: migration 0020 seeds it at
+    // the root's position 0.
     expect(projectDocuments(withProject)).toEqual([
+      { projectId: 'home', label: 'HOME', docs: [] },
       {
         projectId: 'hub-5',
         label: 'agentplex (main checkout)',
@@ -40,6 +43,7 @@ describe('the documents under a project', () => {
     // nothing yet is exactly the row somebody needs to find.
     const noDocs = withProject.filter((node) => node.kind !== 'doc');
     expect(projectDocuments(noDocs)).toEqual([
+      { projectId: 'home', label: 'HOME', docs: [] },
       { projectId: 'hub-5', label: 'agentplex (main checkout)', docs: [] },
     ]);
   });
@@ -57,6 +61,7 @@ describe('the documents under a project', () => {
       node.kind === 'doc' ? { ...node, parentId: nodeIdSchema.parse('hub-404') } : node,
     );
     expect(projectDocuments(orphaned)).toEqual([
+      { projectId: 'home', label: 'HOME', docs: [] },
       { projectId: 'hub-5', label: 'agentplex (main checkout)', docs: [] },
     ]);
   });

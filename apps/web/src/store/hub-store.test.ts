@@ -5,6 +5,7 @@ import {
   frameIdSchema,
   nodeIdSchema,
   parseClientFrame,
+  parseHubFrame,
   parseTextFrame,
   CLIENT_PROTOCOL_VERSION,
   pushSubscriptionSchema,
@@ -15,6 +16,7 @@ import {
   type CatalogueQuery,
   type ClientFrame,
   type FrameId,
+  type HubFrame,
 } from '@agentplex/protocol';
 import { createFrameIds } from './frame-ids.js';
 import { createFakeSocketFactory, type FakeSocket } from './fake-socket.js';
@@ -2034,12 +2036,23 @@ describe('projects and the tree', () => {
     socket.deliver(hubFrames.layoutWithProject);
 
     const layout = h.store.getSnapshot().layout ?? [];
+    // HOME, which migration 0020 seeds at the root's position 0, and then the
+    // project the capture made.
     expect(layout.filter((node) => node.kind === 'project')).toEqual([
+      {
+        id: 'home',
+        parentId: null,
+        kind: 'project',
+        position: 0,
+        name: 'HOME',
+        named: true,
+        anchor: null,
+      },
       {
         id: 'hub-5',
         parentId: null,
         kind: 'project',
-        position: 2,
+        position: 3,
         name: 'agentplex (main checkout)',
         named: true,
         anchor: null,
@@ -2116,6 +2129,18 @@ function addressedTo(frame: string, replyTo: FrameId): string {
   return JSON.stringify({ ...(JSON.parse(frame) as Record<string, unknown>), replyTo });
 }
 
+/**
+ * A captured catalogue page, read the way the store reads one, so a count
+ * asserted against it moves with the capture rather than against it.
+ */
+function capturedPage(frame: string): Extract<HubFrame, { type: 'catalogue-page' }> {
+  const parsed = parseTextFrame(parseHubFrame, frame);
+  if (!parsed.ok || parsed.value.type !== 'catalogue-page') {
+    throw new Error('the fixture is not a catalogue page');
+  }
+  return parsed.value;
+}
+
 /** The id of the last frame this store put on the wire. */
 function lastSentId(socket: FakeSocket): FrameId {
   const sent = sentFrames(socket).at(-1);
@@ -2171,7 +2196,9 @@ describe('the catalogue query', () => {
     socket.deliver(addressedTo(hubFrames.catalogueTreePagePartial, lastSentId(socket)));
     const first = await asking;
 
-    expect(first.total).toBe(6);
+    // The whole tree's count, not this page's: more than it holds.
+    expect(first.total).toBe(capturedPage(hubFrames.catalogueTreePagePartial).total);
+    expect(first.total).toBeGreaterThan(first.items.length);
     expect(first.nextCursor).not.toBeNull();
 
     const resuming = h.store.queryCatalogue({
@@ -2187,10 +2214,10 @@ describe('the catalogue query', () => {
     // the cut forward rather than back, so a page boundary never falls between
     // a parent and its first child -- which is what lets the client indent off
     // the depth on the row instead of walking a parent chain it may not hold.
-    const folder = rest.items.findIndex((item) => item.kind === 'folder');
     const child = rest.items.findIndex((item) => item.kind === 'project');
-    expect(folder).toBeGreaterThanOrEqual(0);
-    expect(child).toBe(folder + 1);
+    const folder = child - 1;
+    expect(child).toBeGreaterThan(0);
+    expect(rest.items[folder]?.kind).toBe('folder');
     expect(rest.items[child]?.parentId).toBe(rest.items[folder]?.id);
     expect(rest.items[child]?.depth).toBe(1);
     // The list view drops containers; this is the view that does not.
@@ -2381,7 +2408,8 @@ describe('the detached catalogue query', () => {
 
     // Each caller has its own answer, told apart by the id it asked under
     // rather than by the order the two came back in.
-    expect(drawn.items).toHaveLength(4);
+    expect(drawn.items).toHaveLength(capturedPage(hubFrames.catalogueTreePage).items.length);
+    expect(drawn.items).not.toHaveLength(found.items.length);
     expect(h.store.getSnapshot().catalogue).toEqual(drawn);
 
     unwatch();

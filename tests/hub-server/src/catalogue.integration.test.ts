@@ -10,6 +10,8 @@ import {
   sessionIdSchema,
   storeIdSchema,
   CLIENT_PROTOCOL_VERSION,
+  HOME_PROJECT_ID,
+  HOME_PROJECT_NAME,
   type HubFrame,
   type Layout,
   type MachineState,
@@ -341,7 +343,16 @@ function anchor(node: Layout[number]): string {
  * Asserting the order would be asserting a race.
  */
 function anchored(layout: Layout): readonly string[] {
-  return layout.map(anchor).sort();
+  return withoutHome(layout).map(anchor).sort();
+}
+
+/**
+ * Every node but HOME, which migration 0020 seeds at the root of every hub.
+ * Discovery does not place anything in it yet (AGX-382), so the suites below
+ * are about the nodes beside it.
+ */
+function withoutHome(layout: Layout): Layout {
+  return layout.filter((node) => node.id !== HOME_PROJECT_ID);
 }
 
 async function until(predicate: () => Promise<boolean>, what: () => string): Promise<void> {
@@ -398,10 +409,16 @@ describe('the tree a reporting fleet fills in', () => {
     expect(byAnchor.get('store-agentplex/session-spike-wasm')?.name).toBe('spike-wasm');
     expect(byAnchor.get('store-universe/session-bench-tokenizer')?.name).toBeNull();
     // Every one of them at the root, of the session kind, and none of them
-    // named by a user: discovery places, and that is all it does.
-    expect(layout.every((node) => node.kind === 'session')).toBe(true);
-    expect(layout.every((node) => node.parentId === null)).toBe(true);
-    expect(layout.every((node) => !node.named)).toBe(true);
+    // named by a user: discovery places, and that is all it does. Beside them
+    // is HOME, the one project migration 0020 seeds.
+    const sessions = withoutHome(layout);
+    expect(sessions.every((node) => node.kind === 'session')).toBe(true);
+    expect(sessions.every((node) => node.parentId === null)).toBe(true);
+    expect(sessions.every((node) => !node.named)).toBe(true);
+    const projects = layout.filter((node) => node.kind === 'project');
+    expect(projects.map((node) => [node.id, node.name])).toEqual([
+      [HOME_PROJECT_ID, HOME_PROJECT_NAME],
+    ]);
   });
 
   it('prunes the node of a session a later report of that store no longer has', async () => {
@@ -498,7 +515,7 @@ describe('taking a session out of the tree', () => {
     fleet = await startFleetHub([laptop]);
     const client = await openClient(fleet.hub);
     const layout = await settles(client, ['store-agentplex/session-fix-auth']);
-    const node = layout[0];
+    const node = withoutHome(layout)[0];
     if (node === undefined) throw new Error('the session was not placed');
 
     const answer = await client.ask({ type: 'node-remove', nodeId: node.id });
@@ -511,7 +528,8 @@ describe('taking a session out of the tree', () => {
       // it so it can offer the stop rather than only the sentence.
       holder: { server: 'registration-mbp-robert', stoppable: true, pause: 'none' },
     });
-    expect(await client.layout()).toHaveLength(1);
+    // The session, and HOME beside it.
+    expect(await client.layout()).toHaveLength(2);
 
     // The agent finished. Nobody holds it now, and the same removal goes
     // through -- the refusal was about the world and not about the node.
@@ -875,9 +893,11 @@ describe('a flat catalogue search over the kinds a client names', () => {
       throw new Error(`the query was answered ${answered.type}`);
     }
 
+    // HOME is a project too, and a flat list sorts it by name like any other.
     expect(answered.items.map((item) => [item.id, item.kind, item.displayName])).toEqual([
       [projectId, 'project', 'agentplex'],
       [answered.items[1]?.id, 'session', 'fix-auth-refresh'],
+      [HOME_PROJECT_ID, 'project', HOME_PROJECT_NAME],
     ]);
     expect(answered.items[1]?.anchor?.sessionId).toBe('session-fix-auth');
   });

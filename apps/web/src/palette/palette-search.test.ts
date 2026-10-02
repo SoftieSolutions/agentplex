@@ -194,7 +194,7 @@ describe('the answer', () => {
   it('costs an item this build cannot address itself, and not the listing', () => {
     // A folder is on this page and is not a place this build can go: it is
     // left out and every other item still answers.
-    expect(WITH_CONTAINERS.items).toHaveLength(4);
+    expect(WITH_CONTAINERS.items.some((item) => item.kind === 'folder')).toBe(true);
     const results = catalogueResults(WITH_CONTAINERS.items);
 
     expect(results.map((result) => result.kind)).toEqual(['session', 'project', 'doc']);

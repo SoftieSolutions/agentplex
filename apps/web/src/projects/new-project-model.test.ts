@@ -145,7 +145,10 @@ describe('what the form does with the answer', () => {
 
 describe('the projects a picker offers', () => {
   it('reads them off the tree, by kind, in the order the hub sent them', () => {
+    // HOME first, because the hub sends it first: migration 0020 seeds it at
+    // the root's position 0.
     expect(projectChoices(withProject)).toEqual([
+      { id: 'home', label: 'HOME' },
       { id: 'hub-5', label: 'agentplex (main checkout)' },
     ]);
   });
@@ -158,6 +161,7 @@ describe('the projects a picker offers', () => {
     // The same captured tree holds two session nodes. A picker that offered one
     // would be offering a start inside a session.
     expect(withProject.filter((node) => node.kind === 'session').length).toBeGreaterThan(0);
-    expect(projectChoices(withProject)).toHaveLength(1);
+    const projects = withProject.filter((node) => node.kind === 'project');
+    expect(projectChoices(withProject)).toHaveLength(projects.length);
   });
 });
