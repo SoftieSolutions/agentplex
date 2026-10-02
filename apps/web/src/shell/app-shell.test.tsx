@@ -5,6 +5,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sessionRefSchema } from '@agentplex/protocol';
 import { fakeStorage } from '../auth/fake-storage.js';
 import { createTokenStore, type TokenStore } from '../auth/token.js';
+import { createMockSwitch, type MockSwitch } from '../mock/mock-switch.js';
+import { MockModeProvider } from '../mock/use-mock-mode.js';
 import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
@@ -19,7 +21,7 @@ import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { AppShell } from './app-shell.js';
 import { createSidebarWidth, type SidebarWidth } from './sidebar-width.js';
-import { destinationHash } from './destinations.js';
+import { destinationHash, settingsSectionHash } from './destinations.js';
 import type { NewNodeKind } from './new-menu-model.js';
 
 /**
@@ -204,14 +206,18 @@ describe('the shell', () => {
    * rather than left off: `exactOptionalPropertyTypes` makes an absent prop
    * and an undefined one two different things.
    */
-  async function mount(now: () => number = Date.now): Promise<FakeSocket> {
+  async function mount(
+    now: () => number = Date.now,
+    mock: MockSwitch | null = null,
+  ): Promise<FakeSocket> {
+    const shell = <AppShell hub={store} tokens={tokens} now={now} sidebarWidth={sidebarWidth} />;
     await act(async () => {
       root = createRoot(container);
       // No StrictMode: its simulated remount would subscribe, hang up and
       // dial again, and one dial is part of what the page test asserts.
       root.render(
         withProvider(
-          <AppShell hub={store} tokens={tokens} now={now} sidebarWidth={sidebarWidth} />,
+          mock === null ? shell : <MockModeProvider mock={mock}>{shell}</MockModeProvider>,
         ),
       );
     });
@@ -230,8 +236,25 @@ describe('the shell', () => {
     return [...container.querySelectorAll<HTMLElement>('aside')];
   }
 
+  /** The rows of the nav at the sidebar's foot. */
   function navLinks(): HTMLAnchorElement[] {
-    return [...container.querySelectorAll<HTMLAnchorElement>('nav a')];
+    return [
+      ...container.querySelectorAll<HTMLAnchorElement>('aside nav[aria-label="Destinations"] a'),
+    ];
+  }
+
+  /** The settings sections the sidebar offers while the address is a settings one. */
+  function sectionLinks(): HTMLAnchorElement[] {
+    return [
+      ...container.querySelectorAll<HTMLAnchorElement>(
+        'aside nav[aria-label="Settings sections"] a',
+      ),
+    ];
+  }
+
+  /** A switch that exists and is off, so the Developer section is one there is. */
+  function anySwitch(): MockSwitch {
+    return createMockSwitch({ storage: () => fakeStorage(), search: () => '' });
   }
 
   /** Every session address a part of the page links to, in the order drawn. */
@@ -592,7 +615,7 @@ describe('the shell', () => {
     expect(status?.textContent).toContain('no hub token on this device');
     const link = status?.querySelector('a');
     expect(link?.textContent).toBe('Settings');
-    expect(link?.getAttribute('href')).toBe(destinationHash('settings'));
+    expect(link?.getAttribute('href')).toBe(settingsSectionHash('connections'));
   });
 
   it('stops naming the token once one is stored, even while the hub refuses', async () => {
@@ -649,7 +672,7 @@ describe('the shell', () => {
     // The one place an AGX-119 action is drawn over a session route is the
     // chrome, which is on screen at every address, so this is the click a
     // person actually makes: no token, from a session. It lands because
-    // `destinationHash` is a route and not a fragment id -- the hash moves,
+    // the settings address is a route and not a fragment id -- the hash moves,
     // `useSessionRoute` stops parsing one, `parseDestinationHash` starts, and
     // the content region is decided again. Nothing is scrolled to, so there
     // is no element that has to be mounted when the browser goes looking.
@@ -674,7 +697,7 @@ describe('the shell', () => {
       link.click();
     });
     await act(settle);
-    expect(window.location.hash).toBe(destinationHash('settings'));
+    expect(window.location.hash).toBe(settingsSectionHash('connections'));
     // jsdom moves the address on a task of its own and delivers no
     // `hashchange` for the move; a browser fires one for a click onto a
     // different fragment, and that event is what every route in this app
@@ -746,13 +769,77 @@ describe('the shell', () => {
   it('shows settings in the content region when the address names it', async () => {
     window.location.hash = destinationHash('settings');
 
-    await mount();
+    await mount(Date.now, anySwitch());
 
     const main = container.querySelector('main');
     expect(main?.textContent).toContain('Pair a server');
     // And the nav says where the page is, rather than leaving the reader to
     // work it out from what is drawn.
     expect(navLinks()[0]?.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('turns the sidebar to the settings sections while the address is a settings one', async () => {
+    window.location.hash = destinationHash('settings');
+
+    await mount(Date.now, anySwitch());
+
+    // Plain `#/settings` is Connections, and the column says so.
+    expect(sectionLinks().map((link) => link.textContent)).toEqual([
+      'Connections',
+      'Preferences',
+      'Developer',
+    ]);
+    expect(sectionLinks().map((link) => link.getAttribute('aria-current'))).toEqual([
+      'page',
+      null,
+      null,
+    ]);
+    // Nothing that narrows a fleet: no tabs, no filter, no tree.
+    expect(sidebarTabs()).toHaveLength(0);
+    expect(container.querySelector('aside input[aria-label="Filter tree"]')).toBeNull();
+    expect(cataloguePanels('aside')).toHaveLength(0);
+    // The section links live in the column; the screen beside it draws none.
+    expect(container.querySelector('main nav[aria-label="Settings sections"]')).toBeNull();
+  });
+
+  it('draws the section the address names, and marks it current in the column', async () => {
+    window.location.hash = settingsSectionHash('preferences');
+
+    await mount(Date.now, anySwitch());
+
+    const main = container.querySelector('main')?.textContent ?? '';
+    expect(main).toContain('Appearance');
+    expect(main).not.toContain('Pair a server');
+    expect(
+      sectionLinks()
+        .filter((link) => link.getAttribute('aria-current') === 'page')
+        .map((link) => link.textContent),
+    ).toEqual(['Preferences']);
+  });
+
+  it('offers no Developer section, and opens Connections for its address, with no switch', async () => {
+    window.location.hash = settingsSectionHash('developer');
+
+    await mount();
+
+    expect(sectionLinks().map((link) => link.textContent)).toEqual(['Connections', 'Preferences']);
+    expect(sectionLinks()[0]?.getAttribute('aria-current')).toBe('page');
+    expect(container.querySelector('main')?.textContent).toContain('Pair a server');
+  });
+
+  it('gives the fleet controls back on leaving settings, on the reading chosen before', async () => {
+    // The tab and the tree's letters are held above the branch that draws the
+    // section nav, so a visit to settings is not a reset of the column.
+    await mount();
+    await chooseSessionsTab();
+    expect(chosenTab()).toBe('sessions');
+
+    await follow(destinationHash('settings'));
+    expect(sidebarTabs()).toHaveLength(0);
+
+    await follow(destinationHash('sessions'));
+    expect(sectionLinks()).toHaveLength(0);
+    expect(chosenTab()).toBe('sessions');
   });
 
   it('answers the session list for an address only the phone has a place for', async () => {
@@ -865,8 +952,9 @@ describe('the shell on a phone', () => {
     });
   }
 
+  /** The tab bar's own links, by the name it gives its nav. */
   function tabs(): HTMLAnchorElement[] {
-    return [...container.querySelectorAll<HTMLAnchorElement>('nav a')];
+    return [...container.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Sections"] a')];
   }
 
   function cataloguePanels(region: string): HTMLElement[] {
@@ -995,6 +1083,22 @@ describe('the shell on a phone', () => {
     const rows = [...(main?.querySelectorAll<HTMLAnchorElement>('nav a') ?? [])];
     expect(rows.map((row) => row.textContent)).toEqual(['Settings']);
     expect(rows[0]?.getAttribute('href')).toBe(destinationHash('settings'));
+  });
+
+  it('draws the settings sections as a row in the content region, there being no sidebar', async () => {
+    window.location.hash = settingsSectionHash('preferences');
+
+    await mount();
+
+    const row = container.querySelector('main nav[aria-label="Settings sections"]');
+    const links = [...(row?.querySelectorAll<HTMLAnchorElement>('a') ?? [])];
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      settingsSectionHash('connections'),
+      settingsSectionHash('preferences'),
+    ]);
+    expect(links[1]?.getAttribute('aria-current')).toBe('page');
+    expect(container.querySelector('main')?.textContent).toContain('Appearance');
+    expect(tabs()).toHaveLength(3);
   });
 
   it('takes the same session address the wide form does', async () => {

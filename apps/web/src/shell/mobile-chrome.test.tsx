@@ -15,7 +15,7 @@ import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { AttentionBell } from './attention-bell.js';
 import { connectionView } from './connection-model.js';
 import { ConnectionStatus } from './connection-status.js';
-import { destinationHash } from './destinations.js';
+import { destinationHash, settingsSectionHash } from './destinations.js';
 import { MobileChrome } from './mobile-chrome.js';
 
 /**
@@ -161,8 +161,9 @@ describe('the phone chrome', () => {
     });
   }
 
+  /** The tab bar's own links, by the name it gives its nav. */
   function tabs(): HTMLAnchorElement[] {
-    return [...container.querySelectorAll<HTMLAnchorElement>('nav a')];
+    return [...container.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Sections"] a')];
   }
 
   function maybeActionButton(): HTMLButtonElement | null {
@@ -234,7 +235,7 @@ describe('the phone chrome', () => {
 
     const link = container.querySelector<HTMLAnchorElement>('header a');
     expect(link?.textContent).toBe('Settings');
-    expect(link?.getAttribute('href')).toBe(destinationHash('settings'));
+    expect(link?.getAttribute('href')).toBe(settingsSectionHash('connections'));
   });
 
   it('draws the content region between the header and the bar', () => {

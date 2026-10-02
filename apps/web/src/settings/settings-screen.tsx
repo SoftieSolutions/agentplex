@@ -10,6 +10,12 @@ import type { TokenStore } from '../auth/token.js';
 // what "reconnecting" looks like.
 import { toneForPhase } from '../shell/connection-model.js';
 import {
+  resolveSettingsSection,
+  settingsSections,
+  type SettingsSection,
+} from '../shell/destinations.js';
+import type { ShellForm } from '../shell/shell-form.js';
+import {
   Anchor,
   Button,
   Group,
@@ -27,6 +33,7 @@ import { useMockSwitch } from '../mock/use-mock-mode.js';
 import { ColorSchemeControl } from './color-scheme-control.js';
 import { DeveloperSection } from './developer-section.js';
 import { Section } from './settings-section.js';
+import { SettingsSectionNav } from './settings-section-nav.js';
 import type { DiscoveredCandidate } from './pairing-form.js';
 import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import { PairingPanel } from './pairing-panel.js';
@@ -36,8 +43,24 @@ import type { PushOperations } from './push-operations.js';
 import { aboutWords, roundTripWords, serverRows, type ServerRowView } from './server-rows.js';
 
 /**
- * The settings screen: hub access, server pairing, and the paired-server
- * list. Everything drawn here is either typed by the user or read out of the
+ * The settings screen, one section at a time (AGX-388):
+ *
+ *   * Connections: "This browser" -- the hub token, the connection line and
+ *     the way back to the first-run guide -- then "Servers", pairing and the
+ *     paired-server list. The token is how this browser reaches the hub and
+ *     pairing is how the hub reaches a server; they share a section because
+ *     both answer "why can I not see my sessions", not because they are one
+ *     form.
+ *   * Preferences: notifications and appearance, the things about this
+ *     device that change no connection.
+ *   * Developer: the mock data switch, and only where one is provided.
+ *
+ * Which section is drawn is the address's (`destinations.ts`), handed in as a
+ * prop so a test chooses one without touching the hash. On a wide screen the
+ * sidebar carries the choice of section; a phone has no sidebar, so the
+ * screen draws the same links as a row above its content.
+ *
+ * Everything drawn here is either typed by the user or read out of the
  * snapshot; every failure is shown in words, because a settings screen is
  * exactly the place a person goes to find out why something is not working.
  *
@@ -76,6 +99,10 @@ export interface SettingsScreenProps {
    * inside the window a reading stays current for.
    */
   readonly now?: () => number;
+  /** The section the address names; one with nothing behind it opens Connections. */
+  readonly section: SettingsSection;
+  /** The phone form draws the section links itself, having no sidebar to hold them. */
+  readonly form: ShellForm;
 }
 
 function phaseWords(snapshot: HubSnapshot): string {
@@ -103,33 +130,58 @@ export function SettingsScreen({
   push,
   candidates,
   now = Date.now,
+  section,
+  form,
 }: SettingsScreenProps): JSX.Element {
   const scheme = useComputedColorScheme('dark');
   // From context, not a prop: the route that draws this screen has no reason
-  // to know sample data exists (see src/mock/use-mock-mode.tsx).
+  // to know sample data exists (see src/mock/use-mock-mode.tsx). With no
+  // switch provided the Developer section is not offered and its address
+  // opens Connections: a toggle wired to nothing would be a control that
+  // claims to do something.
   const mock = useMockSwitch();
+  const offered = settingsSections(mock !== null);
+  const shown = resolveSettingsSection(section, mock !== null);
+  const title = offered.find((entry) => entry.section === shown)?.label ?? 'Settings';
   return (
-    <Stack gap="md" maw={720}>
-      <Title order={2}>Settings</Title>
-      <Section scheme={scheme}>
-        <HubAccessSection snapshot={snapshot} tokens={tokens} scheme={scheme} />
-      </Section>
-      <Section scheme={scheme}>
-        <PairingPanel pairing={pairing} candidates={candidates} scheme={scheme} />
-      </Section>
-      <Section scheme={scheme}>
-        <PairedServersSection snapshot={snapshot} pairing={pairing} scheme={scheme} now={now()} />
-      </Section>
-      {/* Unwrapped, unlike every other section: the control carries its own
-          surface because it answers `null` in a browser without push, and a
-          panel wrapped around nothing is an empty box on a settings screen. */}
-      <PushControl store={store} push={push} />
-      <Section scheme={scheme}>
-        <ColorSchemeControl />
-      </Section>
-      {/* Absent rather than inert with no switch provided: a toggle wired to
-          nothing would be a control that claims to do something. */}
-      {mock !== null && (
+    <Stack gap="md" p="md" maw={720}>
+      {form === 'phone' && (
+        <SettingsSectionNav current={shown} offered={offered} direction="row" scheme={scheme} />
+      )}
+      <Title order={2}>{title}</Title>
+      {shown === 'connections' && (
+        <>
+          <Title order={3}>This browser</Title>
+          <Section scheme={scheme}>
+            <HubAccessSection snapshot={snapshot} tokens={tokens} scheme={scheme} />
+          </Section>
+          <Title order={3}>Servers</Title>
+          <Section scheme={scheme}>
+            <PairingPanel pairing={pairing} candidates={candidates} scheme={scheme} />
+          </Section>
+          <Section scheme={scheme}>
+            <PairedServersSection
+              snapshot={snapshot}
+              pairing={pairing}
+              scheme={scheme}
+              now={now()}
+            />
+          </Section>
+        </>
+      )}
+      {shown === 'preferences' && (
+        <>
+          {/* Unwrapped, unlike every other section: the control carries its
+              own surface because it answers `null` in a browser without push,
+              and a panel wrapped around nothing is an empty box on a settings
+              screen. */}
+          <PushControl store={store} push={push} />
+          <Section scheme={scheme}>
+            <ColorSchemeControl />
+          </Section>
+        </>
+      )}
+      {shown === 'developer' && mock !== null && (
         <Section scheme={scheme}>
           <DeveloperSection mock={mock} />
         </Section>
@@ -184,7 +236,6 @@ function HubAccessSection({
 
   return (
     <Stack gap="sm">
-      <Title order={4}>Hub access</Title>
       <Text size="md" lh="prose" c="dimmed">
         The hub token is typed once per device and kept in this browser only. It is exchanged with
         this hub for a connection ticket and sent nowhere else.

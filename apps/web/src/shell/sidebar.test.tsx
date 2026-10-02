@@ -20,6 +20,12 @@ import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
+import {
+  settingsSections,
+  type Destination,
+  type SettingsSection,
+  type SettingsSectionEntry,
+} from './destinations.js';
 import { Sidebar } from './sidebar.js';
 
 /**
@@ -160,7 +166,24 @@ describe('the sidebar filter row, mounted', () => {
    * `state` is handed to the sidebar as the shell hands it, and delivered down
    * the socket as well because the list screen reads its own.
    */
-  async function mount(state: MachineState | null = populated): Promise<void> {
+  interface Place {
+    readonly destination: Destination;
+    readonly address: Destination;
+    readonly section: SettingsSection;
+    readonly sections: readonly SettingsSectionEntry[];
+  }
+
+  const ON_THE_LIST: Place = {
+    destination: 'sessions',
+    address: 'sessions',
+    section: 'connections',
+    sections: settingsSections(true),
+  };
+
+  async function mount(
+    state: MachineState | null = populated,
+    place: Place = ON_THE_LIST,
+  ): Promise<void> {
     catalogue = fakeCatalogueStore(heldPages(hubFrames.catalogueTreePage));
     await act(async () => {
       columnRoot = createRoot(column);
@@ -173,8 +196,10 @@ describe('the sidebar filter row, mounted', () => {
             catalogue={catalogue}
             machine={null}
             onPickMachine={() => {}}
-            destination="sessions"
-            address="sessions"
+            destination={place.destination}
+            address={place.address}
+            section={place.section}
+            sections={place.sections}
             scheme="dark"
             now={() => NOW}
           />,
@@ -358,5 +383,56 @@ describe('the sidebar filter row, mounted', () => {
 
     expect(column.querySelector('input[aria-label="Filter sessions"]')).toBeNull();
     expect(trigger()).toBeNull();
+  });
+
+  describe('while the address is a settings one', () => {
+    function inSettings(sections: readonly SettingsSectionEntry[]): Place {
+      return { destination: 'settings', address: 'settings', section: 'connections', sections };
+    }
+
+    function sectionLinks(): HTMLAnchorElement[] {
+      return [
+        ...column.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Settings sections"] a'),
+      ];
+    }
+
+    it('draws the settings sections in place of the fleet controls', async () => {
+      await mount(populated, inSettings(settingsSections(true)));
+
+      expect(sectionLinks().map((link) => link.getAttribute('href'))).toEqual([
+        '#/settings/connections',
+        '#/settings/preferences',
+        '#/settings/developer',
+      ]);
+      expect(sectionLinks().map((link) => link.getAttribute('aria-current'))).toEqual([
+        'page',
+        null,
+        null,
+      ]);
+      // The machine selector, the tabs, the filter row and the rows under it
+      // narrow a fleet, and nothing in settings is a reading of one.
+      expect(column.querySelector('[aria-label="What the sidebar shows"]')).toBeNull();
+      expect(column.querySelector('input[aria-label^="Filter "]')).toBeNull();
+      // The selector's trigger and the filters popover's are the column's only
+      // buttons; the section choices are links.
+      expect(column.querySelector('button')).toBeNull();
+      expect(rowNames()).toEqual([]);
+    });
+
+    it('offers only the sections it is handed', async () => {
+      await mount(populated, inSettings(settingsSections(false)));
+
+      expect(sectionLinks().map((link) => link.textContent)).toEqual([
+        'Connections',
+        'Preferences',
+      ]);
+    });
+
+    it('keeps the foot nav, with Settings current', async () => {
+      await mount(populated, inSettings(settingsSections(true)));
+
+      const current = column.querySelectorAll('nav[aria-label="Destinations"] a[aria-current]');
+      expect([...current].map((link) => link.textContent)).toEqual(['Settings']);
+    });
   });
 });

@@ -11,6 +11,8 @@ import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import type { HubSnapshot } from '../store/views.js';
+import type { SettingsSection } from '../shell/destinations.js';
+import type { ShellForm } from '../shell/shell-form.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider, MockTag } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
@@ -23,6 +25,13 @@ import { SettingsScreen } from './settings-screen.js';
 /**
  * That the screen carries the controls it is the home of, and what it says
  * when it has nothing to list, which is what a new install has.
+ *
+ * The screen is three sections at three addresses (AGX-388), and each test
+ * draws the one that carries what it asserts: Connections for the hub token
+ * and pairing, Preferences for notifications and appearance, Developer for the
+ * mock switch. Each section is also asserted to draw nothing of the others,
+ * because a control left behind in the wrong section is the regression a
+ * split invites.
  *
  * The appearance control is asserted here rather than only in its own suite
  * because its own suite mounts it directly: without this, deleting the
@@ -110,7 +119,12 @@ describe('the settings screen', () => {
       root = createRoot(container);
       root.render(
         <MantineProvider theme={theme} cssVariablesResolver={cssVariablesResolver}>
-          <SettingsRoute store={store} tokens={createTokenStore(() => storage)} />
+          <SettingsRoute
+            store={store}
+            tokens={createTokenStore(() => storage)}
+            section="preferences"
+            form="wide"
+          />
         </MantineProvider>,
       );
     });
@@ -173,28 +187,47 @@ describe('the settings screen with nothing paired', () => {
     return { store, snapshot };
   }
 
+  interface DrawOptions {
+    readonly now?: () => number;
+    readonly scheme?: 'light' | 'dark';
+    readonly section?: SettingsSection;
+    readonly form?: ShellForm;
+    /** A switch to provide, so the Developer section is one that exists. */
+    readonly mock?: MockSwitch;
+  }
+
   async function draw(
     state: string,
-    now: () => number = Date.now,
-    scheme: 'light' | 'dark' = 'dark',
+    {
+      now = Date.now,
+      scheme = 'dark',
+      section = 'connections',
+      form = 'wide',
+      mock,
+    }: DrawOptions = {},
   ): Promise<void> {
     const { store, snapshot } = await storeOn(state);
     const storage = fakeStorage();
+    const screen = (
+      <SettingsScreen
+        snapshot={snapshot}
+        store={store}
+        tokens={createTokenStore(() => storage)}
+        pairing={NO_PAIRING}
+        push={createFakePushOperations()}
+        candidates={[]}
+        now={now}
+        section={section}
+        form={form}
+      />
+    );
     const element: JSX.Element = (
       <MantineProvider
         theme={theme}
         cssVariablesResolver={cssVariablesResolver}
         defaultColorScheme={scheme}
       >
-        <SettingsScreen
-          snapshot={snapshot}
-          store={store}
-          tokens={createTokenStore(() => storage)}
-          pairing={NO_PAIRING}
-          push={createFakePushOperations()}
-          candidates={[]}
-          now={now}
-        />
+        {mock === undefined ? screen : <MockModeProvider mock={mock}>{screen}</MockModeProvider>}
       </MantineProvider>
     );
     await act(async () => {
@@ -202,6 +235,87 @@ describe('the settings screen with nothing paired', () => {
       root.render(element);
     });
   }
+
+  /** A switch that exists and is off, so every section is on offer. */
+  function anySwitch(): MockSwitch {
+    return createMockSwitch({ storage: () => fakeStorage(), search: () => '' });
+  }
+
+  function headings(level: 'h2' | 'h3'): (string | null)[] {
+    return [...container.querySelectorAll(level)].map((heading) => heading.textContent);
+  }
+
+  it('draws Connections: this browser and its hub token, then the servers', async () => {
+    await draw(hubFrames.machineState, { mock: anySwitch() });
+
+    expect(headings('h2')).toEqual(['Connections']);
+    expect(headings('h3')).toEqual(['This browser', 'Servers']);
+    expect(container.querySelector('input[type="password"]')).not.toBeNull();
+    // The connection line, which is what proves a token rather than saving it.
+    expect(container.textContent).toContain('connected');
+    expect(container.textContent).toContain('Pair a server');
+    expect(container.textContent).toContain('Paired servers');
+    expect(container.textContent).toContain('No servers are paired with this hub');
+
+    const words = container.textContent ?? '';
+    expect(words).not.toContain('Hub access');
+    expect(words).not.toContain('Appearance');
+    expect(words).not.toContain('Notifications');
+    expect(words).not.toContain('Developer');
+  });
+
+  it('draws Preferences: notifications and appearance, and nothing about connections', async () => {
+    await draw(hubFrames.machineState, { section: 'preferences', mock: anySwitch() });
+
+    expect(headings('h2')).toEqual(['Preferences']);
+    expect(container.textContent).toContain('Notifications');
+    expect(container.querySelector('[aria-label="Appearance"]')).not.toBeNull();
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(container.textContent).not.toContain('Pair a server');
+    expect(container.textContent).not.toContain('Show mock data');
+  });
+
+  it('pads its own content the way the other destinations do', async () => {
+    await draw(hubFrames.machineState);
+
+    // The first element the screen draws: Mantine's provider puts its style
+    // tags ahead of it, and those are not the screen's.
+    const outer = container.querySelector<HTMLElement>(':scope > :not(style)');
+    expect(outer?.style.padding).toBe('var(--mantine-spacing-md)');
+    expect(outer?.querySelector('h2')?.textContent).toBe('Connections');
+  });
+
+  it('draws the sections as a row of links above the content on a phone', async () => {
+    await draw(hubFrames.machineState, {
+      section: 'preferences',
+      form: 'phone',
+      mock: anySwitch(),
+    });
+
+    const nav = container.querySelector('nav[aria-label="Settings sections"]');
+    expect(nav).not.toBeNull();
+    const links = [...(nav?.querySelectorAll('a') ?? [])];
+    expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
+      ['Connections', '#/settings/connections'],
+      ['Preferences', '#/settings/preferences'],
+      ['Developer', '#/settings/developer'],
+    ]);
+    expect(links.map((link) => link.getAttribute('aria-current'))).toEqual([null, 'page', null]);
+    // Above the content: the nav comes before the section's own title.
+    const title = container.querySelector('h2');
+    expect(title?.textContent).toBe('Preferences');
+    expect(
+      nav !== null &&
+        title !== null &&
+        nav.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('draws no section row in the wide form, where the sidebar holds it', async () => {
+    await draw(hubFrames.machineState, { mock: anySwitch() });
+
+    expect(container.querySelector('nav[aria-label="Settings sections"]')).toBeNull();
+  });
 
   /** When the captured timed machine's pong was read, by the hub's clock. */
   const MEASURED_AT = 1_756_000_020_012;
@@ -276,6 +390,8 @@ describe('the settings screen with nothing paired', () => {
           pairing={NO_PAIRING}
           push={createFakePushOperations()}
           candidates={[]}
+          section="connections"
+          form="wide"
         />
       </MantineProvider>
     );
@@ -290,8 +406,8 @@ describe('the settings screen with nothing paired', () => {
     expect(container.textContent).not.toContain('install.sh');
   });
 
-  it('carries the notifications control, where this browser has push', async () => {
-    await draw(hubFrames.machineState);
+  it('carries the notifications control in Preferences, where this browser has push', async () => {
+    await draw(hubFrames.machineState, { section: 'preferences' });
 
     // The screen is the home of the control; its own suite mounts it alone,
     // so without this the section could be deleted from the screen and every
@@ -308,7 +424,7 @@ describe('the settings screen with nothing paired', () => {
   });
 
   it('draws what each machine said it runs, muted beside its identity', async () => {
-    await draw(hubFrames.machineStatePopulated, () => MEASURED_AT);
+    await draw(hubFrames.machineStatePopulated, { now: () => MEASURED_AT });
 
     // Both captured servers named themselves in their handshake; the row
     // draws each in the same muted monospace as the identity it sits beside.
@@ -331,7 +447,7 @@ describe('the settings screen with nothing paired', () => {
   });
 
   it('draws the round trip the hub measured beside the phase', async () => {
-    await draw(hubFrames.machineStateMeasured, () => MEASURED_AT);
+    await draw(hubFrames.machineStateMeasured, { now: () => MEASURED_AT });
 
     expect(container.textContent).toContain('connected · 1 store');
     expect(drawn('12ms')).toBeDefined();
@@ -339,14 +455,14 @@ describe('the settings screen with nothing paired', () => {
   });
 
   it('draws no figure for a machine the hub has not timed', async () => {
-    await draw(hubFrames.machineStateJustPaired, () => MEASURED_AT);
+    await draw(hubFrames.machineStateJustPaired, { now: () => MEASURED_AT });
 
     expect(container.textContent).toContain('mbp-robert');
     expect(container.textContent).not.toMatch(/\d+ms/);
   });
 
   it('labels a reading with its age once it is no longer current', async () => {
-    await draw(hubFrames.machineStateMeasured, () => MEASURED_AT + 3 * 60_000);
+    await draw(hubFrames.machineStateMeasured, { now: () => MEASURED_AT + 3 * 60_000 });
 
     expect(drawn('12ms · 3m ago')).toBeDefined();
   });
@@ -355,23 +471,24 @@ describe('the settings screen with nothing paired', () => {
     // The captured frame with its one figure raised past the threshold: what
     // is under test is the tone a number earns, and the frame still goes
     // through the store's own parser.
-    await draw(hubFrames.machineStateMeasured.replace('"ms":12,', '"ms":410,'), () => MEASURED_AT);
+    await draw(hubFrames.machineStateMeasured.replace('"ms":12,', '"ms":410,'), {
+      now: () => MEASURED_AT,
+    });
 
     expect(drawn('410ms').style.color).toBe(toCssColor(colorForToneText('needs-you', 'dark')));
   });
 
   it('writes a slow round trip in the warning word hue on paper, not the dot hue', async () => {
-    await draw(
-      hubFrames.machineStateMeasured.replace('"ms":12,', '"ms":410,'),
-      () => MEASURED_AT,
-      'light',
-    );
+    await draw(hubFrames.machineStateMeasured.replace('"ms":12,', '"ms":410,'), {
+      now: () => MEASURED_AT,
+      scheme: 'light',
+    });
 
     expect(drawn('410ms').style.color).toBe(toCssColor(colorForToneText('needs-you', 'light')));
   });
 
   it("leaves a round trip under the threshold in the row's own quiet tone", async () => {
-    await draw(hubFrames.machineStateMeasured, () => MEASURED_AT);
+    await draw(hubFrames.machineStateMeasured, { now: () => MEASURED_AT });
 
     expect(drawn('12ms').style.color).not.toBe(toCssColor(colorForToneText('needs-you', 'dark')));
   });
@@ -421,7 +538,10 @@ describe('the developer section', () => {
     ) : null;
   }
 
-  async function draw(mock: MockSwitch | null): Promise<void> {
+  async function draw(
+    mock: MockSwitch | null,
+    section: SettingsSection = 'developer',
+  ): Promise<void> {
     const storage = fakeStorage();
     const sockets = createFakeSocketFactory();
     const store = createHubStore({
@@ -439,6 +559,8 @@ describe('the developer section', () => {
           pairing={NO_PAIRING}
           push={createFakePushOperations()}
           candidates={[]}
+          section={section}
+          form="wide"
         />
         <Harness />
       </>
@@ -463,11 +585,14 @@ describe('the developer section', () => {
     return input;
   }
 
-  it('comes after the appearance control, with a toggle that reads the switch as off', async () => {
+  it('is a section of its own, with a toggle that reads the switch as off', async () => {
     await draw(createMockSwitch({ storage: () => fakeStorage(), search: () => '' }));
 
-    const headings = [...container.querySelectorAll('h4')].map((h) => h.textContent);
-    expect(headings.slice(-2)).toEqual(['Appearance', 'Developer']);
+    expect([...container.querySelectorAll('h2')].map((h) => h.textContent)).toEqual(['Developer']);
+    // The panel names what it holds rather than repeating the section's name.
+    expect([...container.querySelectorAll('h4')].map((h) => h.textContent)).toEqual(['Mock data']);
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Appearance"]')).toBeNull();
     const words = container.textContent ?? '';
     expect(words).toContain('Show mock data');
     expect(words).toContain(
@@ -520,7 +645,14 @@ describe('the developer section', () => {
   });
 
   it('is absent with no switch to flip', async () => {
-    await draw(null);
+    await draw(null, 'connections');
+    expect(container.textContent).not.toContain('Developer');
+    expect(container.querySelector('input[role="switch"]')).toBeNull();
+  });
+
+  it('opens Connections for a Developer address with no switch behind it', async () => {
+    await draw(null, 'developer');
+    expect(container.textContent).toContain('This browser');
     expect(container.textContent).not.toContain('Developer');
     expect(container.querySelector('input[role="switch"]')).toBeNull();
   });

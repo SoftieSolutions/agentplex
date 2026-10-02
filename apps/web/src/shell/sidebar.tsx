@@ -4,10 +4,17 @@ import { CataloguePanel } from '../catalogue/catalogue-panel.js';
 import type { CatalogueStore } from '../catalogue/catalogue-store.js';
 import { MachineSelector } from '../machines/machine-selector.js';
 import { appSessionFiltersStore } from '../sessions/session-filters-store.js';
+import { SettingsSectionNav } from '../settings/settings-section-nav.js';
 import type { HubStore } from '../store/hub-store.js';
 import { Box, SegmentedControl, Stack, Text, UnstyledButton } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
-import { destinationHash, NAV, type Destination } from './destinations.js';
+import {
+  destinationHash,
+  NAV,
+  type Destination,
+  type SettingsSection,
+  type SettingsSectionEntry,
+} from './destinations.js';
 import { SidebarFilter } from './sidebar-filter.js';
 import { SidebarSessions } from './sidebar-sessions.js';
 
@@ -66,6 +73,15 @@ import { SidebarSessions } from './sidebar-sessions.js';
  * The nav is whatever `destinations.ts` says can honestly be reached. Graphs
  * and Library are named in the mockups and built by nobody yet, so they are
  * not drawn at all.
+ *
+ * While the content region is Settings, the column above the nav is the
+ * settings sections instead (AGX-388): nothing in settings is a reading of the
+ * fleet, so a selector, two tabs and a filter over it would be controls that
+ * narrow nothing on screen. It is a branch inside this component rather than
+ * a second sidebar swapped in by the shell, so the tab and the tree's letters
+ * are held above it and are exactly as they were when the person leaves
+ * settings. Moving into settings does unmount the catalogue panel, which drops
+ * the catalogue interest the way choosing the Sessions tab does.
  */
 
 /** Which reading of the fleet the sidebar is showing. */
@@ -92,6 +108,14 @@ export interface SidebarProps {
    * `useDestination` and a second parser would be a second answer.
    */
   readonly address: Destination;
+  /**
+   * The settings section the address names, already resolved against what is
+   * offered, and the sections offered. Both are the shell's, which hands the
+   * same two to the content region: one reading is what keeps the column and
+   * the screen beside it from marking different sections current.
+   */
+  readonly section: SettingsSection;
+  readonly sections: readonly SettingsSectionEntry[];
   readonly scheme: Scheme;
   /**
    * The clock the column is read against, injected so a test can pin an age.
@@ -111,6 +135,8 @@ export function Sidebar({
   onPickMachine,
   destination,
   address,
+  section,
+  sections,
   scheme,
   now = Date.now,
 }: SidebarProps): JSX.Element {
@@ -132,6 +158,21 @@ export function Sidebar({
   const held = useSyncExternalStore(filters.subscribe, filters.getSnapshot);
   const projects = tab === 'projects';
   const moment = now();
+  if (destination === 'settings') {
+    return (
+      <Stack gap={10} p={10} style={{ height: '100%', minHeight: 0 }}>
+        <Box style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <SettingsSectionNav
+            current={section}
+            offered={sections}
+            direction="column"
+            scheme={scheme}
+          />
+        </Box>
+        <FootNav destination={destination} scheme={scheme} />
+      </Stack>
+    );
+  }
   return (
     <Stack gap={10} p={10} style={{ height: '100%', minHeight: 0 }}>
       <MachineSelector
@@ -206,27 +247,45 @@ export function Sidebar({
         )}
       </Box>
 
-      <Stack
-        component="nav"
-        gap={1}
-        style={{ borderTop: `1px solid ${colorForRole('border', scheme)}`, paddingTop: 8 }}
-      >
-        {NAV.map((entry) => (
-          <UnstyledButton
-            key={entry.destination}
-            component="a"
-            href={destinationHash(entry.destination)}
-            aria-current={entry.destination === destination ? 'page' : undefined}
-            fz={12.5}
-            fw={entry.destination === destination ? 600 : 400}
-            c={colorForRole(entry.destination === destination ? 'text' : 'textSecondary', scheme)}
-            bg={entry.destination === destination ? colorForRole('raised', scheme) : 'transparent'}
-            style={{ display: 'block', padding: '6px 8px', borderRadius: 6 }}
-          >
-            {entry.label}
-          </UnstyledButton>
-        ))}
-      </Stack>
+      <FootNav destination={destination} scheme={scheme} />
+    </Stack>
+  );
+}
+
+/**
+ * The nav at the foot of the column, under either body. Labelled because in
+ * settings the section nav above it is a nav too, and two unnamed ones are two
+ * a reader cannot tell apart.
+ */
+function FootNav({
+  destination,
+  scheme,
+}: {
+  readonly destination: Destination;
+  readonly scheme: Scheme;
+}): JSX.Element {
+  return (
+    <Stack
+      component="nav"
+      aria-label="Destinations"
+      gap={1}
+      style={{ borderTop: `1px solid ${colorForRole('border', scheme)}`, paddingTop: 8 }}
+    >
+      {NAV.map((entry) => (
+        <UnstyledButton
+          key={entry.destination}
+          component="a"
+          href={destinationHash(entry.destination)}
+          aria-current={entry.destination === destination ? 'page' : undefined}
+          fz={12.5}
+          fw={entry.destination === destination ? 600 : 400}
+          c={colorForRole(entry.destination === destination ? 'text' : 'textSecondary', scheme)}
+          bg={entry.destination === destination ? colorForRole('raised', scheme) : 'transparent'}
+          style={{ display: 'block', padding: '6px 8px', borderRadius: 6 }}
+        >
+          {entry.label}
+        </UnstyledButton>
+      ))}
     </Stack>
   );
 }
