@@ -254,6 +254,18 @@ function buttonColours(
 }
 
 /**
+ * A field's fill by variant. Only the default field takes the scheme field
+ * hue: Mantine writes this answer inline on the wrapper, where it outranks
+ * Input.css, so a value here for an unstyled field would paint over the
+ * `transparent` that variant exists for (the palette's search and the graph
+ * inspector's title sit on a surface of their own). A filled field keeps the
+ * fill Mantine gives it. Undefined leaves Mantine's answer.
+ */
+function inputBackground(variant: string | undefined): string | undefined {
+  return (variant ?? 'default') === 'default' ? 'var(--agx-input-bg)' : undefined;
+}
+
+/**
  * The weight of a button's word: 700 on a filled button and 400 on the rest,
  * as every button in the mocks is set. Mantine sets them all at 600.
  */
@@ -345,7 +357,7 @@ export const theme: MantineThemeOverride = createTheme({
       vars: (_theme, props) => ({
         wrapper: {
           '--input-fz': controlFontSize(props.size),
-          '--input-bg': 'var(--agx-input-bg)',
+          '--input-bg': inputBackground(props.variant),
           '--input-height-xs': CONTROL_HEIGHT.xs,
           '--input-height-sm': CONTROL_HEIGHT.sm,
           '--input-height-md': CONTROL_HEIGHT.md,
@@ -378,12 +390,6 @@ export const theme: MantineThemeOverride = createTheme({
 });
 
 /**
- * Scheme-dependent surfaces that Mantine derives from its own palette get
- * overridden here so both schemes come from tokens.ts. Without this, the
- * light scheme's body would be stock white and dark borders would come from
- * the dark tuple's slot 4 alone.
- */
-/**
  * The control hues the theme's components and `themeRules` read, per scheme.
  * Named variables rather than hues written into the components, because a
  * component's theme resolver does not know the scheme and the page switches
@@ -393,22 +399,28 @@ function controlVariables(scheme: Scheme): Record<string, string> {
   const dark = scheme === 'dark';
   return {
     '--agx-primary-button': colorForRole('primaryButton', scheme),
-    '--agx-primary-button-hover': dark ? hues.ochre : hues.ridge,
+    '--agx-primary-button-hover': colorForRole('primaryButtonHover', scheme),
     '--agx-on-primary-button': colorForRole('onPrimaryButton', scheme),
     '--agx-control-border': colorForRole('borderStrong', scheme),
     '--agx-control-text': colorForRole(dark ? 'textSecondary' : 'text', scheme),
     '--agx-control-hover': colorForRole('raised', scheme),
     '--agx-input-bg': colorForRole(dark ? 'background' : 'surface', scheme),
-    // The dark track is the inset hue with a hairline; the light one is the
-    // chip hue with none, and its chosen segment is lifted on paper (7a, 7b).
-    '--agx-segment-track': dark ? hues.umber : hues.dune,
+    // The dark track carries a hairline; the light one has none, and its
+    // chosen segment is lifted by a shadow instead (7a, 7b).
+    '--agx-segment-track': colorForRole('segmentTrack', scheme),
     '--agx-segment-border': dark ? `1px solid ${colorForRole('border', scheme)}` : 'none',
-    '--agx-segment-active': dark ? hues.walnut : hues.paper,
+    '--agx-segment-active': colorForRole('segmentActive', scheme),
     '--agx-segment-shadow': shadows[scheme].raised,
     '--agx-segment-idle': colorForRole(dark ? 'textMuted' : 'textFaint', scheme),
   };
 }
 
+/**
+ * Scheme-dependent surfaces that Mantine derives from its own palette get
+ * overridden here so both schemes come from tokens.ts. Without this, the
+ * light scheme's body would be stock white and dark borders would come from
+ * the dark tuple's slot 4 alone.
+ */
 export const cssVariablesResolver: CSSVariablesResolver = () => ({
   variables: {},
   dark: {

@@ -174,8 +174,8 @@ export function NewMenuButton({ menu, onPick, scheme }: NewMenuButtonProps): JSX
             style={{
               alignSelf: 'stretch',
               width: 1,
-              // The word's own hue at a fifth, as the mock writes it (#14131133
-              // on amber, #ffffff33 on ink).
+              // The word's own hue at a fifth, as the mock writes it (char at
+              // 0x33 on amber, paper at 0x33 on ink).
               background: translucent(roles[scheme].onPrimaryButton, 0x33),
             }}
           />

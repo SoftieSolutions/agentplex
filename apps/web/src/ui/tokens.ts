@@ -165,6 +165,11 @@ export interface SchemeRoles {
    * draws it, for the reason the mark is: white on ochre is 2.5:1.
    */
   primaryButton: HueName;
+  /**
+   * The primary action under the pointer. The dark amber deepens to ochre;
+   * the light ink lifts to ridge, since nothing is darker than ink to deepen to.
+   */
+  primaryButtonHover: HueName;
   /** The word on the primary action. */
   onPrimaryButton: HueName;
   /**
@@ -172,6 +177,16 @@ export interface SchemeRoles {
    * lifts the bar off the parchment page (7b, 7d).
    */
   chrome: HueName;
+  /**
+   * The segmented control's track. The inset hue in dark, the chip hue in
+   * light, where the track carries no hairline (7a, 7b).
+   */
+  segmentTrack: HueName;
+  /**
+   * The chosen segment. A step above the track in dark; paper in light, lifted
+   * off the track by a shadow rather than a hue (7a, 7b).
+   */
+  segmentActive: HueName;
 }
 
 export const roles = {
@@ -198,8 +213,11 @@ export const roles = {
     brand: 'amber',
     onBrand: 'char',
     primaryButton: 'amber',
+    primaryButtonHover: 'ochre',
     onPrimaryButton: 'char',
     chrome: 'char',
+    segmentTrack: 'umber',
+    segmentActive: 'walnut',
   },
   light: {
     background: 'parchment',
@@ -228,8 +246,11 @@ export const roles = {
     brand: 'ink',
     onBrand: 'amber',
     primaryButton: 'ink',
+    primaryButtonHover: 'ridge',
     onPrimaryButton: 'paper',
     chrome: 'paper',
+    segmentTrack: 'dune',
+    segmentActive: 'paper',
   },
 } as const satisfies Record<Scheme, SchemeRoles>;
 

@@ -141,6 +141,9 @@ describe('cssVariablesResolver', () => {
     expect(resolved.dark['--agx-on-primary-button']).toBe(hues.char);
     expect(resolved.light['--agx-primary-button']).toBe(hues.ink);
     expect(resolved.light['--agx-on-primary-button']).toBe(hues.paper);
+    // Hovered, the dark fill deepens to ochre and the light one lifts to ridge.
+    expect(resolved.dark['--agx-primary-button-hover']).toBe(hues.ochre);
+    expect(resolved.light['--agx-primary-button-hover']).toBe(hues.ridge);
     // Deny, Pause, Copy: no fill, a ridge edge and oat words in dark, sand and
     // ink in light (7a, 7c, 7f, 7b, 7d).
     expect(resolved.dark['--agx-control-border']).toBe(hues.ridge);
@@ -163,6 +166,16 @@ describe('cssVariablesResolver', () => {
     expect(resolved.light['--agx-segment-active']).toBe(hues.paper);
     expect(resolved.light['--agx-segment-shadow']).toBe(shadows.light.raised);
     expect(resolved.light['--agx-segment-idle']).toBe(hues.shale);
+  });
+
+  it('reads every control hue it names from a token role, so no hue is chosen here', () => {
+    for (const scheme of ['dark', 'light'] as const) {
+      expect(resolved[scheme]['--agx-primary-button-hover']).toBe(
+        colorForRole('primaryButtonHover', scheme),
+      );
+      expect(resolved[scheme]['--agx-segment-track']).toBe(colorForRole('segmentTrack', scheme));
+      expect(resolved[scheme]['--agx-segment-active']).toBe(colorForRole('segmentActive', scheme));
+    }
   });
 
   it('gives the light scheme the paper background, not stock white', () => {
@@ -223,8 +236,22 @@ describe('control styles', () => {
   });
 
   it('sets a field in the scheme field hue', () => {
-    const wrapper = controlVars('Input').wrapper ?? {};
-    expect(wrapper['--input-bg']).toBe('var(--agx-input-bg)');
+    for (const variant of [undefined, 'default']) {
+      const wrapper = controlVars('Input', { variant }).wrapper ?? {};
+      expect(wrapper['--input-bg'], String(variant)).toBe('var(--agx-input-bg)');
+    }
+  });
+
+  it('leaves an unstyled field transparent, as Mantine draws the palette and inspector fields', () => {
+    // Mantine writes a vars resolver's answer inline on the wrapper, where it
+    // would beat Input.css's `[data-variant='unstyled'] { --input-bg: transparent }`.
+    const wrapper = controlVars('Input', { variant: 'unstyled' }).wrapper ?? {};
+    expect(wrapper['--input-bg']).toBeUndefined();
+  });
+
+  it('leaves a filled field its own fill rather than the default field hue', () => {
+    const wrapper = controlVars('Input', { variant: 'filled' }).wrapper ?? {};
+    expect(wrapper['--input-bg']).toBeUndefined();
   });
 
   it('carries the segmented states Mantine has no variable for in the theme rules', () => {
