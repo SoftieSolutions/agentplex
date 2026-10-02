@@ -34,9 +34,10 @@ import {
   type FakeSessionController,
 } from '../../../apps/server/src/sessions/fake-session-controller.js';
 import {
-  createFakeStoreFiles,
+  createFakeProcessProbe,
   createFakeProviderAdapter,
   createFakeProviderFiles,
+  createFakeStoreFiles,
   missingProvider,
   readProviderFixture,
   readyProvider,
@@ -759,6 +760,7 @@ function buildLiveMachine(): LiveMachine {
     sessionFiles,
     sessions: createSessionController({
       signaller: createFakeProcessSignaller(),
+      processes: createFakeProcessProbe(),
       timers: createFakeTimers(),
       stores,
       providers: createProviderRegistry([createFakeProviderAdapter({ provider: 'claude', files })]),

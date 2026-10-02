@@ -22,3 +22,15 @@ describe('createFakeProcessProbe', () => {
     expect(await probe.startedAt(101)).toBe(2_000);
   });
 });
+
+describe('createFakeProcessProbe.start', () => {
+  it('issues a pid again to a later process, which dates as the later one', async () => {
+    const probe = createFakeProcessProbe({ processes: { 100: 1_000 } });
+
+    probe.exit(100);
+    probe.start(100, 9_000);
+
+    expect(await probe.isAlive(100)).toBe(true);
+    expect(await probe.startedAt(100)).toBe(9_000);
+  });
+});

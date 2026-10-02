@@ -690,13 +690,18 @@ describe('createClaudeAdapter.liveProcess', () => {
     // because ending the process ends that command.
     ['shell', 'working'],
   ])('names the verified process at registry status %s as %s', async (status, phase) => {
-    expect(await liveProcessOver({ [ENTRY]: entryWith({ status }) })).toEqual({ pid: PID, phase });
+    expect(await liveProcessOver({ [ENTRY]: entryWith({ status }) })).toEqual({
+      pid: PID,
+      phase,
+      startedAt: PROCESS_STARTED_AT,
+    });
   });
 
   it('names a process whose entry states no status as being in an unknown phase', async () => {
     expect(await liveProcessOver({ [ENTRY]: entryWith({ status: undefined }) })).toEqual({
       pid: PID,
       phase: 'unknown',
+      startedAt: PROCESS_STARTED_AT,
     });
   });
 
@@ -729,6 +734,7 @@ describe('createClaudeAdapter.liveProcess', () => {
     expect(await liveProcessOver({ [ENTRY]: entryWith({ status: 'idle' }) }, inside)).toEqual({
       pid: PID,
       phase: 'idle',
+      startedAt: REGISTERED_AT - CLAUDE_REGISTRATION_WINDOW_MS + 1_000,
     });
   });
 
@@ -763,7 +769,11 @@ describe('createClaudeAdapter.liveProcess', () => {
       homeDirectory: HOME,
     });
 
-    expect(await adapter.liveProcess(STORE, SESSION)).toEqual({ pid: PID, phase: 'idle' });
+    expect(await adapter.liveProcess(STORE, SESSION)).toEqual({
+      pid: PID,
+      phase: 'idle',
+      startedAt: PROCESS_STARTED_AT,
+    });
     probe.exit(PID);
     expect(await adapter.liveProcess(STORE, SESSION)).toBeNull();
   });

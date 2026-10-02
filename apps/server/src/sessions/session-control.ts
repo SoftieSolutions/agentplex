@@ -13,7 +13,9 @@ import type {
 import { SESSION_BRANCH_MAX_CHARS } from '@agentplex/protocol';
 import type { Clock, Logger, Timers } from '@agentplex/node-shared';
 import {
+  PID_RECYCLE_TOLERANCE_MS,
   type LiveProcess,
+  type ProcessProbe,
   type ProviderAdapter,
   type ProviderRegistry,
   type SessionOrigin,
@@ -127,6 +129,13 @@ export interface SessionControllerDependencies {
    * belongs in `main`, where every signal this server can send is in one place.
    */
   readonly signaller: ProcessSignaller;
+  /**
+   * The process table, which is what a retake asks whether the process it
+   * signalled has gone. Not the provider's registry: that is the process's own
+   * bookkeeping, and Claude Code drops its entry while it is still handling
+   * the SIGHUP.
+   */
+  readonly processes: ProcessProbe;
   /** A retake's polls and its grace before SIGKILL, which a test fires by hand. */
   readonly timers: Timers;
   readonly clock: Clock;
@@ -321,6 +330,7 @@ export function createSessionController(
     approvals,
     homeDirectory,
     signaller,
+    processes,
     timers,
     clock,
   } = dependencies;
@@ -818,15 +828,19 @@ export function createSessionController(
     if (!now.ok) return now.outcome;
     const target = retakeable(now.process);
     if (!target.ok) return refused(target.problem);
-    if (ownPid(target.pid)) return alreadyHeld(session);
+    if (ownPid(target.process.pid)) return alreadyHeld(session);
 
-    const hung = signaller.signal(target.pid, 'SIGHUP');
+    const hung = signaller.signal(target.process.pid, 'SIGHUP');
     if (!hung.ok) {
       return refused(`this server could not end the process running that session: ${hung.problem}`);
     }
-    logger.info('session retake signalled', { ...session, signal: 'SIGHUP' });
+    logger.info('session retake signalled', {
+      ...session,
+      pid: target.process.pid,
+      signal: 'SIGHUP',
+    });
 
-    const ended = await untilEnded(store, adapter, session, target.pid);
+    const ended = await untilEnded(session, target.process);
     if (ended !== null) return refused(ended);
 
     return await resumeSession(store, adapter, session, 'retake');
@@ -836,44 +850,65 @@ export function createSessionController(
    * Waits for a signalled process to go, sending SIGKILL once the grace is
    * spent, and answers `null` when it has gone or the words for why not.
    *
-   * Asked of the adapter every `RETAKE_POLL_MS` and counted in polls rather
-   * than read off the clock: a timer fires no earlier than it was set for, so
-   * the count is a floor on the time waited, which is the direction the grace
-   * has to err in. The SIGKILL goes to a pid the poll just before it verified,
-   * for the reason the SIGHUP did.
+   * Asked of the process table, never of the provider's registry: Claude Code
+   * removes its entry while it handles SIGHUP and then runs its SessionEnd
+   * hooks and flushes its transcript, so an entry that has gone is a process
+   * that may still be writing. The process has gone when its pid is dead, or
+   * when the pid now dates to a later process than the one the adapter
+   * verified -- the kernel issued it again, which it does only once the
+   * process that held it has exited.
+   *
+   * Polled every `RETAKE_POLL_MS` and counted in polls rather than read off
+   * the clock: a timer fires no earlier than it was set for, so the count is a
+   * floor on the time waited, which is the direction the grace has to err in.
+   * The SIGKILL goes only to a pid the poll just before it dated to the
+   * process that was signalled, for the reason the SIGHUP waited on a
+   * verification.
    */
-  async function untilEnded(
-    store: StoreDescriptor,
-    adapter: ProviderAdapter,
-    session: SessionRef,
-    pid: number,
-  ): Promise<string | null> {
+  async function untilEnded(session: SessionRef, signalled: LiveProcess): Promise<string | null> {
+    const { pid } = signalled;
     let waited = 0;
     let killed = false;
     for (;;) {
       await new Promise<void>((resolve) => timers.schedule(RETAKE_POLL_MS, resolve));
       waited += RETAKE_POLL_MS;
 
-      const now = await liveProcessOf(store, adapter, session);
-      if (!now.ok) {
-        return 'this server could not tell whether that process ended, so it did not resume it';
-      }
-      if (now.process === null) return null;
-      if (now.process.pid !== pid) {
-        return 'another process took that session while this server waited, so it did not resume it';
-      }
+      const now = await stillRunning(signalled);
+      if (now === 'gone') return null;
       if (waited >= RETAKE_BOUND_MS) {
-        return 'the process running that session did not end, so this server did not resume it';
+        return now === 'same'
+          ? 'the process running that session did not end, so this server did not resume it'
+          : 'this server could not tell whether the process running that session ended, ' +
+              'so it did not resume it';
       }
-      if (!killed && waited >= KILL_GRACE_MS) {
+      if (now === 'same' && !killed && waited >= KILL_GRACE_MS) {
         killed = true;
         const sent = signaller.signal(pid, 'SIGKILL');
         if (!sent.ok) {
           return `this server could not end the process running that session: ${sent.problem}`;
         }
-        logger.info('session retake signalled', { ...session, signal: 'SIGKILL' });
+        logger.info('session retake signalled', { ...session, pid, signal: 'SIGKILL' });
       }
     }
+  }
+
+  /**
+   * Whether the pid a retake signalled still holds the process it signalled.
+   *
+   * `gone` is a dead pid, or one that dates to a process other than the one
+   * verified: a reissued pid, which the kernel hands out only once the holder
+   * has exited. The tolerance is the registry's own, here because two
+   * readings of one process's start are not promised to agree to the
+   * millisecond, and reading the same process as a different one would resume
+   * beside it.
+   * `unknown` is a live pid this machine could not date this time, which is
+   * neither: it is not counted ended and it is not killed.
+   */
+  async function stillRunning(signalled: LiveProcess): Promise<'same' | 'gone' | 'unknown'> {
+    if (!(await processes.isAlive(signalled.pid))) return 'gone';
+    const startedAt = await processes.startedAt(signalled.pid);
+    if (startedAt === null) return 'unknown';
+    return Math.abs(startedAt - signalled.startedAt) <= PID_RECYCLE_TOLERANCE_MS ? 'same' : 'gone';
   }
 
   /**
@@ -921,11 +956,12 @@ export function createSessionController(
     }
   }
 
-  /** The pid that may be ended now, or why none may. */
+  /** The process that may be ended now, or why none may. */
   function retakeable(
     process: LiveProcess | null,
   ):
-    { readonly ok: true; readonly pid: number } | { readonly ok: false; readonly problem: string } {
+    | { readonly ok: true; readonly process: LiveProcess }
+    | { readonly ok: false; readonly problem: string } {
     if (process === null) {
       return {
         ok: false,
@@ -935,7 +971,7 @@ export function createSessionController(
     switch (process.phase) {
       case 'idle':
       case 'waiting':
-        return { ok: true, pid: process.pid };
+        return { ok: true, process };
       case 'working':
       case 'unknown':
         return {

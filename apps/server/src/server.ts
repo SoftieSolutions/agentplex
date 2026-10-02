@@ -29,6 +29,7 @@ import { serveHubConnection, type HubConnection } from './hub/hub-connection.js'
 import type { OperationRegistry } from './operations/operation-registry.js';
 import {
   type ConfiguredToken,
+  type ProcessProbe,
   type ProviderPreflight,
   type ProviderRegistry,
   ensureStores,
@@ -184,6 +185,11 @@ export interface SessionServerDependencies {
    * signal this server sends to a pid it did not fork. See `process-signaller.ts`.
    */
   readonly signaller: ProcessSignaller;
+  /**
+   * The process table a retake asks whether the process it signalled has gone,
+   * and the same one the providers' adapters date a pid with.
+   */
+  readonly processes: ProcessProbe;
   /**
    * How long shutdown waits for the turns this server holds to end before it
    * kills them, in milliseconds.
@@ -348,6 +354,7 @@ export async function startSessionServer(
     clock,
     terminals,
     signaller,
+    processes,
     drainMs,
     operations,
     workingTree,
@@ -514,6 +521,7 @@ export async function startSessionServer(
         ? null
         : { open: (store, hook) => launches?.open(store, hook) ?? Promise.resolve(null) },
     signaller,
+    processes,
     timers,
     clock,
     logger,

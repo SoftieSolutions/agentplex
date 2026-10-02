@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { serverAddressSchema, type HubId } from '@agentplex/protocol';
-import { createFakeProcessRunner, createFakeStoreFiles } from '@agentplex/providers/testing';
+import {
+  createFakeProcessProbe,
+  createFakeProcessRunner,
+  createFakeStoreFiles,
+} from '@agentplex/providers/testing';
 import {
   parseServerGrants,
   serverGrantsPath,
@@ -85,6 +89,7 @@ async function startServer({
 }): Promise<SessionServer> {
   return startSessionServer({
     signaller: createFakeProcessSignaller(),
+    processes: createFakeProcessProbe(),
     logger,
     ids,
     host: '127.0.0.1',

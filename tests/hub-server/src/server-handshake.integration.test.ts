@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { serverAddressSchema, type HubId } from '@agentplex/protocol';
-import { createFakeStoreFiles, createFakeProcessRunner } from '@agentplex/providers/testing';
+import {
+  createFakeProcessProbe,
+  createFakeProcessRunner,
+  createFakeStoreFiles,
+} from '@agentplex/providers/testing';
 import { createFakeGrantFiles } from '../../../apps/server/src/grants/fake-grant-files.js';
 import { createProviderRegistry } from '@agentplex/providers';
 import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
@@ -56,6 +60,7 @@ async function startServer(storePaths: readonly string[] = []) {
   const files = createFakeStoreFiles();
   return startSessionServer({
     signaller: createFakeProcessSignaller(),
+    processes: createFakeProcessProbe(),
     logger,
     ids,
     host: '127.0.0.1',

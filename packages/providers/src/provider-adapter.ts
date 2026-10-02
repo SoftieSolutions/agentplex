@@ -188,6 +188,16 @@ export type ProcessPhase = 'working' | 'idle' | 'waiting' | 'unknown';
 export interface LiveProcess {
   readonly pid: number;
   readonly phase: ProcessPhase;
+  /**
+   * Epoch ms the process holding `pid` started, as the process probe dated it
+   * in the reading that verified it.
+   *
+   * What a caller that signals the pid holds it to afterwards. The registry is
+   * the process's own bookkeeping, and a process may drop its entry while it
+   * is still running, so "has it gone" is asked of the pid; a pid is reissued,
+   * so a live one is this process only while it still dates to this.
+   */
+  readonly startedAt: number;
 }
 
 /** What an adapter could tell about a session's process; see `DiscoveredSession.process`. */

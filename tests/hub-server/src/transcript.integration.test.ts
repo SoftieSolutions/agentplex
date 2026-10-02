@@ -178,6 +178,7 @@ async function start(transcripts: Readonly<Record<string, string>>): Promise<Har
         machineLoad: createFakeMachineLoadReader(),
         sessions: createSessionController({
           signaller: createFakeProcessSignaller(),
+          processes: createFakeProcessProbe(),
           timers: createFakeTimers(),
           stores: [STORE],
           providers: createProviderRegistry([adapter]),

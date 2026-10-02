@@ -27,10 +27,11 @@ import { serveServerEnd } from './server-end.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
+  createFakeProcessProbe,
   createFakeProviderAdapter,
-  readyProvider,
   createFakeProviderFiles,
   createFakeStoreFiles,
+  readyProvider,
 } from '@agentplex/providers/testing';
 import { createProviderRegistry, type ProviderFiles } from '@agentplex/providers';
 import { createSessionController } from '../../../apps/server/src/sessions/session-control.js';
@@ -214,6 +215,7 @@ function serveMachine(machine: Machine): DialResult {
     machineLoad: createFakeMachineLoadReader(),
     sessions: createSessionController({
       signaller: createFakeProcessSignaller(),
+      processes: createFakeProcessProbe(),
       timers: createFakeTimers(),
       stores,
       providers: createProviderRegistry([adapter]),

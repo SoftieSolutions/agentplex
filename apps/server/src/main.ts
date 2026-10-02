@@ -17,6 +17,7 @@ import {
   type Logger,
 } from '@agentplex/node-shared';
 import {
+  createNodeProcessProbe,
   createNodeProcessRunner,
   createNodeProgramResolver,
   createProviderPreflight,
@@ -303,6 +304,10 @@ async function main(): Promise<void> {
           }
         },
       },
+      // The same table the Claude adapter dates a pid with, so that the start
+      // a retake verified and the start it re-reads while it waits are two
+      // readings of one clock.
+      processes: createNodeProcessProbe({ runner: processRunner }),
       terminals: createTerminalManager({
         supervisor: createPtySupervisor({
           pty: nodePtyFactory,

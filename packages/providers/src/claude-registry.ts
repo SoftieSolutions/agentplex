@@ -254,26 +254,28 @@ async function whichProcessItIs(
 }
 
 /**
- * Whether the process holding an entry's pid right now is the one that wrote
- * it, bounded from both sides: no later than the entry allows a genuine
- * process to have started, and no earlier than `CLAUDE_REGISTRATION_WINDOW_MS`
- * before it registered.
+ * When the process holding an entry's pid right now started, if it is the one
+ * that wrote the entry, bounded from both sides: no later than the entry allows
+ * a genuine process to have started, and no earlier than
+ * `CLAUDE_REGISTRATION_WINDOW_MS` before it registered.
  *
  * Asked fresh, liveness first and date second for the reason
  * `whichProcessItIs` gives, so a process that exits between the two answers
- * `false`. Any doubt is `false`: this is the check a signal waits on.
+ * `null`. Any doubt is `null`: this is the check a signal waits on. The date is
+ * the answer rather than a yes, because a caller that goes on to signal the pid
+ * has to tell this process from whichever one is issued the pid next.
  */
-export async function registeredJustAfterStarting(
+export async function registrantStartedAt(
   entry: Pick<ClaudeRegistryEntry, 'pid' | 'startedAt'>,
   probe: ProcessProbe,
-): Promise<boolean> {
-  if (!(await probe.isAlive(entry.pid))) return false;
+): Promise<number | null> {
+  if (!(await probe.isAlive(entry.pid))) return null;
   const startedAt = await probe.startedAt(entry.pid);
-  if (startedAt === null) return false;
-  return (
+  if (startedAt === null) return null;
+  const registrant =
     startedAt <= entry.startedAt + PID_RECYCLE_TOLERANCE_MS &&
-    startedAt >= entry.startedAt - CLAUDE_REGISTRATION_WINDOW_MS
-  );
+    startedAt >= entry.startedAt - CLAUDE_REGISTRATION_WINDOW_MS;
+  return registrant ? startedAt : null;
 }
 
 /**
