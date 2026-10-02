@@ -228,7 +228,7 @@ describe('capableServers', () => {
 
 describe('resumeCommand', () => {
   it('names the session and its provider, and leaves the placement to the hub', () => {
-    expect(resumeCommand(spikeWasm)).toEqual({
+    expect(resumeCommand(spikeWasm.descriptor)).toEqual({
       type: 'session-start',
       storeId: 'store-agentplex',
       sessionId: 'session-spike-wasm',
