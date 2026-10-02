@@ -112,7 +112,7 @@ export interface PruneOutcome {
  * server attached to it. Pruning against the one server whose report happened
  * to arrive would delete the nodes of every session that server had not got to
  * yet -- and the next report from its neighbour would put them back, at the end
- * of the root, in front of a user who moved nothing. Worse, the tree would then
+ * of HOME, in front of a user who moved nothing. Worse, the tree would then
  * disagree with the session list on the same screen, which is assembled from
  * the merge. So the reading is asked for rather than carried, and it is asked
  * for at the moment the tree is actually written: a reading is whole, so the
@@ -512,11 +512,11 @@ export function createCatalogue({
    * any.
    *
    * A session with no `cwd` is a session the provider never said where it ran,
-   * and the honest answer is the root: a guess at the store's own directory
-   * would file sessions under a project nobody started them in.
+   * and the honest answer is HOME: a guess at the store's own directory would
+   * file sessions under a project nobody started them in.
    *
-   * Absent from the map is the root, which is why this is a map of the ones
-   * that matched rather than one entry per session.
+   * Absent from the map is HOME, which is why this is a map of the ones that
+   * matched rather than one entry per session.
    */
   const placementsFor = async (
     sessions: readonly SessionDescriptor[],

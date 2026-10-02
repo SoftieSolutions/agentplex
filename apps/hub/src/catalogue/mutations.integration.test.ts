@@ -348,7 +348,7 @@ describe('moving a node', () => {
     const moved = await tree.move(one, { parentId: await nodeFor('session-two'), position: 0 });
 
     expect(moved).toMatchObject({ ok: false, code: 'refused' });
-    expect((await findNode(database(), one))?.parentId).toBeNull();
+    expect((await findNode(database(), one))?.parentId).toBe(HOME_PROJECT_ID);
   });
 
   it('moves a session and a folder from one project to another, and into HOME', async () => {

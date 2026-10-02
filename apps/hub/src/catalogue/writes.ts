@@ -207,7 +207,7 @@ export interface RemovedNode {
    *
    * A folder holding sessions is the case that makes this a list. Removing it
    * without remembering what was inside would delete the children by cascade
-   * and have discovery put every one of them back at the root a few seconds
+   * and have discovery put every one of them back in HOME a few seconds
    * later -- the user's edit undone, plus their folder gone.
    */
   readonly remembered: readonly SessionRef[];

@@ -1,4 +1,4 @@
-import type { NodeId, SessionRef } from '@agentplex/protocol';
+import { HOME_PROJECT_ID, type NodeId, type SessionRef } from '@agentplex/protocol';
 import type { Queryable } from '../db/database.js';
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import type { DiscoveredSession, DiscoveryOutcome } from './catalogue.js';
@@ -16,17 +16,23 @@ import { SESSION_KIND, type TreeNode } from './rows.js';
  * nothing on screen to explain it, which is the failure the whole node-tree
  * design is arranged against.
  *
- * The default place is the root. Not a folder minted per store: that would have
- * discovery creating containers the user never asked for, and then removing one
- * would mean remembering the removal of a thing nothing on disk describes. The
- * root is somewhere, the user moves it, and the move sticks forever after.
+ * The default place is HOME, the project migration 0020 seeds on every hub and
+ * nobody can remove. Not the root, because the root holds projects only: a
+ * session there would be the one row in the tree with no project above it, and
+ * every screen that names a session's project would need a branch for it. Not
+ * a folder minted per store either: that would have discovery creating
+ * containers the user never asked for, and then removing one would mean
+ * remembering the removal of a thing nothing on disk describes. HOME already
+ * exists, the user moves a session out of it, and the move sticks forever
+ * after.
  *
  * ## Projects, and why there is still no `placed_by`
  *
  * A session whose reported `cwd` is a project's directory is created inside
- * that project rather than at the root. That is a different default place, not
- * a new power: it is still decided once, at creation, and this still never
- * moves a node afterwards.
+ * that project rather than in HOME. That is a different default place, not a
+ * new power: it is still decided once, at creation, and this still never moves
+ * a node afterwards. HOME is placed into exactly the same way, and is no more
+ * a reason to move anything than any other project is.
  *
  * Migration 0004 argued that `nodes` needs no `placed_by` column to sit beside
  * `name_source`, because discovery writes placement exactly once and a name
@@ -37,9 +43,9 @@ import { SESSION_KIND, type TreeNode } from './rows.js';
  * where it is, whoever put it there.
  *
  * The visible consequence, which is the honest cost of keeping the rule: a
- * session discovered *before* its project was made stays at the root, and
- * making the project does not gather it up. Moving it would mean this deciding
- * that a node at the root is there by default rather than by choice -- and
+ * session discovered *before* its project was made stays in HOME, and making
+ * the project does not gather it up. Moving it would mean this deciding that a
+ * node in HOME is there by default rather than by choice -- and
  * nothing in the schema can tell those apart, which is exactly what a
  * `placed_by` column would have had to record. The tree already has a move for
  * the user to make, and a scan that rearranged yesterday's sessions the moment
@@ -86,7 +92,7 @@ export async function discoverNodes(
       ids,
       clock,
       session,
-      placements.get(session.ref.sessionId) ?? null,
+      placements.get(session.ref.sessionId) ?? HOME_PROJECT_ID,
     );
     if (placed === null) suppressed.push(session.ref);
     else created.push(placed);
@@ -129,7 +135,7 @@ function nonNullAnchor(node: TreeNode): SessionRef {
 
 /**
  * Where a new node goes, by the session it anchors: the project whose directory
- * that session ran in, or absent for the root.
+ * that session ran in, or absent for HOME.
  *
  * Keyed by session id and not by ref, because a pass is one store's reading and
  * a session id is unique within its store -- the same narrowing `bringInLine`
@@ -150,19 +156,18 @@ export type SessionPlacements = ReadonlyMap<SessionRef['sessionId'], NodeId>;
  * just removed come straight back.
  *
  * It is a HAVING and not a WHERE, and the difference is the whole behaviour.
- * The SELECT aggregates -- it reads the last root position -- and an aggregate
- * with no GROUP BY returns exactly one row however many rows the WHERE let
- * through. A `WHERE NOT EXISTS` therefore filters the rows being counted and
- * not the row being inserted: verified at the origin, it inserts the suppressed
- * session anyway, with position 0. HAVING filters the aggregate row itself,
- * which is the one this statement writes.
+ * The SELECT aggregates -- it reads the parent's last position -- and an
+ * aggregate with no GROUP BY returns exactly one row however many rows the
+ * WHERE let through. A `WHERE NOT EXISTS` therefore filters the rows being
+ * counted and not the row being inserted: verified at the origin, it inserts
+ * the suppressed session anyway, with position 0. HAVING filters the aggregate
+ * row itself, which is the one this statement writes.
  *
- * `parent` is the project this session belongs in, or `null` for the root. It
- * is bound into both halves of the statement -- the row being written and the
- * siblings whose last position is being read -- so a project's first session
- * goes to position 0 inside it rather than after everything at the root. `IS`
- * rather than `=`, because the root's children have a NULL parent and
- * `= NULL` is never true.
+ * `parent` is the project this session belongs in, HOME when it belongs in no
+ * other. It is bound into both halves of the statement -- the row being
+ * written and the siblings whose last position is being read -- so a project's
+ * first session goes to position 0 inside it rather than after everything in
+ * HOME.
  *
  * `null` means the insert wrote nothing, which here has exactly one cause.
  */
@@ -171,13 +176,13 @@ async function placeSession(
   ids: IdGenerator,
   clock: Clock,
   session: DiscoveredSession,
-  parent: NodeId | null,
+  parent: NodeId,
 ): Promise<TreeNode | null> {
   const result = await database.query(
     `INSERT INTO nodes
        (id, parent_id, kind, position, name, name_source, anchor_store_id, anchor_session_id, created_at)
      SELECT ?, ?, ?, coalesce(max(position), -1) + 1, ?, 'discovered', ?, ?, ?
-       FROM nodes WHERE parent_id IS ?
+       FROM nodes WHERE parent_id = ?
      HAVING NOT EXISTS (
         SELECT 1 FROM node_removals WHERE store_id = ? AND session_id = ?
       )`,

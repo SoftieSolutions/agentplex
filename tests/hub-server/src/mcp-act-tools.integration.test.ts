@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
   serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
@@ -467,6 +468,16 @@ describe('an agent starting a session in a project', () => {
     // An absent project is the home directory of the account the server runs
     // as, and the machine is asked to check no browse root for it. Not the
     // store's own folder: the adapter refuses to start an agent in the store.
+    expect(held().ptys.opened[0]).toMatchObject({ cwd: '/home/agentplex' });
+  });
+
+  it('runs a start in HOME where a start that names no project runs', async () => {
+    const result = await starting({ projectId: HOME_PROJECT_ID });
+
+    // HOME is where a session goes that has no other project, and it has no
+    // directory: a start in it is a start in no project, in the home directory
+    // of the account the server runs as.
+    expect(result.isError).toBe(false);
     expect(held().ptys.opened[0]).toMatchObject({ cwd: '/home/agentplex' });
   });
 

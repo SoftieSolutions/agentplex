@@ -1,4 +1,5 @@
 import {
+  HOME_PROJECT_ID,
   startIdSchema,
   type Activity,
   type NodeId,
@@ -368,7 +369,14 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
       // directory a session resumes in is the one its own transcript records --
       // nobody gets to choose it, here or on the server -- so a start that
       // named both was asking for two different directories, and answering it
-      // with either would be picking one of them without saying so.
+      // with either would be picking one of them without saying so. HOME
+      // included: it is a project like any other to a resume.
+      //
+      // HOME is where a session goes that has no other project, so it has no
+      // directory and a new session in it runs where one in no project does --
+      // the home directory of the account the server runs under. That is the
+      // one place it differs from any other project, so it is skipped at the
+      // lookup and nowhere else.
       let directory: string | null = null;
       if (request.project !== null) {
         if (request.sessionId !== null) {
@@ -381,15 +389,17 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
             holder: null,
           };
         }
-        directory = await projects.directoryOf(request.project);
-        if (directory === null) {
-          logger.info('start refused', { project: request.project, problem: 'no such project' });
-          return {
-            ok: false,
-            code: 'refused',
-            problem: 'this hub has no project by that id',
-            holder: null,
-          };
+        if (request.project !== HOME_PROJECT_ID) {
+          directory = await projects.directoryOf(request.project);
+          if (directory === null) {
+            logger.info('start refused', { project: request.project, problem: 'no such project' });
+            return {
+              ok: false,
+              code: 'refused',
+              problem: 'this hub has no project by that id',
+              holder: null,
+            };
+          }
         }
       }
 

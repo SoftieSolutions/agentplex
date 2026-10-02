@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   HOME_PROJECT_ID,
+  HOME_PROJECT_NAME,
   nodeIdSchema,
+  sessionRefKey,
   sessionIdSchema,
   storeIdSchema,
   type NodeId,
@@ -11,6 +13,7 @@ import type { Database } from '../db/database.js';
 import { openMigratedSchema, type MigratedSchema } from '../db/test-migrated-schema.js';
 import type { DiscoveredSession } from './catalogue.js';
 import { discoverNodes } from './discovery.js';
+import { sessionProjectsIn } from './query.js';
 import { findNodeForSession, listNodes, listRemovals } from './reads.js';
 import type { TreeNode } from './rows.js';
 import { createFolder, moveNode, removeNode, renameNode, forgetRemoval } from './writes.js';
@@ -85,8 +88,8 @@ async function makeProject(directory: string): Promise<NodeId> {
 
 /**
  * Every node but HOME. Migration 0020 seeds HOME at the root of every hub, and
- * nothing here places anything in it or around it, so it is left out of the
- * counts rather than counted in each of them.
+ * it is where discovery puts what it has nowhere else to put -- so it is the
+ * parent of most of what this file counts, and left out of the counts itself.
  */
 async function placed(): Promise<readonly TreeNode[]> {
   return (await listNodes(db())).filter((node) => node.id !== HOME_PROJECT_ID);
@@ -107,13 +110,13 @@ describe('discovery and the node tree', () => {
     minted = 0;
   });
 
-  it('places a newly discovered session at the root, named by its title', async () => {
+  it('places a newly discovered session in HOME, named by its title', async () => {
     const outcome = await discoverNodes(db(), ids, clock, [found('s1', 'fixing the parser')]);
 
     expect(outcome.created).toHaveLength(1);
     expect(outcome.suppressed).toEqual([]);
     const node = outcome.created[0];
-    expect(node?.parentId).toBeNull();
+    expect(node?.parentId).toBe(HOME_PROJECT_ID);
     expect(node?.name).toBe('fixing the parser');
     expect(node?.named).toBe(false);
     expect(node?.anchor).toEqual(ref('s1'));
@@ -137,9 +140,9 @@ describe('discovery and the node tree', () => {
     expect(outcome.created[0]?.parentId).toBe(project);
   });
 
-  it("starts a project's children at 0 rather than after everything at the root", async () => {
+  it("starts a project's children at 0 rather than after everything in HOME", async () => {
     const project = await makeProject('/srv/work/agentplex');
-    // Two sessions already at the root, so a position counted over the wrong
+    // Two sessions already in HOME, so a position counted over the wrong
     // parent would be visible rather than coincidentally right.
     await discoverNodes(db(), ids, clock, [found('root-1', 'one'), found('root-2', 'two')]);
 
@@ -154,14 +157,61 @@ describe('discovery and the node tree', () => {
     expect(outcome.created[0]?.position).toBe(0);
   });
 
-  it("leaves a session whose directory is nobody's at the root", async () => {
+  it("files a session whose directory is nobody's in HOME", async () => {
     await makeProject('/srv/work/agentplex');
 
     const outcome = await discoverNodes(db(), ids, clock, [
       found('s1', 'somewhere else', '/srv/work/other'),
     ]);
 
-    expect(outcome.created[0]?.parentId).toBeNull();
+    expect(outcome.created[0]?.parentId).toBe(HOME_PROJECT_ID);
+  });
+
+  /**
+   * The root holds projects only, so a session is never a root row. Over a
+   * scan that has every kind of session in it: one in a project, one that ran
+   * somewhere no project is, and one whose provider never said where it ran.
+   */
+  it('never writes a discovered session with no parent', async () => {
+    const project = await makeProject('/srv/work/agentplex');
+
+    await discoverNodes(
+      db(),
+      ids,
+      clock,
+      [
+        found('in-project', 'one', '/srv/work/agentplex'),
+        found('elsewhere', 'two', '/srv/work/other'),
+        found('nowhere', 'three'),
+      ],
+      new Map([[ref('in-project').sessionId, project]]),
+    );
+
+    const rows = await db().query<{ count: number }>(
+      `SELECT count(*) AS count FROM nodes WHERE kind = 'session' AND parent_id IS NULL`,
+    );
+    expect(rows.rows[0]?.count).toBe(0);
+    expect(await placed()).toHaveLength(4);
+  });
+
+  /**
+   * What the placement is for: every session row a client is sent names a
+   * project, so no screen needs a branch for a session that has none. A store
+   * the tree never held is the case that would show it -- every session in it
+   * is new, and none of them ran anywhere a project names.
+   */
+  it('leaves every session of a store the tree never held in a project', async () => {
+    const sessions = [found('s1', 'one'), found('s2', 'two', '/srv/work/other')];
+
+    await discoverNodes(db(), ids, clock, sessions);
+
+    const projects = sessionProjectsIn(await listNodes(db()));
+    for (const session of sessions) {
+      expect(projects.get(sessionRefKey(session.ref))).toEqual({
+        nodeId: HOME_PROJECT_ID,
+        name: HOME_PROJECT_NAME,
+      });
+    }
   });
 
   /**
@@ -170,9 +220,9 @@ describe('discovery and the node tree', () => {
    *
    * Discovery writes placement exactly once, at creation, which is why `nodes`
    * has no `placed_by` to sit beside `name_source`. A session found before its
-   * project existed therefore stays where it was put, and making the project
-   * does not gather it up. Moving it would mean this deciding that a node at
-   * the root is there by default rather than by choice, and nothing in the
+   * project existed therefore stays in HOME, where it was put, and making the
+   * project does not gather it up. Moving it would mean this deciding that a
+   * node in HOME is there by default rather than by choice, and nothing in the
    * schema can tell those apart -- which is exactly the column that does not
    * exist. The tree has a move for the user to make.
    */
@@ -189,7 +239,7 @@ describe('discovery and the node tree', () => {
     );
 
     expect(outcome.created).toEqual([]);
-    expect((await findNodeForSession(db(), ref('s1')))?.parentId).toBeNull();
+    expect((await findNodeForSession(db(), ref('s1')))?.parentId).toBe(HOME_PROJECT_ID);
   });
 
   it('still declines to place a session whose removal is remembered, project or not', async () => {
@@ -226,9 +276,10 @@ describe('discovery and the node tree', () => {
       found('s3', 'three'),
     ]);
 
-    // After HOME, which 0020 seeded at the root's position 0.
+    // Inside HOME, which holds nothing else, so from 0.
     const positions = (await placed()).map((node) => node.position).sort();
-    expect(positions).toEqual([1, 2, 3]);
+    expect(positions).toEqual([0, 1, 2]);
+    expect((await placed()).every((node) => node.parentId === HOME_PROJECT_ID)).toBe(true);
   });
 
   it('follows the transcript title while nobody has renamed the node', async () => {
@@ -351,13 +402,15 @@ describe('discovery and the node tree', () => {
     const outcome = await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
 
     expect(outcome.created).toHaveLength(1);
-    expect(await findNodeForSession(db(), ref('s1'))).not.toBeNull();
+    // In HOME, wherever it was when it was removed: the place it had went with
+    // the node, and HOME is where a session goes that has no other.
+    expect((await findNodeForSession(db(), ref('s1')))?.parentId).toBe(HOME_PROJECT_ID);
   });
 
   /**
    * Removing a folder remembers what was inside it. Without this the cascade
    * would delete the children and the next scan would put every one of them
-   * back at the root: the user's folder gone and their removal undone, which is
+   * back in HOME: the user's folder gone and their removal undone, which is
    * a worse outcome than the removal simply not working.
    */
   it('remembers the sessions inside a removed folder, not just the folder', async () => {

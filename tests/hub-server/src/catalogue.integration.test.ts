@@ -408,12 +408,12 @@ describe('the tree a reporting fleet fills in', () => {
     expect(byAnchor.get('store-agentplex/session-fix-auth')?.name).toBe('fix-auth-refresh');
     expect(byAnchor.get('store-agentplex/session-spike-wasm')?.name).toBe('spike-wasm');
     expect(byAnchor.get('store-universe/session-bench-tokenizer')?.name).toBeNull();
-    // Every one of them at the root, of the session kind, and none of them
-    // named by a user: discovery places, and that is all it does. Beside them
-    // is HOME, the one project migration 0020 seeds.
+    // Every one of them in HOME, of the session kind, and none of them named by
+    // a user: discovery places, and that is all it does. HOME is the one
+    // project migration 0020 seeds, and the only thing at the root.
     const sessions = withoutHome(layout);
     expect(sessions.every((node) => node.kind === 'session')).toBe(true);
-    expect(sessions.every((node) => node.parentId === null)).toBe(true);
+    expect(sessions.every((node) => node.parentId === HOME_PROJECT_ID)).toBe(true);
     expect(sessions.every((node) => !node.named)).toBe(true);
     const projects = layout.filter((node) => node.kind === 'project');
     expect(projects.map((node) => [node.id, node.name])).toEqual([
@@ -771,7 +771,7 @@ describe('paging the catalogue of a reporting fleet', () => {
  * told, over the real protocol, without anybody asking for it.
  */
 describe('the project a session row carries', () => {
-  it('names the project once the session is filed under one, and nothing for one that is not', async () => {
+  it('names the project a session is moved into, and HOME for one that is not', async () => {
     const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
       descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
       descriptor(AGENTPLEX, 'session-spike-wasm', 'spike-wasm'),
@@ -785,14 +785,17 @@ describe('the project a session row carries', () => {
     const node = layout.find((candidate) => candidate.anchor?.sessionId === 'session-fix-auth');
     if (node === undefined) throw new Error('the session was not placed');
 
-    // Nothing is filed yet: discovery placed both at the root, and a row in no
-    // project says so rather than saying nothing.
+    // Discovery filed both in HOME, which is a project like any other to a
+    // row: there is no session in the tree that names none.
     const before = await broadcast(
       client,
-      (state) => rowIn(state, 'session-fix-auth') !== undefined,
+      (state) => (rowIn(state, 'session-fix-auth')?.project ?? null) !== null,
       'a state holding the sessions that were reported',
     );
-    expect(rowIn(before, 'session-fix-auth')?.project).toBeNull();
+    expect(rowIn(before, 'session-fix-auth')?.project).toEqual({
+      nodeId: HOME_PROJECT_ID,
+      name: HOME_PROJECT_NAME,
+    });
 
     const created = await client.ask({
       type: 'project-create',
@@ -815,16 +818,19 @@ describe('the project a session row carries', () => {
     // puts each session, and the reducer published a state carrying it.
     const after = await broadcast(
       client,
-      (state) => (rowIn(state, 'session-fix-auth')?.project ?? null) !== null,
+      (state) => rowIn(state, 'session-fix-auth')?.project?.nodeId === created.nodeId,
       'a state carrying the project the session was moved into',
     );
     expect(rowIn(after, 'session-fix-auth')?.project).toEqual({
       nodeId: created.nodeId,
       name: 'universe',
     });
-    // The other session was in that same reading and is in no project, which
-    // is what the screens fall back to a store id for.
-    expect(rowIn(after, 'session-spike-wasm')?.project).toBeNull();
+    // The other session was in that same reading and stayed where discovery
+    // put it.
+    expect(rowIn(after, 'session-spike-wasm')?.project).toEqual({
+      nodeId: HOME_PROJECT_ID,
+      name: HOME_PROJECT_NAME,
+    });
   });
 });
 

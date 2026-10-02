@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import {
+  HOME_PROJECT_ID,
   nodeIdSchema,
   sessionIdSchema,
   storeIdSchema,
@@ -289,12 +290,12 @@ describe('the catalogue following what a store was read to hold', () => {
     expect(test.projects.looked).toHaveLength(1);
     expect(test.projects.looked[0]).toHaveLength(20);
     // Filed as a lookup per session filed them: a session whose directory is
-    // the project's goes under it, and every other one at the root. The parent
-    // is the second value bound and the session the sixth.
+    // the project's goes under it, and every other one in HOME. The parent is
+    // the second value bound and the session the sixth.
     const parents = new Map(inserts.bound.map((values) => [String(values[5]), values[1] ?? null]));
     expect(parents.size).toBe(20);
     for (const [index, session] of sessions.entries()) {
-      expect(parents.get(session.sessionId)).toBe(index % 2 === 0 ? PROJECT : null);
+      expect(parents.get(session.sessionId)).toBe(index % 2 === 0 ? PROJECT : HOME_PROJECT_ID);
     }
   });
 
