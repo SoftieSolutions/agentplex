@@ -20,6 +20,7 @@ const descriptor = {
   sessionId: 'session-a',
   provider: 'claude',
   status: 'awaiting-permission',
+  process: 'running',
   updatedAt: 1_756_000_000_000,
   cwd: '/Users/dev/Code/agentplex',
   branch: 'fix/auth-refresh',
@@ -179,6 +180,23 @@ describe('sessionDescriptorSchema', () => {
 
     const { branch: _branch, ...withoutBranch } = descriptor;
     expect(sessionDescriptorSchema.safeParse(withoutBranch).success).toBe(false);
+  });
+
+  it('says whether a live process runs the session, in one of three words', () => {
+    for (const process of ['running', 'none', 'unknown'] as const) {
+      expect(sessionDescriptorSchema.parse({ ...descriptor, process }).process).toBe(process);
+    }
+    expect(sessionDescriptorSchema.safeParse({ ...descriptor, process: 'verified' }).success).toBe(
+      false,
+    );
+  });
+
+  it('refuses a descriptor that does not say whether a process runs it', () => {
+    // Required, not optional. A missing answer read as "nothing runs it" is
+    // the over-claim this field exists to stop: a client would offer a resume
+    // that starts a second process on one transcript.
+    const { process: _process, ...withoutProcess } = descriptor;
+    expect(sessionDescriptorSchema.safeParse(withoutProcess).success).toBe(false);
   });
 
   it('refuses a session that names no provider', () => {

@@ -19,6 +19,7 @@ function row(overrides: Partial<SessionRow> = {}): SessionRow {
       sessionId: 'session-a',
       provider: 'claude',
       status: 'awaiting-permission',
+      process: 'none',
       updatedAt: UPDATED_AT,
       cwd: '/home/dev/agentplex',
       branch: 'master',

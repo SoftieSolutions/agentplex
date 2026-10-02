@@ -276,6 +276,7 @@ describe('client and hub round trips', () => {
                   sessionId: sessionIdSchema.parse('session-1'),
                   provider: 'claude',
                   status: 'awaiting-permission',
+                  process: 'none',
                   updatedAt: 900,
                   cwd: '/srv/work',
                   branch: 'fix/auth-refresh',

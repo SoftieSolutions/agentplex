@@ -56,6 +56,7 @@ const A_SESSION_ROW = {
     sessionId: 'session-1',
     provider: 'claude',
     status: 'idle',
+    process: 'none',
     updatedAt: 900,
     cwd: '/srv/work',
     branch: 'fix/auth-refresh',

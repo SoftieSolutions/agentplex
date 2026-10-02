@@ -238,6 +238,26 @@ function sessionTextSchema(max: number) {
 }
 
 /**
+ * Whether a live process is running a session, as far as anything can tell.
+ *
+ * Three words and not a boolean, for the reason `status` has `unknown`: the
+ * question has an answer only when somebody could look. `running` is a
+ * process seen -- a PTY this server spawned, or one the provider's own
+ * registry names and the operating system confirmed is alive. `none` is a
+ * look that found nothing. `unknown` is no look at all: a provider that keeps
+ * no registry, a registry that could not be read, or a hub that cannot vouch
+ * for every machine the session's store is mounted on.
+ *
+ * It exists so that nothing offers to resume a session something else is
+ * already running. Two processes on one transcript interleave their writes
+ * into it, and the session is damaged for both. So the direction to degrade
+ * in is fixed: an answer in doubt is `unknown`, never `none`, because `none`
+ * is the one word that reads as permission to start another.
+ */
+export const sessionProcessSchema = z.enum(['running', 'none', 'unknown']);
+export type SessionProcess = z.infer<typeof sessionProcessSchema>;
+
+/**
  * A session as a server reports it.
  *
  * `provider` is on here from day one, not added when the second adapter lands:
@@ -249,6 +269,15 @@ function sessionTextSchema(max: number) {
 export const sessionDescriptorSchema = sessionRefSchema.extend({
   provider: providerSchema,
   status: sessionStatusSchema,
+  /**
+   * Whether a live process runs this session; see `sessionProcessSchema`.
+   *
+   * Separate from `status` because the two answer different questions. A
+   * session can be `idle` with its process alive and waiting at a prompt, and
+   * `working` is a reading of the transcript rather than a sighting of a
+   * process. Required, because an absent answer would be read as `none`.
+   */
+  process: sessionProcessSchema,
   /**
    * Epoch ms of the last thing the provider wrote into this session, as the
    * provider dated it rather than as the filesystem did: a store copied to

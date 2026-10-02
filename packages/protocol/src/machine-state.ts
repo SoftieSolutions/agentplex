@@ -440,6 +440,14 @@ export type SessionProject = z.infer<typeof sessionProjectSchema>;
  * that exists on no disk anywhere, and nothing downstream could tell that it
  * did. Which server's reading it is, and who else saw it, sit beside it as
  * their own facts.
+ *
+ * One field is the exception, and it only ever moves down. A server that says
+ * `process: 'none'` has looked on its own machine; it cannot see a process on
+ * another machine that mounts the same store. So when more than one server
+ * reports the session, the hub publishes `none` as `unknown`. That lowers a
+ * claim rather than assembling one: `unknown` is true of every reading, and
+ * `none` would invite a resume beside a process the reporting server never
+ * saw.
  */
 export const sessionRowSchema = z.object({
   descriptor: sessionDescriptorSchema,
