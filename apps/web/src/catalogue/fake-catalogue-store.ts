@@ -1,3 +1,4 @@
+import type { NodeId } from '@agentplex/protocol';
 import { DEFAULT_SHAPE, type CataloguePages, type CatalogueShape } from './catalogue-model.js';
 import type { CatalogueSnapshot, CatalogueStore } from './catalogue-store.js';
 
@@ -5,6 +6,13 @@ import type { CatalogueSnapshot, CatalogueStore } from './catalogue-store.js';
 export interface FakeCatalogueStore extends CatalogueStore {
   /** Every shape a control handed to `reshape`, in the order it did. */
   readonly reshapes: readonly CatalogueShape[];
+  /**
+   * Every open set handed to `openProjects`, in the order it was. Each call,
+   * including one that names the set already held: whether that asks the hub
+   * anything is the real store's rule and its suite's, and a fake that
+   * applied it would hide what the panel actually asked.
+   */
+  readonly opened: readonly (readonly NodeId[] | null)[];
 }
 
 /**
@@ -23,7 +31,8 @@ export interface FakeCatalogueStore extends CatalogueStore {
  * could not press it twice. What it never does is answer: the pages stay the
  * ones it was built with, because a fake that re-answered a reshape would be
  * deciding what the hub says, and that is `catalogue-store`'s subject. For the
- * same reason `loadMore` is inert.
+ * same reason `loadMore` is inert. `openProjects` is the same as `reshape`:
+ * recorded, held and told, never answered.
  */
 export function fakeCatalogueStore(
   pages: CataloguePages,
@@ -31,15 +40,21 @@ export function fakeCatalogueStore(
 ): FakeCatalogueStore {
   const listeners = new Set<() => void>();
   const reshapes: CatalogueShape[] = [];
+  const opened: (readonly NodeId[] | null)[] = [];
   let snapshot: CatalogueSnapshot = {
     shape,
+    open: [],
     pages,
     loading: false,
     notice: null,
     problem: null,
   };
+  function notify(): void {
+    for (const listener of [...listeners]) listener();
+  }
   return {
     reshapes,
+    opened,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {
@@ -50,8 +65,13 @@ export function fakeCatalogueStore(
     reshape: (next) => {
       reshapes.push(next);
       snapshot = { ...snapshot, shape: next };
-      for (const listener of listeners) listener();
+      notify();
     },
     loadMore: () => {},
+    openProjects: (open) => {
+      opened.push(open);
+      snapshot = { ...snapshot, open };
+      notify();
+    },
   };
 }

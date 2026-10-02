@@ -1,9 +1,10 @@
-import { useState, useSyncExternalStore, type JSX } from 'react';
+import { useEffect, useState, useSyncExternalStore, type JSX } from 'react';
 import type { CatalogueView, Layout, MachineState, NodeId } from '@agentplex/protocol';
 import { appLayoutStore } from '../layout/app-layout.js';
 import type { LayoutStore } from '../layout/layout-store.js';
 import type { HubStore } from '../store/hub-store.js';
 import { AbsentSessions } from '../tree/absent-sessions.js';
+import { PROJECT_KIND } from '../tree/node-kinds.js';
 import { NodeMenu } from '../tree/node-menu.js';
 import {
   Box,
@@ -19,6 +20,7 @@ import {
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { CatalogueFilters } from './catalogue-filters.js';
 import {
+  closedProjects,
   countLabel,
   filterNote,
   filterTree,
@@ -51,11 +53,18 @@ import { createCatalogueStore, type CatalogueStore } from './catalogue-store.js'
  * question over the whole catalogue by name is what the palette does, and two
  * boxes over one tree were two answers to what somebody meant by typing.
  *
- * No effects. The query goes out because something subscribed -- the store's
- * first subscriber is what asks -- and a change to the catalogue comes back
- * through the hub store's own re-issue. The two stores this reads are external
- * stores and are read through `useSyncExternalStore`, which is where a
- * subscription belongs.
+ * One effect, and only one. The query goes out because something subscribed --
+ * the store's first subscriber is what asks -- and a change to the catalogue
+ * comes back through the hub store's own re-issue. The two stores this reads
+ * are external stores and are read through `useSyncExternalStore`, which is
+ * where a subscription belongs. The effect is the open projects reaching the
+ * catalogue question, and its own comment says why it cannot be anything else.
+ *
+ * The Projects tab draws projects only at the top, each closed until opened.
+ * Which are open is the layout store's (`expanded`, saved in the layout blob
+ * so it survives a reload), and the hub, not this panel, leaves a closed
+ * project's contents out of the answer -- `total` and the cursor are counts
+ * over the answer, and rows trimmed here would disagree with both.
  *
  * Virtualised rows were on the ticket and are deliberately absent: a page is
  * bounded by `CATALOGUE_PAGE_LIMIT` and the rows on screen are bounded by how
@@ -86,6 +95,14 @@ export interface CataloguePanelProps {
    */
   readonly filter?: string;
 }
+
+/**
+ * Every project closed, for as long as the layout has not answered.
+ *
+ * One array for the module's life, because the effect below compares by
+ * reference: a fresh `[]` each render would ask the hub again every render.
+ */
+const NOTHING_OPEN: readonly NodeId[] = [];
 
 const VIEWS: readonly { readonly value: CatalogueView; readonly label: string }[] = [
   { value: 'tree', label: 'Tree' },
@@ -146,6 +163,22 @@ export function CataloguePanel({
   // row. The box above this panel is drawn over whichever view is showing,
   // and a control that sits there doing nothing is worse than no control.
   const filtering = letters.trim() !== '';
+
+  // Which projects the question draws open. The tree whole while the box holds
+  // letters, so a hit inside a project nobody opened is in the answer the box
+  // narrows; nothing open until the layout has answered, rather than a guess
+  // that the stored arrangement would then overturn with a second ask.
+  const wanted = filtering ? null : arrangement.loaded ? arrangement.expanded : NOTHING_OPEN;
+  useEffect(() => {
+    // An effect because it syncs an external store from props plus another
+    // external store: the open set lives in the persisted layout store, and the
+    // filter letters in Sidebar's state or in this panel's own when the phone
+    // mounts it. Nothing render-time can write one store from another without
+    // notifying subscribers during render. `openProjects` asks nothing when the
+    // set has not changed, so a re-run over the same ids costs no frame.
+    held.catalogue.openProjects(wanted);
+  }, [held, wanted]);
+
   const filtered = filterTree(pages.items, letters);
   // What a filter does to the collapsed folders and to the disclosures is
   // `rowsFor`'s rule and is argued on `RowOptions.filtering`: it lives there
@@ -153,10 +186,11 @@ export function CataloguePanel({
   const rows = rowsFor(filtered.items, {
     view: shape.view,
     collapsed: new Set(arrangement.collapsed),
+    expanded: new Set(arrangement.expanded),
     filtering,
   });
   const hiding = filtering ? filterNote(filtered, pages.nextCursor === null) : null;
-  const counts = sessionCounts(pages);
+  const counts = sessionCounts(pages, closedProjects(rows));
   const machines = shortMachinesOf(state);
   const muted = colorForRole('textMuted', scheme);
 
@@ -249,7 +283,7 @@ export function CataloguePanel({
               scheme={scheme}
               machines={machines}
               sessions={counts}
-              onToggle={(nodeId: NodeId) => held.arrangement.toggleCollapsed(nodeId)}
+              onToggle={(nodeId: NodeId) => toggle(held.arrangement, row.item.kind, nodeId)}
               actions={
                 <NodeMenu
                   store={store}
@@ -314,6 +348,17 @@ export function CataloguePanel({
       )}
     </Stack>
   );
+}
+
+/**
+ * A disclosure's click, by what the row is: a project is opened, everything
+ * else is closed. Two lists because the two defaults are opposite -- see
+ * `layout/workspace.ts` -- and a project written into the closed list would be
+ * a note nothing reads.
+ */
+function toggle(arrangement: LayoutStore, kind: string, nodeId: NodeId): void {
+  if (kind === PROJECT_KIND) arrangement.toggleExpanded(nodeId);
+  else arrangement.toggleCollapsed(nodeId);
 }
 
 /**

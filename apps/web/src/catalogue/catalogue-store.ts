@@ -1,4 +1,4 @@
-import type { CatalogueQuery } from '@agentplex/protocol';
+import type { CatalogueQuery, NodeId } from '@agentplex/protocol';
 import { browserTimers, type Timers } from '../store/timers.js';
 import {
   DEFAULT_SHAPE,
@@ -50,6 +50,16 @@ export interface CatalogueHub {
 export interface CatalogueSnapshot {
   /** The question, as the controls have it. */
   readonly shape: CatalogueShape;
+  /**
+   * The projects the question draws open, or `null` for the tree whole.
+   *
+   * Beside the shape rather than in it, because no control here writes it:
+   * it is the Projects tab's arrangement, kept by the layout store and handed
+   * over by `openProjects`. `[]` until then, which is every project closed --
+   * the tab's default, and the cheap question to ask before the layout has
+   * arrived.
+   */
+  readonly open: readonly NodeId[] | null;
   /** The answer, as far as it has been paged. */
   readonly pages: CataloguePages;
   /** A page is in flight. The rows already held stay on screen while it is. */
@@ -81,6 +91,17 @@ export interface CatalogueStore {
   reshape(shape: CatalogueShape, when?: 'now' | 'settled'): void;
   /** "Load more": the next page of the same question, appended. */
   loadMore(): void;
+  /**
+   * Which projects the tree draws open: `null` for the tree whole, which is
+   * what a filter needs to find a hit inside a project nobody opened.
+   *
+   * A set, so the same ids in another order or repeated are no change and ask
+   * nothing. Any other change is asked from the top at once, as a control is:
+   * a click on a disclosure is one act, and the hub draws a different tree
+   * for each set, so the rows held and any answer in flight belong to the
+   * question before it.
+   */
+  openProjects(open: readonly NodeId[] | null): void;
 }
 
 export interface CatalogueStoreDependencies {
@@ -106,6 +127,7 @@ export function createCatalogueStore(dependencies: CatalogueStoreDependencies): 
 
   let snapshot: CatalogueSnapshot = {
     shape: dependencies.shape ?? DEFAULT_SHAPE,
+    open: NOTHING_OPEN,
     pages: NO_PAGES,
     loading: false,
     notice: null,
@@ -143,7 +165,7 @@ export function createCatalogueStore(dependencies: CatalogueStoreDependencies): 
     const asked = generation;
     inFlight += 1;
     update({ loading: true });
-    hub.queryCatalogue(queryFor(snapshot.shape, cursor)).then(
+    hub.queryCatalogue(queryFor(snapshot.shape, cursor, snapshot.open)).then(
       (page) => {
         inFlight -= 1;
         seen = page;
@@ -168,6 +190,39 @@ export function createCatalogueStore(dependencies: CatalogueStoreDependencies): 
         update({ loading: inFlight > 0, problem: describe(error) });
       },
     );
+  }
+
+  /**
+   * The question changed: drop what is in flight for the old one and ask the
+   * new one from the top, now or once the typing settles.
+   *
+   * A question waiting on the debounce is cancelled either way. A change asked
+   * now carries whatever was typed with it, so the typed question is not lost
+   * but asked sooner, and asking it again when the timer fired would be a
+   * second frame for one question.
+   */
+  function requestion(
+    changes: Pick<Partial<CatalogueSnapshot>, 'shape' | 'open'>,
+    when: 'now' | 'settled',
+  ): void {
+    generation += 1;
+    cancelPending?.();
+    cancelPending = null;
+    // The rows already held stay until the answer arrives. A control change
+    // that blanked the list would throw away the scroll position every time
+    // somebody turned one.
+    update({ ...changes, notice: null });
+    // Nothing is looking, so nothing is asked: the first subscriber asks, and
+    // it asks with what was recorded here.
+    if (listeners.size === 0) return;
+    if (when === 'settled') {
+      cancelPending = timers.schedule(searchDelayMs, () => {
+        cancelPending = null;
+        ask(null, 'replace');
+      });
+      return;
+    }
+    ask(null, 'replace');
   }
 
   /**
@@ -226,22 +281,14 @@ export function createCatalogueStore(dependencies: CatalogueStoreDependencies): 
     },
 
     reshape(shape: CatalogueShape, when: 'now' | 'settled' = 'now'): void {
-      generation += 1;
-      cancelPending?.();
-      cancelPending = null;
-      // The rows already held stay until the answer arrives. A control change
-      // that blanked the list would throw away the scroll position every time
-      // somebody turned one.
-      update({ shape, notice: null });
-      if (listeners.size === 0) return;
-      if (when === 'settled') {
-        cancelPending = timers.schedule(searchDelayMs, () => {
-          cancelPending = null;
-          ask(null, 'replace');
-        });
-        return;
-      }
-      ask(null, 'replace');
+      requestion({ shape }, when);
+    },
+
+    openProjects(open: readonly NodeId[] | null): void {
+      if (sameOpenSet(snapshot.open, open)) return;
+      // Copied, so the list the question carries is the one handed over now
+      // and not whatever a caller does to its array afterwards.
+      requestion({ open: open === null ? null : [...open] }, 'now');
     },
 
     loadMore(): void {
@@ -254,6 +301,17 @@ export function createCatalogueStore(dependencies: CatalogueStoreDependencies): 
       ask(cursor, 'append');
     },
   };
+}
+
+/** Every project closed: the open set before anything has said otherwise. */
+const NOTHING_OPEN: readonly NodeId[] = [];
+
+/** Whether two open sets name the same projects, whatever the order. */
+function sameOpenSet(held: readonly NodeId[] | null, next: readonly NodeId[] | null): boolean {
+  if (held === null || next === null) return held === next;
+  const a = new Set(held);
+  const b = new Set(next);
+  return a.size === b.size && [...a].every((id) => b.has(id));
 }
 
 /** The hub's own sentence where there is one, and never an `[object Object]`. */

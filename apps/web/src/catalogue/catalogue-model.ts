@@ -99,7 +99,19 @@ export const DEFAULT_SHAPE: CatalogueShape = {
   filter: {},
 };
 
-export function queryFor(shape: CatalogueShape, cursor: string | null): CatalogueQuery {
+/**
+ * The frame a shape asks, from `cursor`, with `open` as the projects drawn open.
+ *
+ * `open` is the Projects tab's to say and is passed in rather than held in the
+ * shape, because it is not a control on the question: it is the arrangement
+ * the layout store keeps, and `null` -- the tree whole -- is what every other
+ * caller asks for.
+ */
+export function queryFor(
+  shape: CatalogueShape,
+  cursor: string | null,
+  open: readonly NodeId[] | null,
+): CatalogueQuery {
   return {
     view: shape.view,
     groupBy: shape.groupBy,
@@ -107,10 +119,9 @@ export function queryFor(shape: CatalogueShape, cursor: string | null): Catalogu
     filter: shape.filter,
     cursor,
     limit: CATALOGUE_PAGE_LIMIT,
-    // The tree whole, as before the hub could draw projects closed. Which
-    // projects are open is the Projects tab's to say, and until it does, every
-    // caller asks the question it always asked.
-    openProjects: null,
+    // Copied, so a frame on its way cannot be changed by a caller that goes
+    // on to edit the list it handed over.
+    openProjects: open === null ? null : [...open],
   };
 }
 
@@ -280,9 +291,6 @@ export function countLabel(pages: CataloguePages): string {
   return `${String(held)} of ${String(pages.total)}`;
 }
 
-/** What is collapsed while a tree filter is on. See `RowOptions.filtering`. */
-const NOTHING_COLLAPSED: ReadonlySet<NodeId> = new Set();
-
 /** One row of either view: a heading, or an item at a depth. */
 export type CatalogueRow =
   | { readonly kind: 'group'; readonly key: string; readonly group: CatalogueGroup }
@@ -308,7 +316,19 @@ export type CatalogueRow =
 
 export interface RowOptions {
   readonly view: CatalogueView;
+  /** The folders this user closed. Never read for a project. */
   readonly collapsed: ReadonlySet<NodeId>;
+  /**
+   * The projects this user opened. A project not named here is drawn closed.
+   *
+   * The opposite default from a folder, and the hub's along with it: a query
+   * that names the open projects gets a closed one back as a single row with
+   * nothing under it, so a project drawn open here because nobody closed it
+   * would be a disclosure over contents that were never sent. Whatever the
+   * pages still hold under a project that has just closed is hidden too, for
+   * the moment before the answer that drops it arrives.
+   */
+  readonly expanded: ReadonlySet<NodeId>;
   /**
    * Whether a tree filter is narrowing these items, which changes two things.
    *
@@ -335,6 +355,11 @@ export interface RowOptions {
  * about what a client knows that the frame does not: which rows an ancestor
  * the user closed is hiding, and where a heading falls.
  *
+ * Nothing at the root is hidden for not being a project, though the Projects
+ * tab draws projects only there: the hub leaves the rest out of the answer
+ * when the query names the open projects, and a client that trimmed it again
+ * would draw fewer rows than the `total` it was counted against.
+ *
  * Headings are drawn in the list view only. In a tree the containment *is* the
  * grouping -- the hub says so and reorders nothing for `groupBy` there -- so a
  * heading over tree rows would be a second arrangement laid over the one the
@@ -345,7 +370,7 @@ export function rowsFor(
   options: RowOptions,
 ): readonly CatalogueRow[] {
   if (options.view === 'list') return listRows(items);
-  return treeRows(items, options.collapsed, options.filtering ?? false);
+  return treeRows(items, options, options.filtering ?? false);
 }
 
 function listRows(items: readonly CatalogueItem[]): readonly CatalogueRow[] {
@@ -377,13 +402,18 @@ function listRows(items: readonly CatalogueItem[]): readonly CatalogueRow[] {
 
 function treeRows(
   items: readonly CatalogueItem[],
-  asked: ReadonlySet<NodeId>,
+  options: RowOptions,
   filtering: boolean,
 ): readonly CatalogueRow[] {
   // See `RowOptions.filtering`: a filter answers a question the arrangement is
   // not the answer to, so while one is on nothing is closed and nothing offers
-  // to close.
-  const collapsed = filtering ? NOTHING_COLLAPSED : asked;
+  // to close -- a project no more than a folder.
+  const isClosed = (item: CatalogueItem): boolean => {
+    if (filtering) return false;
+    if (item.kind === PROJECT_KIND) return !options.expanded.has(item.id);
+    return options.collapsed.has(item.id);
+  };
+  const closed = new Set(items.filter(isClosed).map((item) => item.id));
   const present = new Set(items.map((item) => item.id));
   const childCount = new Map<NodeId, number>();
   for (const item of items) {
@@ -399,7 +429,7 @@ function treeRows(
   for (const item of items) {
     const parent = item.parentId;
     if (parent === null || !present.has(parent)) continue;
-    if (hidden.has(parent) || collapsed.has(parent)) hidden.add(item.id);
+    if (hidden.has(parent) || closed.has(parent)) hidden.add(item.id);
   }
 
   const rows: CatalogueRow[] = [];
@@ -412,7 +442,7 @@ function treeRows(
       item,
       depth: item.depth,
       expandable,
-      collapsed: expandable && collapsed.has(item.id),
+      collapsed: expandable && closed.has(item.id),
       sessions: null,
     });
   }
@@ -508,8 +538,17 @@ export function filterNote(filtered: FilteredTree, whole: boolean): string | nul
  * know whether the pages are complete, and because it needs every item rather
  * than the visible ones: a closed folder's count is exactly the thing its
  * closed rows were hiding.
+ *
+ * A closed project is the exception, and `closed` names them
+ * (`closedProjects`). The hub sends one as a single row with nothing under it,
+ * so there are no rows for a count to be over, and a count over the few still
+ * held from before it closed would be a number about a page that is on its
+ * way out. Neither is a count; the row says nothing instead.
  */
-export function sessionCounts(pages: CataloguePages): ReadonlyMap<NodeId, number> {
+export function sessionCounts(
+  pages: CataloguePages,
+  closed: ReadonlySet<NodeId>,
+): ReadonlyMap<NodeId, number> {
   const counts = new Map<NodeId, number>();
   if (pages.nextCursor !== null || !pages.answered) return counts;
   const parents = new Map<NodeId, NodeId | null>(
@@ -521,11 +560,29 @@ export function sessionCounts(pages: CataloguePages): ReadonlyMap<NodeId, number
     let walking = item.parentId;
     while (walking !== null && !seen.has(walking)) {
       seen.add(walking);
-      counts.set(walking, (counts.get(walking) ?? 0) + 1);
+      if (!closed.has(walking)) counts.set(walking, (counts.get(walking) ?? 0) + 1);
       walking = parents.get(walking) ?? null;
     }
   }
   return counts;
+}
+
+/**
+ * The projects `rowsFor` drew closed, which are the rows `sessionCounts` has
+ * no count for.
+ *
+ * Read off the rows rather than worked out again from the open list, so the
+ * two cannot disagree: a project drawn closed is one whose count is withheld,
+ * and while a filter is on nothing is drawn closed and every count stands.
+ */
+export function closedProjects(rows: readonly CatalogueRow[]): ReadonlySet<NodeId> {
+  const closed = new Set<NodeId>();
+  for (const row of rows) {
+    if (row.kind === 'item' && row.collapsed && row.item.kind === PROJECT_KIND) {
+      closed.add(row.item.id);
+    }
+  }
+  return closed;
 }
 
 /** What a narrowing control may offer: an id to send and a word to show. */
