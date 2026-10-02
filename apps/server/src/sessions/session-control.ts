@@ -854,6 +854,19 @@ export function createSessionController(
     if (!planned.ok) return refused(planned.problem);
 
     // The re-verify, and the signal straight after it.
+    //
+    // A gap remains, accepted rather than closed. The re-verify awaits the
+    // probe's date for the pid -- a `/proc` read on Linux, a `ps` run on macOS
+    // -- and the SIGHUP goes after it, so a claude that exits on its own inside
+    // that await, with the kernel handing its pid to a new process inside the
+    // same await, would have the SIGHUP land on the newcomer. Only signalling
+    // through a pidfd rules that out, and Node offers none and macOS has no
+    // equivalent. Accepted because both halves have to happen within one read:
+    // Linux hands out pids in rising order and reaches one again only after
+    // wrapping the whole range, and an idle claude at its prompt has no reason
+    // to exit in that beat. The SIGKILL in `untilEnded` carries the same gap
+    // after its poll's date, with a process likelier to exit in it because it
+    // was asked to, and the reuse in the same beat still has to happen too.
     const now = await liveProcessOf(store, adapter, session);
     if (!now.ok) return now.outcome;
     const target = retakeable(now.process);
