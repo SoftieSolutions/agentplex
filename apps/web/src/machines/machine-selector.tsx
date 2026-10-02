@@ -1,7 +1,7 @@
 import type { JSX } from 'react';
 import type { MachineState, ServerRegistrationId } from '@agentplex/protocol';
 import { Box, Group, Menu, Text, UnstyledButton } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForTone, colorForToneText, type Scheme } from '../ui/tokens.js';
 import {
   ALL_MACHINES,
   machineHeader,
@@ -161,6 +161,6 @@ function MachineRowLine({ row, scheme }: MachineRowLineProps): JSX.Element {
  * words have always had.
  */
 function trailingColor(row: MachineSelectorRow, scheme: Scheme): string {
-  if (row.slow) return colorForTone('needs-you', scheme);
+  if (row.slow) return colorForToneText('needs-you', scheme);
   return colorForRole(row.measured ? 'textMuted' : 'textFaint', scheme);
 }

@@ -14,7 +14,7 @@ import type { HubSnapshot } from '../store/views.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider, MockTag } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
-import { colorForTone } from '../ui/tokens.js';
+import { colorForToneText } from '../ui/tokens.js';
 import { createFakePairingOperations } from './fake-pairing-operations.js';
 import { createFakePushOperations } from './fake-push-operations.js';
 import { SettingsRoute } from './settings-route.js';
@@ -173,14 +173,18 @@ describe('the settings screen with nothing paired', () => {
     return { store, snapshot };
   }
 
-  async function draw(state: string, now: () => number = Date.now): Promise<void> {
+  async function draw(
+    state: string,
+    now: () => number = Date.now,
+    scheme: 'light' | 'dark' = 'dark',
+  ): Promise<void> {
     const { store, snapshot } = await storeOn(state);
     const storage = fakeStorage();
     const element: JSX.Element = (
       <MantineProvider
         theme={theme}
         cssVariablesResolver={cssVariablesResolver}
-        defaultColorScheme="dark"
+        defaultColorScheme={scheme}
       >
         <SettingsScreen
           snapshot={snapshot}
@@ -330,13 +334,23 @@ describe('the settings screen with nothing paired', () => {
     // through the store's own parser.
     await draw(hubFrames.machineStateMeasured.replace('"ms":12,', '"ms":410,'), () => MEASURED_AT);
 
-    expect(drawn('410ms').style.color).toBe(toCssColor(colorForTone('needs-you', 'dark')));
+    expect(drawn('410ms').style.color).toBe(toCssColor(colorForToneText('needs-you', 'dark')));
+  });
+
+  it('writes a slow round trip in the warning word hue on paper, not the dot hue', async () => {
+    await draw(
+      hubFrames.machineStateMeasured.replace('"ms":12,', '"ms":410,'),
+      () => MEASURED_AT,
+      'light',
+    );
+
+    expect(drawn('410ms').style.color).toBe(toCssColor(colorForToneText('needs-you', 'light')));
   });
 
   it("leaves a round trip under the threshold in the row's own quiet tone", async () => {
     await draw(hubFrames.machineStateMeasured, () => MEASURED_AT);
 
-    expect(drawn('12ms').style.color).not.toBe(toCssColor(colorForTone('needs-you', 'dark')));
+    expect(drawn('12ms').style.color).not.toBe(toCssColor(colorForToneText('needs-you', 'dark')));
   });
 });
 

@@ -440,7 +440,7 @@ function RoundTrip({
       <Text
         component="span"
         inherit
-        style={row.slow ? { color: colorForTone('needs-you', scheme) } : undefined}
+        style={row.slow ? { color: colorForToneText('needs-you', scheme) } : undefined}
       >
         {words}
       </Text>

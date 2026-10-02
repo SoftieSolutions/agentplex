@@ -6,7 +6,7 @@ import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/pro
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
-import { colorForRole, colorForTone } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { MachineSelector } from './machine-selector.js';
 
 /**
@@ -85,12 +85,12 @@ describe('the machine selector, drawn', () => {
     container.remove();
   });
 
-  async function draw(state: MachineState): Promise<void> {
+  async function draw(state: MachineState, scheme: Scheme = 'dark'): Promise<void> {
     const element: JSX.Element = (
       <MantineProvider
         theme={theme}
         cssVariablesResolver={cssVariablesResolver}
-        defaultColorScheme="dark"
+        defaultColorScheme={scheme}
         // Mantine hides a dropdown whose target it measures as detached, and
         // in a DOM with no layout every target does; `env="test"` is its
         // switch for that, as the New menu's suite explains.
@@ -100,7 +100,7 @@ describe('the machine selector, drawn', () => {
           state={state}
           chosen={null}
           onPick={() => {}}
-          scheme="dark"
+          scheme={scheme}
           now={() => MEASURED_AT}
         />
       </MantineProvider>
@@ -149,6 +149,12 @@ describe('the machine selector, drawn', () => {
 
     await draw(stateFrom(hubFrames.machineStateMeasured.replace('"ms":12,', '"ms":410,')));
     await open();
-    expect(drawn('410ms').style.color).toBe(toCssColor(colorForTone('needs-you', 'dark')));
+    expect(drawn('410ms').style.color).toBe(toCssColor(colorForToneText('needs-you', 'dark')));
+  });
+
+  it('writes a slow round trip in the warning word hue on paper, not the dot hue', async () => {
+    await draw(stateFrom(hubFrames.machineStateMeasured.replace('"ms":12,', '"ms":410,')), 'light');
+    await open();
+    expect(drawn('410ms').style.color).toBe(toCssColor(colorForToneText('needs-you', 'light')));
   });
 });
