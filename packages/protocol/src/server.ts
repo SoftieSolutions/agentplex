@@ -116,8 +116,8 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
     prompt: z.string().min(1).nullable(),
     /**
      * Where to spawn, when the hub is starting this session in a project, and
-     * `null` for the start that has always existed -- the store's own path, as
-     * this server resolved it at boot.
+     * `null` for a start in no project -- the home directory of the account
+     * the server runs as, which that server read at boot.
      *
      * Only a spawn may carry one. A resume's directory is whatever the provider
      * itself recorded in the transcript, and nobody gets to choose it: a

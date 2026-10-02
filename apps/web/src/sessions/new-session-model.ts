@@ -37,9 +37,9 @@ import { serverLabel } from './session-list-model.js';
  * other way, so the two selects constrain each other.
  *
  * The project picker follows the same rule from the other end: it is drawn when
- * there is at least one project, because "in a project" and "wherever the store
- * is" are two different starts and a form with no way to say which would only
- * ever make the second. It narrows neither of the other two controls, and that
+ * there is at least one project, because "in a project" and "in the home
+ * directory of the account the server runs as" are two different starts and a
+ * form with no way to say which would only ever make the second. It narrows neither of the other two controls, and that
  * is not an omission: nothing on the wire ties a project to a machine. A
  * project is a node with a directory, and whether that directory sits under a
  * root is answered by the machine that has the disk, at the moment it is asked.

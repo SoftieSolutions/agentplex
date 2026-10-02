@@ -15,8 +15,10 @@ import type { StoreDescriptor } from '@agentplex/protocol';
  *   and the reason is that a `{ cwd }` field on the wire is a remote code
  *   execution primitive wearing a path: whoever holds a client token picks any
  *   directory on the server and runs an agent with write access to it. What
- *   crosses the wire names a store; the server turns that into a directory from
- *   its own configuration, and this function is the gate that answer passes.
+ *   crosses the wire names a store and at most a project; the server turns that
+ *   into a directory from what it knows of its own machine — a browse root its
+ *   operator configured, or the home directory of the account it runs as — and
+ *   this function is the gate that answer passes.
  * - **Resuming a session**: the directory the session already had, read out of
  *   the provider's own transcript by discovery. Not a choice anybody gets to
  *   make: a session resumed somewhere else is a different session that happens
@@ -63,7 +65,16 @@ export function parseWorkingDirectory(
   const cwd = resolve(candidate);
   const storeRoot = resolve(store.path);
 
-  if (cwd === storeRoot || contains(storeRoot, cwd)) {
+  if (cwd === storeRoot) {
+    return {
+      ok: false,
+      problem:
+        `${cwd} is the store: a store holds a provider's own state, ` +
+        'and an agent started there would be editing the transcripts agentplex reads',
+    };
+  }
+
+  if (contains(storeRoot, cwd)) {
     return {
       ok: false,
       problem:

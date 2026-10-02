@@ -41,8 +41,10 @@ import { acts, answers, defineMcpTool, type McpTool } from './tool-registry.js';
  * the choice. A node id can only ever name a directory somebody already
  * decided this hub may spawn in.
  *
- * Omitted, it is the store's own directory -- the behaviour this tool shipped
- * with, and what a caller that has no project in mind still gets.
+ * Omitted, it is the home directory of the account the server runs as, which
+ * is what a caller that has no project in mind gets. Not the store's own
+ * directory: a store is the provider's own state, and the machine refuses to
+ * start an agent there.
  *
  * ## What it does not take either
  *
@@ -88,7 +90,7 @@ export function startSessionTool({ sessions }: { readonly sessions: SessionStart
         .string()
         .optional()
         .describe(
-          "A project node id from list_projects, to run the agent in that project rather than in the store's own folder. The hub works out where that is and the machine refuses it unless its operator allows work there. Omit it for the store's own folder.",
+          'A project node id from list_projects, to run the agent in that project. The hub works out where that is and the machine refuses it unless its operator allows work there. Omit it to run the agent in the home directory of the account the server runs as.',
         ),
     },
     output: {

@@ -39,9 +39,11 @@ import { readWorkingTrees, type WorkingTree } from '../working-tree/working-tree
  *     back out of the transcript by the adapter. Nobody chooses it, and a start
  *     that named both a session and a directory is refused rather than served
  *     with one of the two.
- *   * A plain spawn runs in the store's own path, as this server resolved it at
- *     boot. That is the start that has always existed, and a frame could not
- *     have supplied it.
+ *   * A plain spawn runs in the home directory of the account this server runs
+ *     as, which `main` read once at boot. Not the store's own path: a store is
+ *     the provider's own state, and the providers' working-directory guard
+ *     refuses to start an agent there on every launch. A frame could not have
+ *     supplied the home directory either, and that guard still judges it.
  *   * A spawn in a project runs in the directory on the instruction -- and only
  *     if `browse.allow` says this machine will open it: an existing directory
  *     whose real path sits under a root *this machine's operator* configured,
@@ -100,6 +102,17 @@ export interface SessionControllerDependencies {
    * agentplex on it does.
    */
   readonly approvals: LaunchApprovals | null;
+  /**
+   * The home directory of the account this server runs as, where a start that
+   * names no project runs.
+   *
+   * On the `--system` tier that is `/var/lib/agentplex`, and stores are set up
+   * as `<home>/.claude`, so a store sits under the home and never the reverse:
+   * the guard every launch passes accepts the home where it refuses the store.
+   * Injected rather than read here because it is a fact about the machine, and
+   * a test has to be able to name one.
+   */
+  readonly homeDirectory: string;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -112,7 +125,7 @@ export interface StartSessionRequest {
   readonly prompt: string | null;
   /**
    * Where to spawn, when the hub is starting this session in a project, and
-   * `null` for the store's own path.
+   * `null` for the home directory of the account this server runs as.
    *
    * A claim like every other thing off a wire, and checked like one: it reaches
    * a spawn only through `browse.allow`, and only as `cwd`.
@@ -254,7 +267,8 @@ export interface SessionController {
 export function createSessionController(
   dependencies: SessionControllerDependencies,
 ): SessionController {
-  const { stores, providers, terminals, workingTree, browse, approvals, clock } = dependencies;
+  const { stores, providers, terminals, workingTree, browse, approvals, homeDirectory, clock } =
+    dependencies;
   const logger = dependencies.logger.child({ part: 'sessions' });
 
   const storeOf = (storeId: StoreId): StoreDescriptor | undefined =>
@@ -365,10 +379,10 @@ export function createSessionController(
       const { adapter } = found;
 
       if (request.sessionId === null) {
-        // The store's own path when the instruction named no directory, which
-        // is the start that has always existed; otherwise the project's, once
-        // this machine has agreed to open it.
-        const cwd = await spawnDirectory(store, request.directory);
+        // The server account's home directory when the instruction named no
+        // directory; otherwise the project's, once this machine has agreed to
+        // open it. Either way the adapter's own guard judges it next.
+        const cwd = await spawnDirectory(request.directory);
         if (!cwd.ok) {
           logger.info('session spawn refused', {
             storeId: store.storeId,
@@ -597,8 +611,12 @@ export function createSessionController(
   };
 
   /**
-   * Where a spawn runs: the store's own path, or a project's directory this
-   * machine has agreed to open.
+   * Where a spawn runs: the home directory of the account this server runs
+   * as, or a project's directory this machine has agreed to open.
+   *
+   * The home directory is passed on unjudged. Whether a provider may run there
+   * is the adapter's working-directory guard's question, asked on every launch,
+   * and it refuses a home that is the store, as it refuses the store itself.
    *
    * The allowed directory is the one that was asked for rather than the one it
    * resolved to, which is the decision `directory-browse.ts` argues: the
@@ -611,13 +629,12 @@ export function createSessionController(
    * operator configured a subtree, and nothing in that window moves the subtree.
    */
   async function spawnDirectory(
-    store: StoreDescriptor,
     directory: string | null,
   ): Promise<
     | { readonly ok: true; readonly directory: string }
     | { readonly ok: false; readonly code: RefusalCode; readonly problem: string }
   > {
-    if (directory === null) return { ok: true, directory: store.path };
+    if (directory === null) return { ok: true, directory: homeDirectory };
     const allowed = await browse.allow(directory);
     if (allowed.ok) return { ok: true, directory: allowed.directory };
     return { ok: false, code: allowed.code, problem: allowed.problem };

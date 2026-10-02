@@ -100,6 +100,15 @@ export interface SessionServerDependencies {
    */
   readonly directoryReader: DirectoryReader;
   /**
+   * The home directory of the account this server runs as, where a session
+   * started with no project runs.
+   *
+   * Handed to the session controller as it was read, unjudged: the adapters'
+   * working-directory guard decides at each start whether a provider may run
+   * there, and refuses a home that is the store.
+   */
+  readonly homeDirectory: string;
+  /**
    * Where this server's own identity and pairing token live, absolute.
    *
    * Not in a store: a store is a volume two servers may mount at once, and an
@@ -323,6 +332,7 @@ export async function startSessionServer(
     storeWatcher,
     browseRoots,
     directoryReader,
+    homeDirectory,
     identityPath,
     grantFileSystem,
     tokens,
@@ -486,6 +496,7 @@ export async function startSessionServer(
     providers,
     terminals,
     workingTree,
+    homeDirectory,
     // The same guard a browse passes, so that "this machine will open that
     // directory" has one answer whether it is being listed or spawned in.
     browse,

@@ -94,6 +94,7 @@ async function startServer({
     // Nothing to browse: this suite is about the one pairing nobody types.
     browseRoots: [],
     directoryReader: createFakeDirectoryReader(),
+    homeDirectory: '/home/agentplex',
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
     grantFileSystem: grantFiles,

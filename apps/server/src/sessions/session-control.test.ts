@@ -11,8 +11,16 @@ import { createLogger } from '@agentplex/node-shared';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
-import { createFakeProviderAdapter, createFakeProviderFiles } from '@agentplex/providers/testing';
-import { createProviderRegistry, type ProviderFiles } from '@agentplex/providers';
+import {
+  createFakeProcessProbe,
+  createFakeProviderAdapter,
+  createFakeProviderFiles,
+} from '@agentplex/providers/testing';
+import {
+  createClaudeAdapter,
+  createProviderRegistry,
+  type ProviderFiles,
+} from '@agentplex/providers';
 import { createDirectoryBrowser } from '../directories/directory-browse.js';
 import { createFakeDirectoryReader } from '../directories/fake-directory-reader.js';
 import { createFakeWorkingTree, type FakeWorkingTree } from '../working-tree/fake-working-tree.js';
@@ -34,6 +42,14 @@ const clock = { now: () => START };
 
 const WORK = storeIdSchema.parse('store-work');
 const STORE: StoreDescriptor = { storeId: WORK, path: '/volumes/work' };
+
+/**
+ * The home directory of the account this made-up server runs as.
+ *
+ * Under no store any machine here mounts, which is how a real server is set up:
+ * a store is `<home>/.claude`, under the home and never the other way round.
+ */
+const HOME = '/home/agentplex';
 
 const PROJECT_DIFF: UncommittedDiff = {
   files: 2,
@@ -83,6 +99,22 @@ interface MachineOptions {
   readonly pids?: readonly number[];
   /** How many terminals the machine keeps before it evicts one. */
   readonly cap?: number;
+  /** The home directory of the account the server runs as. Default `HOME`. */
+  readonly homeDirectory?: string;
+  /**
+   * The one store this machine mounts, in place of `STORE`.
+   *
+   * A start has to name it by its own id, or it is refused as not mounted
+   * before it reaches anything a case here is about.
+   */
+  readonly store?: StoreDescriptor;
+  /**
+   * The real Claude adapter in place of the fake one.
+   *
+   * The fake passes whatever cwd it is handed straight to its plan, so a rule
+   * the real planner applies to that cwd is invisible behind it.
+   */
+  readonly realAdapter?: boolean;
 }
 
 /**
@@ -155,6 +187,10 @@ function machine(options: MachineOptions = {}): Machine {
   });
 
   const workingTree = options.workingTree ?? createFakeWorkingTree();
+  const adapter =
+    options.realAdapter === true
+      ? createClaudeAdapter({ files, probe: createFakeProcessProbe() })
+      : createFakeProviderAdapter({ provider: 'claude', files });
 
   return {
     transcripts,
@@ -162,14 +198,11 @@ function machine(options: MachineOptions = {}): Machine {
     terminals,
     workingTree,
     sessions: createSessionController({
-      stores: [STORE],
-      providers: createProviderRegistry(
-        options.noAdapter === true
-          ? []
-          : [createFakeProviderAdapter({ provider: 'claude', files })],
-      ),
+      stores: [options.store ?? STORE],
+      providers: createProviderRegistry(options.noAdapter === true ? [] : [adapter]),
       terminals,
       workingTree,
+      homeDirectory: options.homeDirectory ?? HOME,
       // The real rule over a written-down disk, not a stub that says yes: what
       // a start has to get right is what it does when the directory is outside
       // every root, and a fake that answered by agreement would assert nothing.
@@ -270,7 +303,7 @@ describe('a start this server runs', () => {
     });
   });
 
-  it('spawns in the store this server resolved, with the prompt as one argument', async () => {
+  it('spawns in the server account home directory when no project is named, with the prompt as one argument', async () => {
     const { sessions, ptys } = machine();
 
     const outcome = await sessions.start({
@@ -285,7 +318,7 @@ describe('a start this server runs', () => {
     expect(outcome).toMatchObject({ ok: true, sessionId: null });
     expect(ptys.opened[0]).toMatchObject({
       args: ['look at the failing test'],
-      cwd: STORE.path,
+      cwd: HOME,
     });
   });
 
@@ -410,6 +443,66 @@ describe('a start this server runs', () => {
       hold: { sessionId: 'session-1', stoppable: true, pause: 'none' },
     });
     expect(ptys.opened).toHaveLength(1);
+  });
+});
+
+/**
+ * A start that names no project, against the real Claude adapter.
+ *
+ * The fallback directory is chosen in this package and judged in another: this
+ * controller decides where a no-project start runs, and the providers' working
+ * directory guard decides whether a provider may run there. The fake adapter
+ * passes a cwd straight through without the guard, so a fallback the guard
+ * refuses on every start -- the store's own path, as it used to be -- passes
+ * every case above. Only the real planner shows the two contradicting.
+ */
+describe('a start with no project', () => {
+  const CLAUDE_HOME: StoreDescriptor = {
+    storeId: storeIdSchema.parse('store-home'),
+    path: `${HOME}/.claude`,
+  };
+
+  it('runs in the server account home directory, which the store is under', async () => {
+    const { sessions, ptys } = machine({
+      realAdapter: true,
+      store: CLAUDE_HOME,
+      homeDirectory: HOME,
+    });
+
+    const outcome = await sessions.start({
+      storeId: CLAUDE_HOME.storeId,
+      sessionId: null,
+      provider: 'claude',
+      prompt: 'hi',
+      directory: null,
+    });
+
+    expect(outcome).toMatchObject({ ok: true, sessionId: null });
+    expect(ptys.opened[0]?.cwd).toBe(HOME);
+  });
+
+  it('refuses, naming the store, when the home directory is the store', async () => {
+    // A server account whose HOME was pointed at its own store. The guard is
+    // unchanged by the fallback moving: an agent started in the store would be
+    // editing the transcripts agentplex reads, so it starts nowhere and says
+    // why in words an operator can act on.
+    const { sessions, ptys } = machine({
+      realAdapter: true,
+      store: CLAUDE_HOME,
+      homeDirectory: CLAUDE_HOME.path,
+    });
+
+    const outcome = await sessions.start({
+      storeId: CLAUDE_HOME.storeId,
+      sessionId: null,
+      provider: 'claude',
+      prompt: 'hi',
+      directory: null,
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(!outcome.ok && outcome.problem).toContain('is the store');
+    expect(ptys.opened).toEqual([]);
   });
 });
 
@@ -980,6 +1073,7 @@ describe('the session controller reading one transcript', () => {
         timers: createFakeTimers(),
       }),
       workingTree: createFakeWorkingTree(),
+      homeDirectory: HOME,
       browse: createDirectoryBrowser({ roots: [], reader: DISK }),
       // Nothing to hand a launch: this controller is built to answer one
       // transcript read, which starts no process and asks nobody anything.
