@@ -135,13 +135,13 @@ export function createTreeMutations({
     },
 
     async rename(nodeId: NodeId, name: string): Promise<TreeChanged> {
+      const fixed = pinned(nodeId, 'rename');
+      if (fixed !== null) return fixed;
       const trimmed = name.trim();
       // Blank rather than unparseable, for the reason `layout.ts` argues at
       // length: a name of spaces is a thing to say to a person, and refusing
       // the frame would be hanging up on them instead.
       if (trimmed === '') return refused('a node needs a name');
-      const fixed = pinned(nodeId, 'rename');
-      if (fixed !== null) return fixed;
 
       const renamed = await renameNode(database, nodeId, trimmed);
       if (renamed === null) return refused(NO_SUCH_NODE);

@@ -487,6 +487,10 @@ describe('the top level', () => {
     expect(await tree.move(two, { parentId: null, position })).toEqual({ ok: true });
 
     expect(idsIn(await tree.readLayout())).toEqual([HOME_PROJECT_ID, two, one]);
+    // In storage and not only in the order a reading puts things: the layout
+    // orders by the stored position, and a HOME renumbered to 1 would read as
+    // second in it while a query that sorts HOME first still showed it first.
+    expect((await findNode(database(), HOME_PROJECT_ID))?.position).toBe(0);
   });
 });
 
@@ -648,6 +652,18 @@ describe('HOME', () => {
     const before = await home();
 
     expect(await catalogue().rename(HOME_PROJECT_ID, 'somewhere else')).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'HOME is where every session without a project goes, so its name stays HOME',
+      holder: null,
+    });
+    expect(await home()).toEqual(before);
+  });
+
+  it('refuses a blank rename in its own words, not as a blank name', async () => {
+    const before = await home();
+
+    expect(await catalogue().rename(HOME_PROJECT_ID, '   ')).toEqual({
       ok: false,
       code: 'refused',
       problem: 'HOME is where every session without a project goes, so its name stays HOME',
