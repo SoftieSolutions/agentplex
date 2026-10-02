@@ -490,7 +490,7 @@ export function SessionPane({
     start:
       memory.start === null ? null : followUp(memory.start, snapshot.answers, 'session-started'),
     terminal: endedHere ? { ended: 'session-ended' } : terminal,
-    everHeld: held.everHeld || memory.ran,
+    ran: held.everHeld || memory.ran,
     startLapsed: memory.lapsed,
     stateCurrent: snapshot.machineStateCurrent,
     phase: snapshot.phase,
@@ -532,6 +532,11 @@ export function SessionPane({
    * a pane on it resumes it on its own. The same callback-ref event as the
    * resume: drawn while the pane sees a process and the store does not yet
    * know, and gone once it does.
+   *
+   * Running counts whoever runs it -- agentplex, or somebody's own claude in
+   * another terminal -- and so does an ending the hub reported. A pane opened
+   * on a session already not running resumes it; a session that stops while
+   * a pane watches it was stopped by somebody, and waits for a press.
    */
   const noteRan = useCallback(
     (node: HTMLElement | null): void => {
@@ -539,7 +544,7 @@ export function SessionPane({
     },
     [hub, sessionRef],
   );
-  const sawRunning = standing === 'held' || endedHere;
+  const sawRunning = standing === 'held' || endedHere || row?.descriptor.process === 'running';
   /**
    * The tree, for the one question the panel asks of it: which project this
    * session is filed under, and therefore whose standing policy decides what it

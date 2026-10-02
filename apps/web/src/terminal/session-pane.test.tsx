@@ -2642,6 +2642,55 @@ describe('a pane on a session nothing holds', () => {
     expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
   });
 
+  /**
+   * A captured state with one session's `process` changed and nothing else:
+   * what the same machine reports once the process it saw has gone.
+   */
+  function withProcess(frame: string, sessionId: string, process: string): string {
+    const parsed = JSON.parse(frame) as {
+      state: { stores: { sessions: { descriptor: { sessionId: string; process: string } }[] }[] };
+    };
+    for (const store of parsed.state.stores) {
+      for (const row of store.sessions) {
+        if (row.descriptor.sessionId === sessionId) row.descriptor.process = process;
+      }
+    }
+    return JSON.stringify(parsed);
+  }
+
+  it('says a session run outside agentplex stopped, and resumes it only when pressed', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));
+    expect(shown()?.getAttribute('data-pane-state')).toBe('outside');
+
+    // Whoever ran it quits their own claude: the machine reports nothing.
+    await deliver(
+      connected.socket,
+      withProcess(hubFrames.machineStateResumable, 'session-cli-run', 'none'),
+    );
+
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+    expect(shown()?.textContent).toContain('stopped');
+    expect(action()?.textContent).toBe('Resume');
+
+    const button = action();
+    if (button === null) throw new Error('no Resume control');
+    await click(button);
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([
+      {
+        type: 'session-start',
+        id: expect.any(Number) as number,
+        storeId: 'store-agentplex',
+        sessionId: 'session-cli-run',
+        provider: 'claude',
+        prompt: null,
+        server: null,
+        project: null,
+      },
+    ]);
+  });
+
   it('says not running in the header for a row nothing holds and no process runs', async () => {
     const connected = await connectedTo(hubFrames.machineStatePopulated);
     await mount(pane(connected.hub, 'store-universe', 'session-docs-sweep'));
