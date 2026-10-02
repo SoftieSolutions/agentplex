@@ -1322,6 +1322,28 @@ describe('a retake of a session a claude outside agentplex is running', () => {
     expect(ptys.opened).toHaveLength(1);
   });
 
+  it('logs every signal it sends with the pid it sent it to', async () => {
+    // A signal to a process this server did not start is the one act here an
+    // operator may have to account for afterwards, and the pid is what names
+    // the process on that machine.
+    const records: LogRecord[] = [];
+    const { sessions, timers } = await outsideClaude(
+      { status: 'idle' },
+      { obeys: 'SIGKILL', logger: createLogger('info', (record) => records.push(record)) },
+    );
+
+    const pending = retake(sessions);
+    await settle();
+    await poll(timers, KILL_GRACE_MS / RETAKE_POLL_MS + 1);
+    await pending;
+
+    const signalled = records.filter((record) => record.message === 'session retake signalled');
+    expect(signalled.map((record) => record.fields)).toEqual([
+      expect.objectContaining({ pid: OUTSIDE_PID, signal: 'SIGHUP' }),
+      expect.objectContaining({ pid: OUTSIDE_PID, signal: 'SIGKILL' }),
+    ]);
+  });
+
   it('refuses at the bound when the process is still there, and resumes nothing', async () => {
     const { sessions, signaller, ptys, timers } = await outsideClaude(
       { status: 'idle' },
