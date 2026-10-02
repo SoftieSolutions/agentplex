@@ -2599,6 +2599,49 @@ describe('a pane on a session nothing holds', () => {
     expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
   });
 
+  /**
+   * The captured ending, re-addressed to the session a test watches and given
+   * the reason a hub sends when the session itself ended. The capture is of a
+   * dropped machine; `target` and `reason` are the only fields touched.
+   */
+  function endedFor(sessionId: string): string {
+    return JSON.stringify({
+      ...(JSON.parse(hubFrames.sessionSubscriptionEnded) as Record<string, unknown>),
+      target: { by: 'session', storeId: 'store-agentplex', sessionId },
+      reason: 'session-ended',
+    });
+  }
+
+  it('does not resume a start that ended before its row was published, arriving together', async () => {
+    // A pending pane rebinds to the session its start named before any scan
+    // has published a row for it: it watches by address, with no row.
+    const connected = await connectedTo(hubFrames.machineState);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    expect(ofType(sentSince(connected), 'session-subscribe')).toHaveLength(1);
+
+    await act(async () => {
+      connected.socket.deliver(endedFor('session-spike-wasm'));
+      connected.socket.deliver(hubFrames.machineStateResumable);
+    });
+    await act(settle);
+
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+    expect(action()?.textContent).toBe('Resume');
+  });
+
+  it('does not resume a start that ended before its row was published, one after the other', async () => {
+    const connected = await connectedTo(hubFrames.machineState);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+
+    await deliver(connected.socket, endedFor('session-spike-wasm'));
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+    await act(settle);
+
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+  });
+
   it('says not running in the header for a row nothing holds and no process runs', async () => {
     const connected = await connectedTo(hubFrames.machineStatePopulated);
     await mount(pane(connected.hub, 'store-universe', 'session-docs-sweep'));
