@@ -107,6 +107,10 @@ export function queryFor(shape: CatalogueShape, cursor: string | null): Catalogu
     filter: shape.filter,
     cursor,
     limit: CATALOGUE_PAGE_LIMIT,
+    // The tree whole, as before the hub could draw projects closed. Which
+    // projects are open is the Projects tab's to say, and until it does, every
+    // caller asks the question it always asked.
+    openProjects: null,
   };
 }
 

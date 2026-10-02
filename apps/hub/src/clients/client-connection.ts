@@ -533,6 +533,7 @@ export function serveClientConnection(
           filter: frame.filter,
           cursor: frame.cursor,
           limit: frame.limit,
+          openProjects: frame.openProjects,
         });
         return;
 

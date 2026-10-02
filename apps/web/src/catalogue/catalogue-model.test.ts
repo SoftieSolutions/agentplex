@@ -108,6 +108,7 @@ describe('the query a shape asks', () => {
       filter: {},
       cursor: null,
       limit: CATALOGUE_PAGE_LIMIT,
+      openProjects: null,
     });
     expect(queryFor(DEFAULT_SHAPE, 'opaque').cursor).toBe('opaque');
   });

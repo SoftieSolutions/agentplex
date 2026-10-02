@@ -188,6 +188,16 @@ export const CATALOGUE_PAGE_MAX_LIMIT = 200;
  */
 export const catalogueCursorSchema = z.string().min(1).max(2_048);
 
+/**
+ * How many projects one tree query may name as open.
+ *
+ * A bound for the reason the kind selection has one: a list of ids on a frame
+ * is something a bug can fill. Five hundred is more projects than one person's
+ * catalogue holds and more than a sidebar can show open at once, so a query that
+ * runs into it went wrong rather than described somebody's screen.
+ */
+export const CATALOGUE_MAX_OPEN_PROJECTS = 500;
+
 export const catalogueQuerySchema = z.object({
   view: catalogueViewSchema,
   groupBy: catalogueGroupBySchema,
@@ -197,6 +207,29 @@ export const catalogueQuerySchema = z.object({
   cursor: catalogueCursorSchema.nullable(),
   /** Clamped to `CATALOGUE_PAGE_MAX_LIMIT`, never refused for being too big. */
   limit: z.int().positive(),
+  /**
+   * Which projects the tree draws open, or `null` for the tree whole.
+   *
+   * A list makes the top of the tree projects only, each closed unless named
+   * here: a closed project is one row and its contents are not in the answer,
+   * and a root folder or a loose session is not in it at all. `null` is the tree
+   * as every client asked for it before this field, and stays that.
+   *
+   * The hub's to apply and not the client's to trim, because `total`, the cursor
+   * and the cut are all counts over the answer. A client handed every session of
+   * every project and hiding the closed ones would page through rows it never
+   * draws, show a "Load more" that loads nothing visible, and count "4 of 124"
+   * over a screen with four rows on it.
+   *
+   * Nullable rather than optional, unlike the filter: "every project closed"
+   * (`[]`) and "no notion of open at all" (`null`) are two different answers, and
+   * an absent field would be a third spelling of one of them by convention. The
+   * list view ignores it -- flat has no containers to open -- and the hub says so
+   * by leaving it out of the cursor's shape there. An id that is not a project,
+   * or not in the tree, opens nothing and is not refused: the tree can move under
+   * a client between its click and this frame, and a stale id costs only itself.
+   */
+  openProjects: z.array(nodeIdSchema).max(CATALOGUE_MAX_OPEN_PROJECTS).nullable(),
 });
 export type CatalogueQuery = z.infer<typeof catalogueQuerySchema>;
 

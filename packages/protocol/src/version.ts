@@ -26,7 +26,7 @@
  * shape change without a bump fails the suite, and so does a bump without the
  * new snapshot committed.
  */
-export const CLIENT_PROTOCOL_VERSION = 44;
+export const CLIENT_PROTOCOL_VERSION = 45;
 
 /** The hub-to-server leg's contract; see `CLIENT_PROTOCOL_VERSION` above. */
 export const SERVER_PROTOCOL_VERSION = 42;

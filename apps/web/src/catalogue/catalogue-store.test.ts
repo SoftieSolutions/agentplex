@@ -114,6 +114,7 @@ describe('asking the first page', () => {
       filter: {},
       cursor: null,
       limit: CATALOGUE_PAGE_LIMIT,
+      openProjects: null,
     });
     expect(h.store.getSnapshot().loading).toBe(true);
   });

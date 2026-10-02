@@ -2130,6 +2130,7 @@ const CATALOGUE: CatalogueQuery = {
   filter: {},
   cursor: null,
   limit: 1,
+  openProjects: null,
 };
 
 describe('the catalogue query', () => {

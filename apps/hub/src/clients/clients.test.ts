@@ -1486,6 +1486,9 @@ describe('reading part of the catalogue', () => {
     filter: { search: 'auth' },
     cursor: null,
     limit: 25,
+    // Named rather than null, so the pass-through is held to carry it: the
+    // dispatch names each field it forwards, and a new one is easy to miss.
+    openProjects: ['home'],
   };
 
   it('passes the whole question down and answers the page to the client that asked', async () => {
@@ -2985,6 +2988,7 @@ describe('every frame but a hello, before one', () => {
       filter: { search: 'auth' },
       cursor: null,
       limit: 25,
+      openProjects: null,
     }),
     'doc-create': clientFrame({
       type: 'doc-create',
