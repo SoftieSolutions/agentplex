@@ -16,7 +16,7 @@ import type {
   TreeMutations,
   TreeRefusal,
 } from './catalogue.js';
-import { findNode, findNodeKind, listAncestry, listSubtree } from './reads.js';
+import { findNode, findNodeKind, listSubtree } from './reads.js';
 import { PROJECT_KIND, type TreeNode } from './rows.js';
 import {
   createFolder,
@@ -45,6 +45,26 @@ import {
  * resolves a project before opening its transaction, and it resolves the same
  * way -- the tree is stale for as long as it takes to ask again, and never
  * wrong.
+ *
+ * ## The top level holds projects, and a project is held by nothing
+ *
+ * Two placement rules, and they are stated here rather than in the writes or
+ * the schema because this is the one door every caller walks through: a
+ * client's frame, and nothing else -- the MCP surface has no tree edit, and
+ * discovery and the projects feature place what they create themselves. A
+ * node that is not a project goes inside one, HOME included, so that "which
+ * project is this in" always has an answer. A project goes at the top and
+ * never under anything, because a session is filed under the project whose
+ * directory it ran in, and that has to be one definite project and not a pair
+ * of them nested.
+ *
+ * Each rule is asked of the node being moved and of where it is going, never
+ * of a subtree: with both rules holding, no folder can contain a project, so
+ * there is no carried project for a subtree walk to find.
+ *
+ * HOME is first among the projects, always. A project reordered to before it
+ * is put just after it -- clamped, as an index past the end is clamped, since
+ * a client a frame behind has asked for something reasonable.
  *
  * ## What a removal does not do
  *
@@ -96,6 +116,11 @@ export function createTreeMutations({
   return {
     async createFolder(request: NewFolderRequest): Promise<NodeCreated> {
       const name = request.name.trim();
+      if (request.parentId === null) {
+        return refused(
+          'only projects sit at the top level; make the folder inside a project, or in HOME',
+        );
+      }
       if (name === '') return refused('a folder needs a name');
       const barrier = await notAContainer(database, request.parentId);
       if (barrier !== null) return barrier;
@@ -129,16 +154,16 @@ export function createTreeMutations({
       if (fixed !== null) return fixed;
       const node = await findNode(database, nodeId);
       if (node === null) return refused(NO_SUCH_NODE);
+      const placed = atRoot(node, placement.parentId) ?? projectBelow(node, placement.parentId);
+      if (placed !== null) return placed;
 
       const barrier = await notAContainer(database, placement.parentId);
       if (barrier !== null) return barrier;
       if (await wouldCycle(database, nodeId, placement.parentId)) {
         return refused('a node cannot be moved inside itself');
       }
-      const nested = await nestedProject(database, node, placement.parentId);
-      if (nested !== null) return nested;
 
-      await moveNode(database, nodeId, placement);
+      await moveNode(database, nodeId, afterHome(placement));
       changed();
       return { ok: true };
     },
@@ -259,26 +284,33 @@ async function notAContainer(
 }
 
 /**
- * Why this move would nest a project, or `null` when it would not.
+ * Why this node cannot go to the top level, or `null` when it can.
  *
- * Asked of the subtree and the ancestry rather than of the two nodes, because
- * the rule is about where a project ends up and not about what was dragged: a
- * folder with a project in it, dropped on a project, nests one just as surely.
+ * Anything but a project, whatever its kind -- a kind a later migration seeds
+ * included, which is why this asks "is it a project" rather than listing the
+ * kinds that are refused.
  */
-async function nestedProject(
-  database: Queryable,
-  node: TreeNode,
-  parentId: NodeId | null,
-): Promise<TreeRefusal | null> {
-  if (parentId === null) return null;
-  const moving = await listSubtree(database, node);
-  if (!moving.some((member) => member.kind === PROJECT_KIND)) return null;
-  const above = await listAncestry(database, parentId);
-  if (!above.some((ancestor) => ancestor.kind === PROJECT_KIND)) return null;
-  return refused(
-    'a project cannot go inside another project: a session is filed under the project ' +
-      'whose directory it ran in, and that has to be a definite one of them',
-  );
+function atRoot(node: TreeNode, parentId: NodeId | null): TreeRefusal | null {
+  if (parentId !== null || node.kind === PROJECT_KIND) return null;
+  return refused('only projects sit at the top level; move it into a project, or into HOME');
+}
+
+/** Why this project cannot go under that parent, or `null` when it is not one. */
+function projectBelow(node: TreeNode, parentId: NodeId | null): TreeRefusal | null {
+  if (parentId === null || node.kind !== PROJECT_KIND) return null;
+  return refused('a project sits at the top level and never inside another node');
+}
+
+/**
+ * The placement with a top-level index moved to after HOME.
+ *
+ * Only the top level: HOME is first there and nowhere else. Every node that
+ * reaches here at the top level is a project, `atRoot` saw to that, and HOME
+ * itself never does -- `pinned` refused it before anything.
+ */
+function afterHome(placement: NodePlacementRequest): NodePlacementRequest {
+  if (placement.parentId !== null) return placement;
+  return { ...placement, position: Math.max(1, placement.position) };
 }
 
 /**
