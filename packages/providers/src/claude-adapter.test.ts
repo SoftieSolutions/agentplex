@@ -946,6 +946,52 @@ describe('createClaudeAdapter.transcript', () => {
 
     expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: true } });
   });
+
+  describe('for a live claude that has not typed yet', () => {
+    // Discovery lists these off a verified registry entry alone, so asking for
+    // one's transcript is ordinary: there is none on disk until a turn lands.
+    const ENTRY = `${SESSIONS}/${PID}.json`;
+    const theSameProcess = { processes: { [PID]: PROCESS_STARTED_AT } };
+
+    it('answers an empty transcript for a session only its verified registry entry names', async () => {
+      const adapter = adapterOver({ files: { [ENTRY]: REGISTRY_ENTRY } }, theSameProcess);
+
+      const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+      expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: false } });
+    });
+
+    it('still refuses a session neither a transcript nor a verified entry names', async () => {
+      const adapter = adapterOver({ files: { [ENTRY]: REGISTRY_ENTRY } }, theSameProcess);
+
+      const read = await adapter.transcript({
+        store: STORE,
+        session: sessionRefSchema.parse({
+          storeId: STORE.storeId,
+          sessionId: '99999999-3fc6-4519-8bb4-1c3f7eef0bde',
+        }),
+        limit: 10,
+      });
+
+      expect(read).toEqual({
+        ok: false,
+        problem: 'this store holds no claude transcript for that session',
+      });
+    });
+
+    it('still refuses a session whose entry names a live pid it cannot date', async () => {
+      // In doubt is not verified, the same line discovery draws: the pid may
+      // belong to anything by now, and an empty transcript would vouch for it.
+      const adapter = adapterOver({ files: { [ENTRY]: REGISTRY_ENTRY } }, { undatable: [PID] });
+
+      const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+      expect(read).toEqual({
+        ok: false,
+        problem: 'this store holds no claude transcript for that session',
+      });
+    });
+  });
 });
 
 describe('createClaudeAdapter.discover, scan after scan', () => {
