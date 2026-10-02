@@ -19,6 +19,7 @@ import { createPtySupervisor } from '@agentplex/pty';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createProviderRegistry } from '@agentplex/providers';
 import {
+  createFakeProcessProbe,
   createFakeProviderAdapter,
   createFakeProviderFiles,
   createFakeStoreFiles,
@@ -183,6 +184,7 @@ function serveMachine(machine: Machine): DialResult {
     machineLoad: createFakeMachineLoadReader(),
     sessions: createSessionController({
       signaller: createFakeProcessSignaller(),
+      processes: createFakeProcessProbe(),
       timers: createFakeTimers(),
       stores,
       providers: createProviderRegistry([createFakeProviderAdapter({ provider: 'claude', files })]),

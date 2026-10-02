@@ -26,6 +26,12 @@ export interface FakeProcessProbeOptions {
 export interface FakeProcessProbe extends ProcessProbe {
   /** The process holding this pid exits; the pid is no longer alive or datable. */
   exit(pid: number): void;
+  /**
+   * A process starts under this pid, dated as given, or one this platform
+   * cannot date for `null`: how a test issues a pid again after its holder
+   * has exited.
+   */
+  start(pid: number, startedAt: number | null): void;
 }
 
 export function createFakeProcessProbe(options: FakeProcessProbeOptions = {}): FakeProcessProbe {
@@ -46,6 +52,11 @@ export function createFakeProcessProbe(options: FakeProcessProbeOptions = {}): F
     exit(pid: number): void {
       processes.delete(pid);
       undatable.delete(pid);
+    },
+
+    start(pid: number, startedAt: number | null): void {
+      if (startedAt === null) undatable.add(pid);
+      else processes.set(pid, startedAt);
     },
   };
 }

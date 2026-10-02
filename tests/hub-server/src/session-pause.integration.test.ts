@@ -31,6 +31,7 @@ import {
   type SocketDialer,
 } from '@agentplex/node-shared';
 import {
+  createFakeProcessProbe,
   createFakeProviderAdapter,
   createFakeProviderFiles,
   createFakeStoreFiles,
@@ -193,6 +194,7 @@ async function start(): Promise<Harness> {
         machineLoad: createFakeMachineLoadReader(),
         sessions: createSessionController({
           signaller: createFakeProcessSignaller(),
+          processes: createFakeProcessProbe(),
           timers: createFakeTimers(),
           stores: [STORE],
           providers: createProviderRegistry([

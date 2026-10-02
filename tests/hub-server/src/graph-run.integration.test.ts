@@ -26,6 +26,7 @@ import { createLogger, type DialResult, type SocketDialer } from '@agentplex/nod
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
+  createFakeProcessProbe,
   createFakeProviderAdapter,
   createFakeProviderFiles,
   createFakeStoreFiles,
@@ -188,6 +189,7 @@ function serveMachine(machine: Machine): DialResult {
     machineLoad: createFakeMachineLoadReader(),
     sessions: createSessionController({
       signaller: createFakeProcessSignaller(),
+      processes: createFakeProcessProbe(),
       timers: createFakeTimers(),
       stores,
       providers: createProviderRegistry([adapter]),

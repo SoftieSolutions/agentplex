@@ -186,6 +186,7 @@ async function start(): Promise<Harness> {
   });
   const sessions = createSessionController({
     signaller: createFakeProcessSignaller(),
+    processes: createFakeProcessProbe(),
     timers: createFakeTimers(),
     stores: [STORE],
     providers: createProviderRegistry([adapter]),

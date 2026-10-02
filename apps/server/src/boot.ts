@@ -3,7 +3,12 @@ import { ensureDataRoot, type DataRootFileSystem } from './data-root/data-root.j
 import type { DirectoryReader } from './directories/directory-browse.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProjectFileSystem } from './projects/project-files.js';
-import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
+import type {
+  ProcessProbe,
+  ProviderPreflight,
+  ProviderRegistry,
+  StoreFileSystem,
+} from '@agentplex/providers';
 import type { GrantFileSystem } from './grants/server-grants.js';
 import type { BeaconNetwork } from './beacon/server-beacon.js';
 import type { StoreWatcher } from './store-watch/store-watch.js';
@@ -132,6 +137,8 @@ export interface RuntimeDependencies {
   readonly terminals: TerminalManager;
   /** The one way a retake ends a process this server did not start; `main` builds it. */
   readonly signaller: ProcessSignaller;
+  /** Whether a pid is alive and when it started; `main` builds the real one. */
+  readonly processes: ProcessProbe;
   /**
    * The operation registry: every child that is not a pty.
    *
@@ -228,6 +235,7 @@ export async function startRuntime(
     preflight,
     terminals,
     signaller,
+    processes,
     operations,
     workingTree,
     machineLoad,
@@ -273,6 +281,7 @@ export async function startRuntime(
     preflight,
     terminals,
     signaller,
+    processes,
     drainMs: config.drainMs,
     operations,
     workingTree,

@@ -17,7 +17,7 @@ import {
   CLAUDE_SESSIONS_DIRECTORY,
   phaseOf,
   readClaudeRegistry,
-  registeredJustAfterStarting,
+  registrantStartedAt,
   resolveWithRegistry,
   type ClaudeRegistry,
 } from './claude-registry.js';
@@ -202,9 +202,10 @@ export function createClaudeAdapter({
 
       const entry = registry.live.get(session.sessionId);
       if (entry === undefined) return null;
-      if (!(await registeredJustAfterStarting(entry, probe))) return null;
+      const startedAt = await registrantStartedAt(entry, probe);
+      if (startedAt === null) return null;
 
-      return { pid: entry.pid, phase: phaseOf(entry.status) };
+      return { pid: entry.pid, phase: phaseOf(entry.status), startedAt };
     },
 
     // Provisioning holds no store and no filesystem, so it is built once here

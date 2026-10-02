@@ -30,6 +30,7 @@ import { createDirectoryBrowser } from '../directories/directory-browse.js';
 import { createFakeDirectoryReader } from '../directories/fake-directory-reader.js';
 import { createFakeWorkingTree, type FakeWorkingTree } from '../working-tree/fake-working-tree.js';
 import { createFakeProcessSignaller, type FakeProcessSignaller } from './fake-process-signaller.js';
+import type { RetakeSignal } from './process-signaller.js';
 import {
   createSessionController,
   RETAKE_BOUND_MS,
@@ -151,6 +152,17 @@ interface MachineOptions {
    * a process no signal ends -- one stuck in the kernel.
    */
   readonly obeys?: 'SIGHUP' | 'SIGKILL' | 'nothing';
+  /**
+   * What a process does with a signal, in place of `obeys`, for the cases that
+   * are more than ending: a claude that drops its registry entry and runs on,
+   * or a pid the kernel hands to somebody else. The process table and the
+   * store are separate, as they are on a real machine.
+   */
+  readonly onSignal?: (
+    pid: number,
+    signal: RetakeSignal,
+    machine: Pick<Machine, 'probe' | 'transcripts'>,
+  ) => void;
   /** Every signal is refused, as the kernel refuses one to another account's process. */
   readonly refuseSignals?: 'EPERM';
   /** Registers the real codex adapter beside the claude one. */
@@ -248,6 +260,10 @@ function machine(options: MachineOptions = {}): Machine {
   const signaller = createFakeProcessSignaller({
     ...(options.refuseSignals === undefined ? {} : { refuse: options.refuseSignals }),
     onSignal: (pid, signal) => {
+      if (options.onSignal !== undefined) {
+        options.onSignal(pid, signal, { probe, transcripts });
+        return;
+      }
       if (obeys === 'nothing') return;
       if (signal === 'SIGKILL' || obeys === 'SIGHUP') probe.exit(pid);
     },
@@ -280,6 +296,7 @@ function machine(options: MachineOptions = {}): Machine {
       // the holder and the cap.
       approvals: null,
       signaller,
+      processes: probe,
       timers,
       clock,
       logger: options.logger ?? logger,
@@ -1317,6 +1334,102 @@ describe('a retake of a session a claude outside agentplex is running', () => {
     expect(timers.pending).toBe(0);
   });
 
+  it('waits on the pid rather than the entry, killing a claude that dropped its entry and ran on', async () => {
+    // Claude Code removes its own registry entry while it handles SIGHUP, and
+    // goes on to run its SessionEnd hooks and flush its transcript. The entry
+    // is gone while the process is not, and a resume then would be a second
+    // writer on a transcript the first is still writing.
+    const { sessions, signaller, ptys, timers } = await outsideClaude(
+      { status: 'idle' },
+      {
+        onSignal: (pid, signal, { probe, transcripts }) => {
+          delete transcripts[ENTRY];
+          if (signal === 'SIGKILL') probe.exit(pid);
+        },
+      },
+    );
+
+    const pending = retake(sessions);
+    await settle();
+    await poll(timers, KILL_GRACE_MS / RETAKE_POLL_MS - 1);
+    expect(signaller.sent.map((sent) => sent.signal)).toEqual(['SIGHUP']);
+    expect(ptys.opened).toEqual([]);
+
+    await poll(timers);
+    expect(signaller.sent).toEqual([
+      { pid: OUTSIDE_PID, signal: 'SIGHUP' },
+      { pid: OUTSIDE_PID, signal: 'SIGKILL' },
+    ]);
+    expect(ptys.opened).toEqual([]);
+
+    await poll(timers);
+    expect(await pending).toMatchObject({ ok: true, sessionId: SESSION });
+    expect(ptys.opened).toHaveLength(1);
+  });
+
+  it('refuses at the bound when a claude dropped its entry and no signal ends it', async () => {
+    const { sessions, signaller, ptys, timers } = await outsideClaude(
+      { status: 'idle' },
+      {
+        onSignal: (_pid, _signal, { transcripts }) => {
+          delete transcripts[ENTRY];
+        },
+      },
+    );
+
+    const pending = retake(sessions);
+    await settle();
+    await poll(timers, RETAKE_BOUND_MS / RETAKE_POLL_MS);
+
+    expect(refusal(await pending)).toContain('did not end');
+    expect(signaller.sent.map((sent) => sent.signal)).toEqual(['SIGHUP', 'SIGKILL']);
+    expect(ptys.opened).toEqual([]);
+    expect(timers.pending).toBe(0);
+  });
+
+  it('counts the process ended when its pid now holds a later process, and kills nothing more', async () => {
+    const { sessions, signaller, ptys, timers } = await outsideClaude(
+      { status: 'idle' },
+      {
+        onSignal: (pid, _signal, { probe }) => {
+          probe.exit(pid);
+          probe.start(pid, START + 1_000);
+        },
+      },
+    );
+
+    const pending = retake(sessions);
+    await settle();
+    await poll(timers);
+
+    expect(await pending).toMatchObject({ ok: true, sessionId: SESSION });
+    expect(signaller.sent).toEqual([{ pid: OUTSIDE_PID, signal: 'SIGHUP' }]);
+    expect(ptys.opened).toHaveLength(1);
+  });
+
+  it('neither ends nor kills a pid it can no longer date, and refuses at the bound', async () => {
+    // Alive and undatable is a process this server cannot tell from a later
+    // one. Counting it ended would risk two writers; a SIGKILL might land on
+    // a stranger.
+    const { sessions, signaller, ptys, timers } = await outsideClaude(
+      { status: 'idle' },
+      {
+        onSignal: (pid, _signal, { probe }) => {
+          probe.exit(pid);
+          probe.start(pid, null);
+        },
+      },
+    );
+
+    const pending = retake(sessions);
+    await settle();
+    await poll(timers, RETAKE_BOUND_MS / RETAKE_POLL_MS);
+
+    expect(refusal(await pending)).toContain('could not tell whether');
+    expect(signaller.sent).toEqual([{ pid: OUTSIDE_PID, signal: 'SIGHUP' }]);
+    expect(ptys.opened).toEqual([]);
+  });
+
   it('refuses in words when the process belongs to another account', async () => {
     const { sessions, ptys, timers } = await outsideClaude(
       { status: 'idle' },
@@ -1591,6 +1704,7 @@ describe('the session controller reading one transcript', () => {
       // transcript read, which starts no process and asks nobody anything.
       approvals: null,
       signaller: createFakeProcessSignaller(),
+      processes: createFakeProcessProbe(),
       timers: createFakeTimers(),
       clock,
       logger,

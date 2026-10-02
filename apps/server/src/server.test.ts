@@ -13,11 +13,12 @@ import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { createFakeTimers, type FakeTimers } from '@agentplex/node-shared/testing';
 import { createProviderRegistry, type ProviderPreflight } from '@agentplex/providers';
 import {
+  createFakeProcessProbe,
   createFakeProcessRunner,
   createFakeStoreFiles,
+  type FakeProcessRunner,
   missingProvider,
   readyProvider,
-  type FakeProcessRunner,
 } from '@agentplex/providers/testing';
 import { createFakeGrantFiles } from './grants/fake-grant-files.js';
 import type { Launch, LaunchPlan } from '@agentplex/providers';
@@ -206,6 +207,7 @@ async function start(
     preflight,
     terminals: terminals.terminals,
     signaller: createFakeProcessSignaller(),
+    processes: createFakeProcessProbe(),
     machineLoad: createFakeMachineLoadReader(),
     about: ABOUT,
     operations: createOperationRegistry(runner),

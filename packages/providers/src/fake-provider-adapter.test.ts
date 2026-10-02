@@ -8,7 +8,7 @@ const SESSION_ID = 'session-1';
 describe('createFakeProviderAdapter.liveProcess', () => {
   it('names the process a test wrote down for a session, and none for any other', async () => {
     const adapter = createFakeProviderAdapter({
-      liveProcesses: { [SESSION_ID]: { pid: 4_321, phase: 'idle' } },
+      liveProcesses: { [SESSION_ID]: { pid: 4_321, phase: 'idle', startedAt: 1_000 } },
     });
 
     expect(
@@ -16,7 +16,7 @@ describe('createFakeProviderAdapter.liveProcess', () => {
         STORE,
         sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: SESSION_ID }),
       ),
-    ).toEqual({ pid: 4_321, phase: 'idle' });
+    ).toEqual({ pid: 4_321, phase: 'idle', startedAt: 1_000 });
     expect(
       await adapter.liveProcess(
         STORE,
