@@ -283,9 +283,6 @@ async function main(): Promise<void> {
       // probe is the one thing in it that touches the outside world.
       machineLoad: createMachineLoadReader({ probe: createNodeMachineProbe(), clock: systemClock }),
       about,
-      // The only place a real pty is opened. It is handed the same composed
-      // environment as the one-shot runner, so a provider binary resolves the
-      // same way whether it is being probed or driven.
       // The only signalling `process.kill` in this server (the process probe's
       // `kill(pid, 0)` asks whether a pid exists and delivers nothing). A
       // retake reaches it with a pid the provider's adapter verified a moment
@@ -308,6 +305,9 @@ async function main(): Promise<void> {
       // a retake verified and the start it re-reads while it waits are two
       // readings of one clock.
       processes: createNodeProcessProbe({ runner: processRunner }),
+      // The only place a real pty is opened. It is handed the same composed
+      // environment as the one-shot runner, so a provider binary resolves the
+      // same way whether it is being probed or driven.
       terminals: createTerminalManager({
         supervisor: createPtySupervisor({
           pty: nodePtyFactory,
