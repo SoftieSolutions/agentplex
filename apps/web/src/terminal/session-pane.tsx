@@ -472,13 +472,24 @@ export function SessionPane({
   useTerminalWatch(hub, target);
   const terminal: TerminalWatchView | null =
     target === null ? null : (snapshot.terminals.get(terminalKey(target)) ?? null);
+  /**
+   * Whether the hub said the session ended under this pane's watch, read off
+   * the address whether or not the pane still watches it.
+   *
+   * A pending pane watches by address with no row, and the row that arrives
+   * unheld ends that watch -- on the very render where the ending is the one
+   * fact that says this is a session that just ran, not one to resume. The
+   * store keeps the record until the watch is given back after that render
+   * commits, so this render still reads it, and the note below keeps it.
+   */
+  const endedHere = snapshot.terminals.get(terminalKey(held.target))?.ended === 'session-ended';
   const memory = resumeMemoryOf(snapshot.resumes, sessionRef);
   const pane: PaneState = paneState({
     row,
     state,
     start:
       memory.start === null ? null : followUp(memory.start, snapshot.answers, 'session-started'),
-    terminal,
+    terminal: endedHere ? { ended: 'session-ended' } : terminal,
     everHeld: held.everHeld || memory.ran,
     startLapsed: memory.lapsed,
     stateCurrent: snapshot.machineStateCurrent,
@@ -528,7 +539,7 @@ export function SessionPane({
     },
     [hub, sessionRef],
   );
-  const sawRunning = standing === 'held';
+  const sawRunning = standing === 'held' || endedHere;
   /**
    * The tree, for the one question the panel asks of it: which project this
    * session is filed under, and therefore whose standing policy decides what it
