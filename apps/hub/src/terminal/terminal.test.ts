@@ -528,7 +528,7 @@ describe('a client too far behind to be sent output', () => {
 });
 
 describe('a subscription by start handle', () => {
-  const started = { registrationId: ATTIC, startId: START, storeId: WORK };
+  const started = { registrationId: ATTIC, startId: START, storeId: WORK, sessionId: null };
   const startTarget: ClientTerminalTarget = { by: 'start', startId: 7 };
 
   /** A spawn whose provider has not written a session id yet. */
@@ -637,6 +637,89 @@ describe('a subscription by start handle', () => {
     expect(client.received.at(-1)).toMatchObject({
       type: 'refusal',
       message: 'this connection did not start that session',
+    });
+  });
+  describe('a start the report named', () => {
+    const report = [{ startId: START, sessionId: QUIET }];
+    const namedFrames = (client: FakeClient): readonly HubFrame[] =>
+      client.received.filter((frame) => frame.type === 'session-named');
+
+    it('tells the client that started it which session it became, unsubscribed', () => {
+      const { harness: held, client } = pending();
+
+      held.terminal.noteStarts(ATTIC, WORK, report);
+
+      expect(client.received).toEqual([
+        { type: 'session-named', replyTo: 7, storeId: WORK, sessionId: QUIET },
+      ]);
+    });
+
+    it('says it once, however often the report repeats it', () => {
+      // A store report repeats its starts every scan, and a redial replays the
+      // whole report: neither is news to the client that was already told.
+      const { harness: held, client } = pending();
+
+      held.terminal.noteStarts(ATTIC, WORK, report);
+      held.terminal.noteStarts(ATTIC, WORK, report);
+
+      expect(namedFrames(client)).toHaveLength(1);
+    });
+
+    it('tells nobody else', () => {
+      const { harness: held } = pending();
+      const stranger = fakeClient();
+
+      held.terminal.noteStarts(ATTIC, WORK, report);
+
+      expect(stranger.received).toEqual([]);
+    });
+
+    it('tells a start noted after the report named it', () => {
+      // The report can outrun the start's own bookkeeping: the server spawns,
+      // scans and reports before the hub has written down whose start it was.
+      const held = harness(fleet([server(ATTIC, 'attic')], []));
+      const client = fakeClient();
+
+      held.terminal.noteStarts(ATTIC, WORK, report);
+      held.terminal.noteStart(client, 7, started);
+
+      expect(client.received).toEqual([
+        { type: 'session-named', replyTo: 7, storeId: WORK, sessionId: QUIET },
+      ]);
+    });
+
+    it('still binds a pane opened by its start after the naming, on the next report', () => {
+      // The naming is said once; the binding of a start-addressed watch to the
+      // session is not news to anyone and has to keep happening for a pane
+      // that arrived after the first report.
+      const { harness: held, client } = pending();
+      held.terminal.noteStarts(ATTIC, WORK, report);
+      held.terminal.subscribe(client, 8, startTarget);
+      held.servers.put[0]?.answer(subscribed(0));
+
+      held.terminal.noteStarts(ATTIC, WORK, report);
+      held.terminal.deliver(ATTIC, { ...output('after\r\n'), startId: null });
+
+      expect(chunks(client)).toEqual(['after\r\n']);
+    });
+
+    it('says nothing to a resume, whose own reply already named it', () => {
+      const held = harness(fleet([server(ATTIC, 'attic')], []));
+      const client = fakeClient();
+      held.terminal.noteStart(client, 7, { ...started, sessionId: QUIET });
+
+      held.terminal.noteStarts(ATTIC, WORK, report);
+
+      expect(client.received).toEqual([]);
+    });
+
+    it('tells a socket that went away nothing', () => {
+      const { harness: held, client } = pending();
+
+      held.terminal.forget(client);
+      held.terminal.noteStarts(ATTIC, WORK, report);
+
+      expect(client.received).toEqual([]);
     });
   });
 });
@@ -774,7 +857,12 @@ describe('a terminal the hub cannot reach', () => {
     const { terminal } = harness(fleet([server(WORKSHOP, 'workshop', 'stale')], []));
     const client = fakeClient();
     const held: StartId = START;
-    terminal.noteStart(client, 7, { registrationId: WORKSHOP, startId: held, storeId: WORK });
+    terminal.noteStart(client, 7, {
+      registrationId: WORKSHOP,
+      startId: held,
+      storeId: WORK,
+      sessionId: null,
+    });
 
     terminal.subscribe(client, 7, { by: 'start', startId: 7 });
 
@@ -860,7 +948,12 @@ describe('a server that stops feeding the terminals the hub borrowed from it', (
   it('names the terminal a pending pane is watching by the handle that pane used', () => {
     const { terminal, servers } = oneMachine();
     const client = fakeClient();
-    terminal.noteStart(client, 7, { registrationId: ATTIC, startId: START, storeId: WORK });
+    terminal.noteStart(client, 7, {
+      registrationId: ATTIC,
+      startId: START,
+      storeId: WORK,
+      sessionId: null,
+    });
 
     terminal.subscribe(client, 7, { by: 'start', startId: 7 });
     servers.put[0]?.answer(subscribed(0));

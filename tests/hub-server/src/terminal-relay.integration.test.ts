@@ -803,6 +803,53 @@ describe('a pane opened on a spawn the provider has not named', () => {
     expect(last?.type === 'terminal-output' ? last.startId : undefined).toBe(2);
   });
 
+  it('tells the connection that started it which session it became, unwatched', async () => {
+    const owner = await attach();
+    const stranger = await attach();
+    const spawn = (id: number) =>
+      owner.say({
+        type: 'session-start',
+        id,
+        storeId: WORK,
+        sessionId: null,
+        provider: 'claude',
+        prompt: null,
+        server: registrationOf('workshop'),
+        project: null,
+      });
+
+    // A prompt-less spawn and no pane on it: nothing subscribes, so nothing
+    // upstream would ever learn the name for this client but the report.
+    await spawn(2);
+    expect(owner.reply(2)).toMatchObject({ type: 'session-started', sessionId: null });
+
+    machine('workshop').sessionFiles['/volumes/work/claude/sessions/session-fresh.json'] =
+      JSON.stringify({ signal: 'awaiting-input', updatedAt: START, cwd: '/volumes/work' });
+    await runQuietOn(owner, 'workshop', 3);
+    await until(
+      () =>
+        held()
+          .state.snapshot()
+          .stores[0]?.sessions.some((row) => row.ref.sessionId === FRESH) === true,
+      'the provider to name the session',
+    );
+    await settle();
+
+    const namings = (client: Client) =>
+      client.received.filter((frame) => frame.type === 'session-named' && frame.replyTo === 2);
+    expect(namings(owner)).toEqual([
+      { type: 'session-named', replyTo: 2, storeId: WORK, sessionId: FRESH },
+    ]);
+    // The handle is the owner's; on any other socket it names nothing.
+    expect(stranger.received.filter((frame) => frame.type === 'session-named')).toEqual([]);
+
+    // Another scan repeats the start in the report, and that is not news.
+    await spawn(4);
+    expect(owner.reply(4).type).toBe('session-started');
+    await settle();
+    expect(namings(owner)).toHaveLength(1);
+  });
+
   it('refuses a start handle that belongs to another connection', async () => {
     const owner = await attach();
     const stranger = await attach();
