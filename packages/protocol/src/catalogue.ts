@@ -393,3 +393,18 @@ export const catalogueItemSchema = z.object({
   matched: catalogueMatchFieldSchema.nullable(),
 });
 export type CatalogueItem = z.infer<typeof catalogueItemSchema>;
+
+/**
+ * HOME: the project every session without one is filed under.
+ *
+ * A well-known id rather than a generated one, because two programs need to
+ * name it without asking: the hub, which seeds it in migration 0020 and refuses
+ * to rename, move or remove it, and the web, which draws it first and offers it
+ * where a project is chosen. A generated id is never `home`, so the literal
+ * cannot collide with a node somebody made. Parsed rather than cast, so the
+ * brand is earned the way every other node id earns it.
+ */
+export const HOME_PROJECT_ID = nodeIdSchema.parse('home');
+
+/** What HOME is called. The hub refuses a rename, so this is also what it stays. */
+export const HOME_PROJECT_NAME = 'HOME';

@@ -3,6 +3,8 @@ import {
   CATALOGUE_FILTER_MAX_KINDS,
   CATALOGUE_MAX_OPEN_PROJECTS,
   CATALOGUE_SEARCH_MAX_CHARS,
+  HOME_PROJECT_ID,
+  HOME_PROJECT_NAME,
   catalogueFilterSchema,
   catalogueItemSchema,
   catalogueQuerySchema,
@@ -301,5 +303,16 @@ describe('the catalogue frames', () => {
         version: 3,
       }).ok,
     ).toBe(false);
+  });
+});
+
+describe('HOME, the project every session without one is filed under', () => {
+  it('has a well-known id that is a node id like any other', () => {
+    expect(nodeIdSchema.parse(HOME_PROJECT_ID)).toBe('home');
+    expect(HOME_PROJECT_ID).toBe('home');
+  });
+
+  it('is named HOME', () => {
+    expect(HOME_PROJECT_NAME).toBe('HOME');
   });
 });

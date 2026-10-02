@@ -25,6 +25,8 @@ export {
   CATALOGUE_MAX_OPEN_PROJECTS,
   CATALOGUE_PAGE_MAX_LIMIT,
   CATALOGUE_SEARCH_MAX_CHARS,
+  HOME_PROJECT_ID,
+  HOME_PROJECT_NAME,
 } from './catalogue.js';
 export type {
   CatalogueFilter,
