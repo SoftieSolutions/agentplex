@@ -1,5 +1,6 @@
 import {
   CATALOGUE_PAGE_MAX_LIMIT,
+  HOME_PROJECT_ID,
   type CatalogueGroup,
   type CatalogueItem,
   type CatalogueMatchField,
@@ -521,15 +522,15 @@ function listOrder(
   const compare = comparatorFor(query.sort);
   if (query.groupBy === 'none') return [...leaves].sort(compare);
 
-  // Grouped, and the groups are ordered by their label with the unfiled one
-  // last -- always ascending, whatever the item sort says. A heading order that
-  // flipped with the rows under it would move a person's landmarks every time
-  // they changed how the rows are sorted, and the sort is a statement about
-  // rows rather than about where the headings are.
+  // Grouped, and the groups are ordered by their label with HOME's first and
+  // the unfiled one last -- always ascending, whatever the item sort says. A
+  // heading order that flipped with the rows under it would move a person's
+  // landmarks every time they changed how the rows are sorted, and the sort is
+  // a statement about rows rather than about where the headings are.
   const buckets = new Map<string, Resolved[]>();
   for (const item of leaves) {
     const group = groupOf(item, query);
-    const key = group === null ? '' : `${group.unfiled ? '1' : '0'} ${group.label}`;
+    const key = group === null ? '' : `${headingRank(group, query)} ${group.label}`;
     const bucket = buckets.get(key);
     if (bucket === undefined) buckets.set(key, [item]);
     else bucket.push(item);
@@ -585,6 +586,8 @@ function treeOrder(
 
   const compare = comparatorFor(query.sort);
   const bySiblings = (left: TreeNode, right: TreeNode): number => {
+    const home = leadsTheRoot(right) - leadsTheRoot(left);
+    if (home !== 0) return home;
     const one = resolved.get(left.id);
     const other = resolved.get(right.id);
     if (one === undefined || other === undefined) return 0;
@@ -651,6 +654,32 @@ function reachOf(
   if (openProjects === null) return 'whole';
   if (node.kind !== PROJECT_KIND) return node.parentId === null ? 'none' : 'whole';
   return openProjects.includes(node.id) ? 'whole' : 'row';
+}
+
+/**
+ * 1 for HOME at the root, 0 for every other node.
+ *
+ * HOME is first at the root whatever the siblings are sorted by and in either
+ * direction, because it is where everything without a project goes: a place
+ * that moved every time the sort changed would be one nobody could find by
+ * where it is. Outside the comparator, so the direction never flips it.
+ */
+function leadsTheRoot(node: TreeNode): number {
+  return node.parentId === null && node.id === HOME_PROJECT_ID ? 1 : 0;
+}
+
+/**
+ * Where a heading sorts among the others: HOME's first, then every other
+ * project by label, then the unfiled one.
+ *
+ * HOME's first for the reason `leadsTheRoot` gives, and a label alone would not
+ * put it there: labels compare as bytes, so a project named with a capital
+ * before H would come ahead of it. Only when grouping by project, so a server
+ * whose registration id happened to be `home` leads nothing.
+ */
+function headingRank(group: CatalogueGroup, query: CatalogueQuery): string {
+  if (group.unfiled) return '2';
+  return query.groupBy === 'project' && group.key === HOME_PROJECT_ID ? '0' : '1';
 }
 
 /**

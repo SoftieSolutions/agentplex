@@ -1,4 +1,10 @@
-import type { NodeId, SessionHolder, SessionRef, StoreId } from '@agentplex/protocol';
+import {
+  HOME_PROJECT_ID,
+  type NodeId,
+  type SessionHolder,
+  type SessionRef,
+  type StoreId,
+} from '@agentplex/protocol';
 import type { Clock, IdGenerator, Logger } from '@agentplex/node-shared';
 import type { Database, Queryable } from '../db/database.js';
 import type {
@@ -109,6 +115,8 @@ export function createTreeMutations({
       // length: a name of spaces is a thing to say to a person, and refusing
       // the frame would be hanging up on them instead.
       if (trimmed === '') return refused('a node needs a name');
+      const fixed = pinned(nodeId, 'rename');
+      if (fixed !== null) return fixed;
 
       const renamed = await renameNode(database, nodeId, trimmed);
       if (renamed === null) return refused(NO_SUCH_NODE);
@@ -117,6 +125,8 @@ export function createTreeMutations({
     },
 
     async move(nodeId: NodeId, placement: NodePlacementRequest): Promise<TreeChanged> {
+      const fixed = pinned(nodeId, 'move');
+      if (fixed !== null) return fixed;
       const node = await findNode(database, nodeId);
       if (node === null) return refused(NO_SUCH_NODE);
 
@@ -134,6 +144,8 @@ export function createTreeMutations({
     },
 
     async remove(nodeId: NodeId): Promise<TreeChanged> {
+      const fixed = pinned(nodeId, 'remove');
+      if (fixed !== null) return fixed;
       const node = await findNode(database, nodeId);
       if (node === null) return refused(NO_SUCH_NODE);
 
@@ -195,6 +207,32 @@ const NO_SUCH_NODE = 'this hub has no node by that id';
  */
 function refused(problem: string, holder: SessionHolder | null = null): TreeRefusal {
   return { ok: false, code: 'refused', problem, holder };
+}
+
+/**
+ * Why HOME will not take this act, or `null` for every other node.
+ *
+ * Checked against the well-known id and not a column, because one node is
+ * pinned and the schema has no other way to say which. Asked before anything
+ * else is, so that HOME is refused in its own words rather than in whichever
+ * rule happened to run first. The removal is the one that matters most: HOME
+ * holds every session without a project, and the cascade would take all of them
+ * with it.
+ *
+ * Every move is refused, the reorder along the top level included: HOME sits
+ * first among the projects, and a move that kept it at the top level but not
+ * first would still be the one change it does not take.
+ */
+function pinned(nodeId: NodeId, act: 'rename' | 'move' | 'remove'): TreeRefusal | null {
+  if (nodeId !== HOME_PROJECT_ID) return null;
+  switch (act) {
+    case 'rename':
+      return refused('HOME is where every session without a project goes, so its name stays HOME');
+    case 'move':
+      return refused('HOME stays at the top level');
+    case 'remove':
+      return refused('HOME holds every session without a project, so it cannot be removed');
+  }
 }
 
 /**

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
   graphDocumentSchema,
   graphNodeIdSchema,
   graphRunIdSchema,
@@ -302,7 +303,7 @@ describe('graph runs', () => {
   });
 
   beforeEach(async () => {
-    await db().query('DELETE FROM nodes');
+    await db().query('DELETE FROM nodes WHERE id <> ?', [HOME_PROJECT_ID]);
     now = 1_756_000_000_000;
     minted = 0;
     await makeProject();

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { nodeIdSchema } from '@agentplex/protocol';
+import { HOME_PROJECT_ID, nodeIdSchema } from '@agentplex/protocol';
 import { createLogger } from '@agentplex/node-shared';
 import type { Database } from '../db/database.js';
 import { openMigratedSchema, type MigratedSchema } from '../db/test-migrated-schema.js';
@@ -74,7 +74,7 @@ describe('making a project', () => {
   });
 
   beforeEach(async () => {
-    await db().query('DELETE FROM nodes');
+    await db().query('DELETE FROM nodes WHERE id <> ?', [HOME_PROJECT_ID]);
     minted = 0;
   });
 
@@ -104,10 +104,12 @@ describe('making a project', () => {
     await feature.create({ name: 'one', directory: '/srv/one' });
     await feature.create({ name: 'two', directory: '/srv/two' });
 
+    // After HOME, which migration 0020 seeded at the root's position 0.
     const rows = await db().query<{ position: number }>(
-      'SELECT position FROM nodes ORDER BY position',
+      'SELECT position FROM nodes WHERE id <> ? ORDER BY position',
+      [HOME_PROJECT_ID],
     );
-    expect(rows.rows.map((row) => row.position)).toEqual([0, 1]);
+    expect(rows.rows.map((row) => row.position)).toEqual([1, 2]);
   });
 
   it('stores the normalised directory, so one directory is one project', async () => {
@@ -164,7 +166,7 @@ describe('reading a project back', () => {
   });
 
   beforeEach(async () => {
-    await db().query('DELETE FROM nodes');
+    await db().query('DELETE FROM nodes WHERE id <> ?', [HOME_PROJECT_ID]);
     minted = 0;
   });
 
