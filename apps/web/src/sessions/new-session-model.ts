@@ -71,7 +71,10 @@ export interface ServerChoice {
  * row keeps its providers -- that is what keeping it is for -- and none of them
  * is on offer here.
  */
-function liveServers(state: MachineState | null, storeId: StoreId | null): readonly ServerView[] {
+export function liveServers(
+  state: MachineState | null,
+  storeId: StoreId | null,
+): readonly ServerView[] {
   if (state === null || storeId === null) return [];
   const store = state.stores.find((view) => view.storeId === storeId);
   if (store === undefined) return [];
@@ -97,7 +100,7 @@ function liveServers(state: MachineState | null, storeId: StoreId | null): reado
  * A provider a server never mentioned is one it does not run: `undefined` here
  * is a no, and the hub says the same in words.
  */
-function canStart(view: ServerView, provider: Provider): boolean {
+export function canStart(view: ServerView, provider: Provider): boolean {
   const readiness = view.providers.find((entry) => entry.provider === provider);
   return readiness !== undefined && readinessRefusal(readiness) === null;
 }
