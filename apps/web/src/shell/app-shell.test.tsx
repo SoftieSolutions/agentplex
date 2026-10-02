@@ -469,8 +469,9 @@ describe('the shell', () => {
   it('hangs the palette between the mark and the chrome’s own controls', async () => {
     await mount();
 
-    // Mockup 7a's order: the mark, the thing you search with, then how things
-    // are and what the chrome offers at every address.
+    // The chrome's own order: the mark, the thing you search with, then how
+    // things are and what the chrome offers at every address. Where the search
+    // sits along the bar is `top-bar.tsx`'s; this is only the reading order.
     const bar = [
       ...container.querySelectorAll<HTMLElement>(
         'header a[aria-label="agentplex"], header [data-palette-trigger], header [data-attention-bell]',

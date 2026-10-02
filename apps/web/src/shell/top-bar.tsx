@@ -8,9 +8,11 @@ import { withSafeArea } from './safe-area.js';
  * The bar across the top: the brand mark, and the three slots the chrome keeps
  * -- what it searches, how things are, and what it offers at every address.
  *
- * The search bar the mockups put beside the mark is the command palette
- * (AGX-139), and it is a real control now: it opens a dialog that searches the
- * fleet and ends on an address. The bell and the New menu arrive in the actions
+ * The search bar is the command palette (AGX-139), and it is a real control
+ * now: it opens a dialog that searches the fleet and ends on an address. Its
+ * trigger sits on the bar's midline by explicit request, departing from 7a,
+ * which draws it beside the mark: the bar is a grid whose two outer tracks are
+ * sized alike, so the middle one is centred whatever the status words say. The bell and the New menu arrive in the actions
  * slot: the bell has something true to say at every count and a panel that says
  * the rest, and New offers only the kinds that exist rather than a row per kind
  * the mockup drew (AGX-124).
@@ -31,7 +33,11 @@ import { withSafeArea } from './safe-area.js';
 export interface TopBarProps {
   readonly scheme: Scheme;
   /**
-   * The palette's trigger, beside the mark as mockup 7a draws it.
+   * The palette's trigger, centred on the bar's midline by explicit request
+   * rather than beside the mark where mockup 7a draws it.
+   *
+   * It is wrapped in a cell of its own because the palette hands back a
+   * fragment, and a grid would otherwise lay out each of its parts as a cell.
    *
    * A node the shell builds, for the reason the two slots below are: the
    * palette is one control over one fleet, and the phone chrome is handed the
@@ -65,14 +71,29 @@ export interface TopBarProps {
   readonly actions?: ReactNode;
 }
 
+/**
+ * The narrowest the right-hand track gets: the bell, the New menu, and a status
+ * word with the Retry or Settings button it carries when it has one.
+ *
+ * The left track takes the same floor although the mark needs less, because the
+ * two outer tracks being equal is what keeps the trigger on the midline. A floor
+ * on the right alone would let a long status line widen that track and push the
+ * trigger off centre; with both equal, a status line longer than its track is
+ * truncated in place instead.
+ */
+const SIDE_TRACK_FLOOR = 220;
+
+const TOP_BAR_COLUMNS = `minmax(${String(SIDE_TRACK_FLOOR)}px, 1fr) minmax(0, auto) minmax(${String(SIDE_TRACK_FLOOR)}px, 1fr)`;
+
 export function TopBar({ scheme, search, status, actions }: TopBarProps): JSX.Element {
   return (
-    <Group
+    <Box
       component="header"
-      gap={12}
-      align="center"
-      wrap="nowrap"
       style={{
+        display: 'grid',
+        gridTemplateColumns: TOP_BAR_COLUMNS,
+        alignItems: 'center',
+        columnGap: 12,
         borderBottom: `1px solid ${colorForRole('border', scheme)}`,
         flexShrink: 0,
         // The desk chrome is what a notched phone draws in landscape -- it is
@@ -84,7 +105,12 @@ export function TopBar({ scheme, search, status, actions }: TopBarProps): JSX.El
         paddingRight: withSafeArea(14, 'right'),
       }}
     >
-      <UnstyledButton component="a" href={destinationHash('sessions')} aria-label="agentplex">
+      <UnstyledButton
+        component="a"
+        href={destinationHash('sessions')}
+        aria-label="agentplex"
+        style={{ justifySelf: 'start' }}
+      >
         <Group gap={9} align="center" wrap="nowrap">
           <Box
             aria-hidden
@@ -107,12 +133,21 @@ export function TopBar({ scheme, search, status, actions }: TopBarProps): JSX.El
         </Group>
       </UnstyledButton>
 
-      {search}
+      <Box data-search-slot style={{ display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+        {search}
+      </Box>
 
-      <Group gap={8} align="center" wrap="nowrap" style={{ marginLeft: 'auto' }}>
+      {/* The alignment is in the style rather than Group's props: those are a
+          class and CSS variables, and the style is what a test can read. */}
+      <Group
+        gap={8}
+        align="center"
+        wrap="nowrap"
+        style={{ minWidth: 0, justifyContent: 'flex-end' }}
+      >
         {status}
         {actions}
       </Group>
-    </Group>
+    </Box>
   );
 }
