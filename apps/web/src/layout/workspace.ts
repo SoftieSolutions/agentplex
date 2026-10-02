@@ -1,14 +1,14 @@
-import { nodeIdSchema, type NodeId } from '@agentplex/protocol';
+import { CATALOGUE_MAX_OPEN_PROJECTS, nodeIdSchema, type NodeId } from '@agentplex/protocol';
 import { parsePaneLayout, serializePaneLayout, type LayoutTree } from './tree.js';
 
 /**
- * The one blob the hub stores for this user, and the two arrangements in it.
+ * The one blob the hub stores for this user, and the arrangements in it.
  *
  * The hub holds exactly one opaque pane-layout string and parses none of it
  * (`paneLayoutTextSchema`), so a second arrangement to remember — which
- * containers of the catalogue tree are closed — is either a second frame on
- * the protocol or a section of this one. It is a section, for two reasons that
- * both come down to there being one writer:
+ * containers of the catalogue tree are closed, and which projects are open —
+ * is either a second frame on the protocol or a section of this one. Each is a
+ * section, for two reasons that both come down to there being one writer:
  *
  *   * A second opaque blob is a second `*-save` frame, a second stored column
  *     and a second migration, to carry a list of ids that is smaller than the
@@ -32,6 +32,11 @@ const CATALOGUE_SECTION_VERSION = 1;
 
 const CATALOGUE_SECTION_KEY = 'catalogue';
 
+/** The projects section's own version, kept apart so either can move alone. */
+const PROJECTS_SECTION_VERSION = 1;
+
+const PROJECTS_SECTION_KEY = 'projects';
+
 /**
  * How many closed containers are remembered.
  *
@@ -52,10 +57,21 @@ export const MAX_REMEMBERED_COLLAPSES = 500;
  * the thing that was just put in it. Collapsing is the deliberate act, so it
  * is the one that is written down; the default is open. Oldest first, so the
  * bound above drops the stalest entry.
+ *
+ * Projects are the opposite, and `expanded` is written down for them. A
+ * project is not a folder somebody just put a thing in: it is the top of the
+ * Projects tab, which draws projects and nothing else at its root, and the
+ * hub draws a project that is not named open as one row (`openProjects` on the
+ * catalogue query). A tab that opened every project by default would ask the
+ * hub for the whole tree and page through all of it to show a list of names,
+ * which is the cost the closed default exists to avoid. So opening one is the
+ * deliberate act here, and the list is bounded by what one query may name,
+ * oldest first for the same reason.
  */
 export interface Workspace {
   readonly panes: LayoutTree;
   readonly collapsed: readonly NodeId[];
+  readonly expanded: readonly NodeId[];
   /** Sections this build did not write and does not read. Kept verbatim. */
   readonly rest: Readonly<Record<string, unknown>>;
 }
@@ -64,17 +80,42 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** One section this build reads and writes: where it lives and what it holds. */
+interface IdSection {
+  readonly key: string;
+  readonly version: number;
+  /** The field of the section that holds the ids. */
+  readonly field: string;
+  readonly bound: number;
+}
+
+const CATALOGUE_SECTION: IdSection = {
+  key: CATALOGUE_SECTION_KEY,
+  version: CATALOGUE_SECTION_VERSION,
+  field: 'collapsed',
+  bound: MAX_REMEMBERED_COLLAPSES,
+};
+
+const PROJECTS_SECTION: IdSection = {
+  key: PROJECTS_SECTION_KEY,
+  version: PROJECTS_SECTION_VERSION,
+  field: 'expanded',
+  bound: CATALOGUE_MAX_OPEN_PROJECTS,
+};
+
+const SECTIONS: readonly IdSection[] = [CATALOGUE_SECTION, PROJECTS_SECTION];
+
 /**
- * The ids in the catalogue section, parsed and never cast.
+ * The ids in a section, parsed and never cast.
  *
  * An entry that is not a node id is dropped and the rest of the list stands:
  * an unreadable item in a listing costs itself, not the listing. A section
  * from a version this build does not know is dropped whole — a `v` it has
  * never seen is the writer saying the shape is not this one.
  */
-function parseCollapsed(raw: unknown): readonly NodeId[] {
-  if (!readableSection(raw)) return [];
-  const listed = raw['collapsed'];
+function parseIds(raw: unknown, section: IdSection): readonly NodeId[] {
+  if (!readableSection(raw, section.version)) return [];
+  const listed = raw[section.field];
   if (!Array.isArray(listed)) return [];
   const ids: NodeId[] = [];
   const seen = new Set<string>();
@@ -84,18 +125,18 @@ function parseCollapsed(raw: unknown): readonly NodeId[] {
     seen.add(parsed.data);
     ids.push(parsed.data);
   }
-  return ids.slice(-MAX_REMEMBERED_COLLAPSES);
+  return ids.slice(-section.bound);
 }
 
-/** Whether a catalogue section is one this build wrote the shape of. */
-function readableSection(raw: unknown): raw is Record<string, unknown> {
-  return isRecord(raw) && raw['v'] === CATALOGUE_SECTION_VERSION;
+/** Whether a section is one this build wrote the shape of, at `version`. */
+function readableSection(raw: unknown, version: number): raw is Record<string, unknown> {
+  return isRecord(raw) && raw['v'] === version;
 }
 
 /**
  * Every top-level key that is neither the envelope's nor this build's.
  *
- * A catalogue section at a version this build has never seen stays here rather
+ * A section of this build's at a version this build has never seen stays here rather
  * than being dropped: it is a newer client's, and passing through it must not
  * be how a person loses it. It is written back verbatim, and overwritten only
  * when this tab has collapsed something of its own to say.
@@ -105,33 +146,36 @@ function restOf(raw: unknown): Readonly<Record<string, unknown>> {
   const rest: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (key === 'v' || key === 'root') continue;
-    if (key === CATALOGUE_SECTION_KEY && readableSection(value)) continue;
+    const ours = SECTIONS.find((section) => section.key === key);
+    if (ours !== undefined && readableSection(value, ours.version)) continue;
     rest[key] = value;
   }
   return rest;
 }
 
 /**
- * Whatever the hub answered, as the two arrangements and the remainder.
+ * Whatever the hub answered, as the arrangements and the remainder.
  *
  * The panes go through `parsePaneLayout`, which already states what characters
  * that are not a layout at all mean; everything this adds degrades the same
  * way, to the empty answer, because a blob with no readable catalogue section
- * in it is a tab that has collapsed nothing.
+ * in it is a tab that has collapsed nothing, and one with no readable projects
+ * section has opened nothing.
  */
 export function parseWorkspace(text: string | null): Workspace {
   const panes = parsePaneLayout(text);
-  if (text === null) return { panes, collapsed: [], rest: {} };
+  if (text === null) return { panes, collapsed: [], expanded: [], rest: {} };
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch {
-    return { panes, collapsed: [], rest: {} };
+    return { panes, collapsed: [], expanded: [], rest: {} };
   }
-  if (!isRecord(raw)) return { panes, collapsed: [], rest: {} };
+  if (!isRecord(raw)) return { panes, collapsed: [], expanded: [], rest: {} };
   return {
     panes,
-    collapsed: parseCollapsed(raw[CATALOGUE_SECTION_KEY]),
+    collapsed: parseIds(raw[CATALOGUE_SECTION_KEY], CATALOGUE_SECTION),
+    expanded: parseIds(raw[PROJECTS_SECTION_KEY], PROJECTS_SECTION),
     rest: restOf(raw),
   };
 }
@@ -139,17 +183,26 @@ export function parseWorkspace(text: string | null): Workspace {
 /**
  * The characters a save carries.
  *
- * The catalogue section is written only when there is something in it, so a
- * tab that has collapsed nothing saves exactly the bytes this build saved
- * before the section existed. That is not tidiness: it means adding the
+ * Each section is written only when there is something in it, so a tab that
+ * has collapsed and opened nothing saves exactly the bytes this build saved
+ * before either section existed. That is not tidiness: it means adding the
  * section changed no stored blob that nobody has used it in, and a downgrade
  * to the build before it reads those blobs unchanged.
  */
 export function serializeWorkspace(workspace: Workspace): string {
-  const collapsed = workspace.collapsed.slice(-MAX_REMEMBERED_COLLAPSES);
   const sections: Record<string, unknown> = { ...workspace.rest };
-  if (collapsed.length > 0) {
-    sections[CATALOGUE_SECTION_KEY] = { v: CATALOGUE_SECTION_VERSION, collapsed };
-  }
+  writeIds(sections, CATALOGUE_SECTION, workspace.collapsed);
+  writeIds(sections, PROJECTS_SECTION, workspace.expanded);
   return serializePaneLayout(workspace.panes, sections);
+}
+
+/** A section's ids, bounded, written over the key only when there are any. */
+function writeIds(
+  sections: Record<string, unknown>,
+  section: IdSection,
+  ids: readonly NodeId[],
+): void {
+  const bounded = ids.slice(-section.bound);
+  if (bounded.length === 0) return;
+  sections[section.key] = { v: section.version, [section.field]: bounded };
 }

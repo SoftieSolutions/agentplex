@@ -1,4 +1,9 @@
-import type { FrameId, NodeId, SessionRef } from '@agentplex/protocol';
+import {
+  CATALOGUE_MAX_OPEN_PROJECTS,
+  type FrameId,
+  type NodeId,
+  type SessionRef,
+} from '@agentplex/protocol';
 import { terminalKey } from '../store/terminals.js';
 import type { StartView } from '../store/views.js';
 import type { Timers } from '../store/timers.js';
@@ -29,7 +34,7 @@ import { MAX_REMEMBERED_COLLAPSES, parseWorkspace, serializeWorkspace } from './
  * The layout as this tab lives with it: an external store, read through
  * `useSyncExternalStore` and never through an effect.
  *
- * Three facts live here and one of them is never saved:
+ * Four facts live here and one of them is never saved:
  *
  *   * the tree — splits, ratios, what each pane shows — which is the layout
  *     and goes to the hub, whole, on every structural change;
@@ -40,6 +45,8 @@ import { MAX_REMEMBERED_COLLAPSES, parseWorkspace, serializeWorkspace } from './
  *     back, so a second writer would write a stale copy of this file's section
  *     over a change made a moment earlier. One store writes the blob;
  *     everything else asks it to;
+ *   * which projects of the Projects tab are open, the opposite list in the
+ *     same blob and here for the same reason;
  *   * focus, which is a fact about this tab. Two tabs on one hub share a
  *     layout and look at different panes of it, so focus is never serialized
  *     and no focus change ever schedules a save. The tests hold that line.
@@ -71,6 +78,13 @@ export interface LayoutSnapshot {
    * tree shows what was just put in it.
    */
   readonly collapsed: readonly NodeId[];
+  /**
+   * The projects this user has opened, oldest first.
+   *
+   * Open and not closed, the other way round from `collapsed`: see
+   * `workspace.ts`. A project nobody has opened is drawn as one row.
+   */
+  readonly expanded: readonly NodeId[];
 }
 
 /** The slice of the hub store the layout needs; `HubStore` satisfies it. */
@@ -155,6 +169,13 @@ export interface LayoutStore {
    * how a person loses one.
    */
   toggleCollapsed(nodeId: NodeId): void;
+  /**
+   * Opens a closed project of the Projects tab, or closes an open one.
+   *
+   * The same rules as `toggleCollapsed`: structural, saved on the same
+   * debounce, and nothing at all before the hub has answered.
+   */
+  toggleExpanded(nodeId: NodeId): void;
 }
 
 const DEFAULT_SAVE_DELAY_MS = 750;
@@ -169,6 +190,7 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     tree: DEFAULT_TREE,
     focus: [],
     collapsed: [],
+    expanded: [],
   };
   /** Sections of the blob this build does not read, kept to be written back. */
   let rest: Readonly<Record<string, unknown>> = {};
@@ -214,7 +236,12 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     dirty = false;
     hub.sendCommand({
       type: 'pane-layout-save',
-      layout: serializeWorkspace({ panes: snapshot.tree, collapsed: snapshot.collapsed, rest }),
+      layout: serializeWorkspace({
+        panes: snapshot.tree,
+        collapsed: snapshot.collapsed,
+        expanded: snapshot.expanded,
+        rest,
+      }),
     });
   }
 
@@ -236,7 +263,13 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     const tree = stored.panes;
     rest = stored.rest;
     const firstPane = panes(tree)[0];
-    update({ loaded: true, tree, focus: firstPane?.path ?? [], collapsed: stored.collapsed });
+    update({
+      loaded: true,
+      tree,
+      focus: firstPane?.path ?? [],
+      collapsed: stored.collapsed,
+      expanded: stored.expanded,
+    });
     const waiting = requested.splice(0, requested.length);
     waiting.forEach((content, at) => {
       show(content);
@@ -406,6 +439,16 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
         ? snapshot.collapsed.filter((id) => id !== nodeId)
         : [...snapshot.collapsed, nodeId].slice(-MAX_REMEMBERED_COLLAPSES);
       structural({ collapsed });
+    },
+
+    toggleExpanded(nodeId: NodeId): void {
+      if (!snapshot.loaded) return;
+      const open = snapshot.expanded.includes(nodeId);
+      // Appended for the reason a collapse is: the bound drops the stalest.
+      const expanded = open
+        ? snapshot.expanded.filter((id) => id !== nodeId)
+        : [...snapshot.expanded, nodeId].slice(-CATALOGUE_MAX_OPEN_PROJECTS);
+      structural({ expanded });
     },
   };
 }

@@ -118,6 +118,7 @@ describe('adopting the hub answer', () => {
       tree: { kind: 'pane', content: { type: 'empty' } },
       focus: [],
       collapsed: [],
+      expanded: [],
     });
   });
 
@@ -310,7 +311,9 @@ describe('what is collapsed', () => {
 
   it('adopts what was stored and saves a collapse on the same debounce', () => {
     const h = harness();
-    h.answer(serializeWorkspace({ panes: DEFAULT_TREE, collapsed: [PROJECT], rest: {} }));
+    h.answer(
+      serializeWorkspace({ panes: DEFAULT_TREE, collapsed: [PROJECT], expanded: [], rest: {} }),
+    );
     expect(h.store.getSnapshot().collapsed).toEqual([PROJECT]);
 
     h.store.toggleCollapsed(FOLDER);
@@ -323,7 +326,14 @@ describe('what is collapsed', () => {
 
   it('opens what was closed, and the save carries the panes with it', () => {
     const h = harness();
-    h.answer(serializeWorkspace({ panes: sessionPane(SESSION), collapsed: [FOLDER], rest: {} }));
+    h.answer(
+      serializeWorkspace({
+        panes: sessionPane(SESSION),
+        collapsed: [FOLDER],
+        expanded: [],
+        rest: {},
+      }),
+    );
     h.store.toggleCollapsed(FOLDER);
     h.timers.fireAll();
 
@@ -355,8 +365,69 @@ describe('what is collapsed', () => {
     h.timers.fireAll();
     expect(h.saves).toHaveLength(0);
 
-    h.answer(serializeWorkspace({ panes: DEFAULT_TREE, collapsed: [PROJECT], rest: {} }));
+    h.answer(
+      serializeWorkspace({ panes: DEFAULT_TREE, collapsed: [PROJECT], expanded: [], rest: {} }),
+    );
     expect(h.store.getSnapshot().collapsed).toEqual([PROJECT]);
+  });
+});
+
+/**
+ * Which projects are open, the opposite list in the same blob.
+ *
+ * The same rules as a collapse, because it is the same kind of fact: the
+ * user's arrangement, written by the one store that writes the blob.
+ */
+describe('what is open', () => {
+  const PROJECT = nodeIdSchema.parse('hub-4');
+  const HOME = nodeIdSchema.parse('home');
+  const FOLDER = nodeIdSchema.parse('hub-5');
+
+  it('adopts what was stored and saves an opening on the same debounce', () => {
+    const h = harness();
+    h.answer(
+      serializeWorkspace({ panes: DEFAULT_TREE, collapsed: [FOLDER], expanded: [HOME], rest: {} }),
+    );
+    expect(h.store.getSnapshot().expanded).toEqual([HOME]);
+
+    h.store.toggleExpanded(PROJECT);
+    expect(h.store.getSnapshot().expanded).toEqual([HOME, PROJECT]);
+    expect(h.saves).toHaveLength(0);
+
+    h.timers.fireAll();
+    const saved = parseWorkspace(h.saves.at(-1) ?? null);
+    expect(saved.expanded).toEqual([HOME, PROJECT]);
+    // The other list in the blob rides along untouched.
+    expect(saved.collapsed).toEqual([FOLDER]);
+  });
+
+  it('closes what was open', () => {
+    const h = harness();
+    h.answer(
+      serializeWorkspace({
+        panes: DEFAULT_TREE,
+        collapsed: [],
+        expanded: [HOME, PROJECT],
+        rest: {},
+      }),
+    );
+    h.store.toggleExpanded(HOME);
+    expect(h.store.getSnapshot().expanded).toEqual([PROJECT]);
+    h.timers.fireAll();
+    expect(parseWorkspace(h.saves.at(-1) ?? null).expanded).toEqual([PROJECT]);
+  });
+
+  it('does nothing before the hub has answered, so a first click cannot outrank the store', () => {
+    const h = harness();
+    h.store.toggleExpanded(PROJECT);
+    expect(h.store.getSnapshot().expanded).toEqual([]);
+    h.timers.fireAll();
+    expect(h.saves).toHaveLength(0);
+
+    h.answer(
+      serializeWorkspace({ panes: DEFAULT_TREE, collapsed: [], expanded: [HOME], rest: {} }),
+    );
+    expect(h.store.getSnapshot().expanded).toEqual([HOME]);
   });
 });
 

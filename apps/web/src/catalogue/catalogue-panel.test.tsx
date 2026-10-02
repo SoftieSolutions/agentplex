@@ -114,7 +114,10 @@ function stateFrom(text: string): MachineState {
 
 /** What the layout store was asked to write, for a test to read back. */
 interface RecordingLayout extends LayoutStore {
+  /** Every container the panel asked to close or open, by `toggleCollapsed`. */
   readonly toggled: readonly NodeId[];
+  /** Every project the panel asked to open or close, by `toggleExpanded`. */
+  readonly opened: readonly NodeId[];
 }
 
 /**
@@ -127,16 +130,22 @@ interface RecordingLayout extends LayoutStore {
  * arrived -- all of which have their own suite, and any of which could hide
  * an ask that this panel should never have made.
  */
-function recordingLayout(collapsed: readonly NodeId[]): RecordingLayout {
+function recordingLayout(
+  collapsed: readonly NodeId[],
+  expanded: readonly NodeId[] = [],
+): RecordingLayout {
   const toggled: NodeId[] = [];
+  const opened: NodeId[] = [];
   const snapshot: LayoutSnapshot = {
     loaded: true,
     tree: DEFAULT_TREE,
     focus: [],
     collapsed,
+    expanded,
   };
   return {
     toggled,
+    opened,
     subscribe: () => () => {},
     getSnapshot: () => snapshot,
     split: () => {},
@@ -149,6 +158,9 @@ function recordingLayout(collapsed: readonly NodeId[]): RecordingLayout {
     focusPane: () => {},
     toggleCollapsed: (nodeId: NodeId) => {
       toggled.push(nodeId);
+    },
+    toggleExpanded: (nodeId: NodeId) => {
+      opened.push(nodeId);
     },
   };
 }
