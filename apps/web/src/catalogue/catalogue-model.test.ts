@@ -18,6 +18,7 @@ import {
 } from '../tree/node-kinds.js';
 import {
   CATALOGUE_PAGE_LIMIT,
+  catalogueNarrowingCount,
   countLabel,
   DEFAULT_SHAPE,
   filterNote,
@@ -38,6 +39,7 @@ import {
   withFilter,
   withGroupBy,
   withSort,
+  withoutNarrowings,
   withView,
   type CataloguePages,
 } from './catalogue-model.js';
@@ -157,6 +159,63 @@ describe('the filter controls', () => {
     const long = 'x'.repeat(500);
     const searched = withFilter(DEFAULT_SHAPE, { field: 'search', value: long });
     expect(searched.filter.search).toHaveLength(200);
+  });
+});
+
+describe('the narrowings a popover counts', () => {
+  it('counts nothing on the default shape', () => {
+    expect(catalogueNarrowingCount(DEFAULT_SHAPE)).toBe(0);
+  });
+
+  it('counts a provider, and a provider with a status', () => {
+    const provider = withFilter(DEFAULT_SHAPE, { field: 'provider', value: 'claude' });
+    expect(catalogueNarrowingCount(provider)).toBe(1);
+
+    const both = withFilter(provider, { field: 'status', value: 'idle' });
+    expect(catalogueNarrowingCount(both)).toBe(2);
+  });
+
+  it('counts neither the machine nor how the answer is laid out', () => {
+    // The machine is the selector's, and a sort, a grouping or a view are an
+    // arrangement of the answer rather than a narrowing of it.
+    const provider = withFilter(DEFAULT_SHAPE, { field: 'provider', value: 'claude' });
+    const reshaped = withView(
+      withGroupBy(
+        withSort(
+          withFilter(provider, { field: 'server', value: 'registration-mbp-robert' }),
+          'updatedAt',
+          'desc',
+        ),
+        'project',
+      ),
+      'list',
+    );
+
+    expect(catalogueNarrowingCount(reshaped)).toBe(1);
+  });
+
+  it('takes the provider and the status away and leaves everything else', () => {
+    const arranged = withView(
+      withGroupBy(
+        withSort(
+          withFilter(DEFAULT_SHAPE, { field: 'server', value: 'registration-mbp-robert' }),
+          'updatedAt',
+          'desc',
+        ),
+        'server',
+      ),
+      'list',
+    );
+    const narrowed = withFilter(withFilter(arranged, { field: 'provider', value: 'codex' }), {
+      field: 'status',
+      value: 'idle',
+    });
+
+    expect(withoutNarrowings(narrowed)).toEqual(arranged);
+  });
+
+  it('leaves the default shape as it was', () => {
+    expect(withoutNarrowings(DEFAULT_SHAPE)).toEqual(DEFAULT_SHAPE);
   });
 });
 
