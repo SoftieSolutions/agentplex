@@ -9,7 +9,7 @@ import {
 import type { HubStore } from '../store/hub-store.js';
 import { Box, Drawer, Group, Popover, Text, UnstyledButton } from '../ui/components.js';
 import { ToneDot } from '../ui/tone-dot.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import type { ShellForm } from './shell-form.js';
 
 /**
@@ -75,7 +75,10 @@ const MARK_INSET: Record<ShellForm, { readonly top: number; readonly right: numb
   phone: { top: 7, right: 9 },
 };
 
-/** The popover's width, as mockup 7b draws the card. */
+/**
+ * The popover's width, as mockup 7b draws the card: inside the border, as the
+ * mock's box model measures it (see `MENU_WIDTH` in new-menu.tsx).
+ */
 export const PANEL_WIDTH = 340;
 
 /** What the panel is, said once, in its heading and in the sheet's own name. */
@@ -184,12 +187,15 @@ export function AttentionBell({ list, store, form, scheme }: AttentionBellProps)
           trapFocus
           returnFocus
           position="bottom-end"
+          // The mock's gap under the bell (7b): the card's top edge at 50px.
+          offset={10}
           shadow="md"
         >
           <Popover.Target>{button}</Popover.Target>
           <Popover.Dropdown
             style={{
               width: PANEL_WIDTH,
+              boxSizing: 'content-box',
               padding: 0,
               overflow: 'hidden',
               borderRadius: 10,
@@ -417,7 +423,7 @@ function PanelHeader({ rows, store, scheme }: PanelHeaderProps): JSX.Element {
         role="status"
         fz={11}
         style={{
-          color: colorForTone('blocked', scheme),
+          color: colorForToneText('blocked', scheme),
           padding: refused === null ? 0 : '0 14px 8px',
         }}
       >

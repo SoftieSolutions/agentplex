@@ -49,9 +49,9 @@ export function TaskBlock({ task, scheme }: TaskBlockProps): JSX.Element {
     <Text
       component="p"
       data-task-prose
+      lh="prose"
       style={{
         margin: 0,
-        lineHeight: 1.5,
         color: colorForRole('textSecondary', scheme),
         // A prompt can carry a URL or a path with no break in it for longer
         // than this column is wide, and the column cannot grow: it is fixed so

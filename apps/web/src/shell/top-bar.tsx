@@ -95,12 +95,15 @@ export function TopBar({ scheme, search, status, actions }: TopBarProps): JSX.El
         alignItems: 'center',
         columnGap: 12,
         borderBottom: `1px solid ${colorForRole('border', scheme)}`,
+        background: colorForRole('chrome', scheme),
         flexShrink: 0,
         // The desk chrome is what a notched phone draws in landscape -- it is
         // wider than the breakpoint -- so this bar is under the cutout there,
         // and the brand mark is the thing it would swallow.
         paddingTop: withSafeArea(8, 'top'),
-        paddingBottom: 8,
+        // One pixel short of the top, so the bar with its hairline is the
+        // mock's 48px (7a): the 32px controls, 15px of air, and the border.
+        paddingBottom: 7,
         paddingLeft: withSafeArea(14, 'left'),
         paddingRight: withSafeArea(14, 'right'),
       }}
@@ -112,22 +115,26 @@ export function TopBar({ scheme, search, status, actions }: TopBarProps): JSX.El
         style={{ justifySelf: 'start' }}
       >
         <Group gap={9} align="center" wrap="nowrap">
+          {/* The brand roles rather than the accent: in light the mock draws
+              an ink square with an amber letter (7b), since the pale light
+              accent would make the mark the faintest thing in the bar. */}
           <Box
             aria-hidden
+            data-brand-mark
             style={{
               width: 24,
               height: 24,
               borderRadius: 6,
               display: 'grid',
               placeItems: 'center',
-              background: colorForRole('accent', scheme),
-              color: colorForRole('onAccent', scheme),
+              background: colorForRole('brand', scheme),
+              color: colorForRole('onBrand', scheme),
               fontWeight: 800,
             }}
           >
             a
           </Box>
-          <Text component="span" fz={14} fw={700} c={colorForRole('text', scheme)}>
+          <Text component="span" fz="lg" fw={700} c={colorForRole('text', scheme)}>
             agentplex
           </Text>
         </Group>

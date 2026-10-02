@@ -10,12 +10,13 @@ import { onboardingVerdict } from './onboarding/onboarding-model.js';
 import { useOnboardingRoute } from './onboarding/onboarding-route.js';
 import { OnboardingScreen } from './onboarding/onboarding-screen.js';
 import { AppShell } from './shell/app-shell.js';
+import { useShellForm } from './shell/shell-form.js';
 import type { HubStore } from './store/hub-store.js';
 import { useHubSnapshot } from './store/use-hub-store.js';
 import { useSessionRoute } from './terminal/session-route.js';
 import { colorSchemeManager } from './ui/color-scheme.js';
 import { MantineProvider } from './ui/components.js';
-import { cssVariablesResolver, theme } from './ui/theme.js';
+import { cssVariablesResolver, phoneTypeRule, theme, themeRules } from './ui/theme.js';
 
 export interface AppProps {
   /**
@@ -61,11 +62,31 @@ export function App({ hub, tokens, dismissal, mock }: AppProps): JSX.Element {
       colorSchemeManager={colorSchemeManager}
       defaultColorScheme="dark"
     >
+      {/* Hoisted to the head and deduplicated by React under its href. */}
+      <style href="agx-theme" precedence="default">
+        {themeRules()}
+      </style>
+      <PhoneType />
       <MockModeProvider mock={mock}>
         <OnboardingGate hub={hub} tokens={tokens} dismissal={dismissal} />
       </MockModeProvider>
     </MantineProvider>
   );
+}
+
+/**
+ * The phone's body size, applied while the shell is in its phone form.
+ *
+ * Driven from the shell's one breakpoint rather than a media query in a
+ * stylesheet, for the reason `shell-form.ts` gives: two spellings of one
+ * breakpoint open a band of widths where the chrome is the phone's and the
+ * type is the desk's. Here rather than in the shell because the wizard is
+ * drawn instead of the shell and is read on the same phone. A `<style>` and
+ * not an effect writing to the document: React renders it and takes it away
+ * when the form changes, and nothing has to remember to undo it.
+ */
+function PhoneType(): JSX.Element | null {
+  return useShellForm() === 'phone' ? <style>{phoneTypeRule()}</style> : null;
 }
 
 /**

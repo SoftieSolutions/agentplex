@@ -10,7 +10,7 @@ import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
-import { colorForTone } from '../ui/tokens.js';
+import { colorForTone, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { SessionCard } from './session-card.js';
 import { listSessions, type SessionListItem } from './session-list-model.js';
 
@@ -214,11 +214,11 @@ describe('a session card holding an open request', () => {
     return listSessions(state);
   }
 
-  async function mountCard(row: SessionListItem): Promise<void> {
+  async function mountCard(row: SessionListItem, scheme: Scheme = 'dark'): Promise<void> {
     await act(() => {
       root = createRoot(container);
       root.render(
-        withProvider(<SessionCard item={row} scheme="dark" now={WAITING_NOW} store={store} />),
+        withProvider(<SessionCard item={row} scheme={scheme} now={WAITING_NOW} store={store} />),
       );
     });
   }
@@ -323,5 +323,20 @@ describe('a session card holding an open request', () => {
     // neither of them the provider's.
     expect(cardText()).toContain('waiting 3m');
     expect(cardText()).not.toContain('6m');
+  });
+
+  it('writes the waiting clock in the text hue, which reads on paper', async () => {
+    await fleet(hubFrames.machineStateApproval);
+    const row = items().find((candidate) => candidate.approval !== null);
+    if (row === undefined) throw new Error('the captured state holds no open request');
+    await mountCard(row, 'light');
+
+    // The needs-you dot is ochre, 2.5:1 on paper; the word beside it is the
+    // text hue for the same tone, which clears AA.
+    const waiting = Array.from(container.querySelectorAll('article span')).find(
+      (span) => span.textContent === 'waiting 3m',
+    );
+    expect(waiting).toBeInstanceOf(HTMLElement);
+    expect((waiting as HTMLElement).style.color).toBe(rgb(colorForToneText('needs-you', 'light')));
   });
 });

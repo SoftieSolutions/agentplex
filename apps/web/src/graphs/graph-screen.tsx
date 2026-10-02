@@ -12,7 +12,7 @@ import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import { GRAPH_KIND, PROJECT_KIND } from '../tree/node-kinds.js';
 import { Box, Button, Group, Menu, Stack, Text, useComputedColorScheme } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { GraphCanvas } from './flow-adapter.js';
 import { addNode, connect, KIND_WORDS, KINDS, type NodeSeed } from './graph-model.js';
 import { createGraphStore } from './graph-store.js';
@@ -257,7 +257,11 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
           </Text>
         ) : null}
         {state.problem === null ? null : (
-          <Text fz={12} style={{ color: colorForTone('blocked', scheme), minWidth: 0 }} truncate>
+          <Text
+            fz={12}
+            style={{ color: colorForToneText('blocked', scheme), minWidth: 0 }}
+            truncate
+          >
             {state.problem}
           </Text>
         )}

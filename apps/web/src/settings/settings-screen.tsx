@@ -22,7 +22,7 @@ import {
 } from '../ui/components.js';
 import { ProviderLine } from '../ui/provider-line.js';
 import { ToneDot } from '../ui/tone-dot.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { useMockSwitch } from '../mock/use-mock-mode.js';
 import { ColorSchemeControl } from './color-scheme-control.js';
 import { DeveloperSection } from './developer-section.js';
@@ -177,7 +177,7 @@ function HubAccessSection({
   return (
     <Stack gap="sm">
       <Title order={4}>Hub access</Title>
-      <Text size="sm" c="dimmed">
+      <Text size="md" lh="prose" c="dimmed">
         The hub token is typed once per device and kept in this browser only. It is exchanged with
         this hub for a connection ticket and sent nowhere else.
       </Text>
@@ -199,23 +199,23 @@ function HubAccessSection({
         )}
       </Group>
       {notice !== null && (
-        <Text size="sm" c="dimmed">
+        <Text size="md" lh="prose" c="dimmed">
           {notice}
         </Text>
       )}
       <Group gap={8} align="center">
         <ToneDot tone={toneForPhase(snapshot.phase)} scheme={scheme} />
-        <Text size="sm" ff="monospace">
+        <Text size="md" ff="monospace">
           {phaseWords(snapshot)}
         </Text>
       </Group>
       {snapshot.problem !== null && (
-        <Text size="sm" style={{ color: colorForTone('blocked', scheme) }}>
+        <Text size="md" style={{ color: colorForToneText('blocked', scheme) }}>
           {snapshot.problem}
         </Text>
       )}
       {refused !== null && (
-        <Text size="sm" style={{ color: colorForTone('blocked', scheme) }}>
+        <Text size="md" style={{ color: colorForToneText('blocked', scheme) }}>
           The hub refused the last request: {refused.message}
         </Text>
       )}
@@ -225,7 +225,7 @@ function HubAccessSection({
           adding a machine already is, and it is an anchor to the address
           rather than a button toggling state: the wizard has one address, and
           a link to it can be bookmarked, opened in a tab, and read aloud. */}
-      <Anchor href={ONBOARDING_HASH} size="sm">
+      <Anchor href={ONBOARDING_HASH} size="md">
         Open the first-run guide
       </Anchor>
     </Stack>
@@ -246,7 +246,7 @@ function PairedServersSection({
     <Stack gap="sm">
       <Title order={4}>Paired servers</Title>
       {snapshot.machineState === null ? (
-        <Text size="sm" c="dimmed">
+        <Text size="md" lh="prose" c="dimmed">
           Nothing to list yet — the hub&apos;s first state has not arrived.
         </Text>
       ) : rows.length === 0 ? (
@@ -291,11 +291,11 @@ function PairedServersSection({
 function NoServersPaired({ scheme }: { readonly scheme: Scheme }): JSX.Element {
   return (
     <Stack gap={4}>
-      <Text size="sm" c="dimmed">
+      <Text size="md" lh="prose" c="dimmed">
         No servers are paired with this hub, so it has nothing to run a session on and no store to
         read.
       </Text>
-      <Text size="sm" c="dimmed">
+      <Text size="md" lh="prose" c="dimmed">
         Pair one above. A server is the machine that holds the sessions:{' '}
         <Mono scheme={scheme}>install.sh --role=server</Mono> puts one there and hands over to{' '}
         <Mono scheme={scheme}>agentplex setup</Mono>, which reports an identity file on that machine
@@ -315,7 +315,7 @@ function Mono({
   readonly children: string;
 }): JSX.Element {
   return (
-    <Text component="span" size="sm" ff="monospace" c={colorForRole('text', scheme)}>
+    <Text component="span" size="md" ff="monospace" c={colorForRole('text', scheme)}>
       {children}
     </Text>
   );
@@ -357,23 +357,23 @@ function ServerRow({
         <ToneDot tone={row.tone} scheme={scheme} />
         <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
           <Group gap={8}>
-            <Text size="sm" fw={600}>
+            <Text size="md" fw={600}>
               {row.label}
             </Text>
-            <Text size="xs" ff="monospace" c="dimmed">
+            <Text size="sm" ff="monospace" c="dimmed">
               {row.serverId === null ? 'identity not yet confirmed' : row.serverId}
             </Text>
           </Group>
-          <Text size="xs" ff="monospace" c="dimmed">
+          <Text size="sm" ff="monospace" c="dimmed">
             {row.address}
           </Text>
-          <Text size="xs" ff="monospace" c="dimmed">
+          <Text size="sm" ff="monospace" c="dimmed">
             {row.phase}
             {row.stores.length > 0 &&
               ` · ${String(row.stores.length)} store${row.stores.length === 1 ? '' : 's'}`}
           </Text>
           {row.problem !== null && (
-            <Text size="xs" style={{ color: colorForTone('blocked', scheme) }}>
+            <Text size="sm" style={{ color: colorForToneText('blocked', scheme) }}>
               {row.problem}
             </Text>
           )}
@@ -381,7 +381,7 @@ function ServerRow({
             <ProviderLine key={provider.name} provider={provider} scheme={scheme} />
           ))}
           {refusal !== null && (
-            <Text size="xs" style={{ color: colorForTone('blocked', scheme) }}>
+            <Text size="sm" style={{ color: colorForToneText('blocked', scheme) }}>
               {refusal}
             </Text>
           )}

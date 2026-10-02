@@ -4,7 +4,13 @@ import { ageLabel } from '../sessions/session-list-model.js';
 import { Group, Paper, Stack, Text } from '../ui/components.js';
 import { ProviderLine } from '../ui/provider-line.js';
 import { ToneDot } from '../ui/tone-dot.js';
-import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
+import {
+  colorForRole,
+  colorForTone,
+  colorForToneText,
+  type Scheme,
+  type Tone,
+} from '../ui/tokens.js';
 import { AdoptedSessions } from './adopted-sessions.js';
 import type { AdoptedSession } from './adopted-sessions-model.js';
 import type { PairProgress } from './pair-progress-model.js';
@@ -68,7 +74,7 @@ export function MachineCard({
          a card with a name and an address on it would be this screen showing
          somebody something the hub has not said. */
       return (
-        <Text fz={14} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+        <Text fz={14} lh="prose" c={colorForRole('textSecondary', scheme)}>
           Pairing recorded; the hub dials it from here.
         </Text>
       );
@@ -102,11 +108,11 @@ export function MachineCard({
             below.
           </Sentence>
           <Stack gap={4}>
-            <Text size="xs" ff="monospace" c="dimmed">
+            <Text size="sm" ff="monospace" c="dimmed">
               {storeWords(progress.stores)}
             </Text>
             {progress.providers.length === 0 ? (
-              <Text size="xs" ff="monospace" c="dimmed">
+              <Text size="sm" ff="monospace" c="dimmed">
                 no agents reported
               </Text>
             ) : (
@@ -138,7 +144,7 @@ export function MachineCard({
         <CardFrame tone="blocked" scheme={scheme} headline={`${progress.label} ${progress.words}`}>
           <DetailLine scheme={scheme} text={progress.address} />
           {progress.problem !== null && (
-            <Text fz={13} lh={1.6} style={{ color: colorForTone('blocked', scheme) }}>
+            <Text fz={13} lh="prose" style={{ color: colorForToneText('blocked', scheme) }}>
               {progress.problem}
             </Text>
           )}
@@ -226,7 +232,7 @@ function DetailLine({
   readonly text: string;
 }): JSX.Element {
   return (
-    <Text size="xs" ff="monospace" c={colorForRole('textMuted', scheme)}>
+    <Text size="sm" ff="monospace" c={colorForRole('textMuted', scheme)}>
       {text}
     </Text>
   );
@@ -241,7 +247,7 @@ function Sentence({
   readonly children: ReactNode;
 }): JSX.Element {
   return (
-    <Text fz={13} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+    <Text fz={13} lh="prose" c={colorForRole('textSecondary', scheme)}>
       {children}
     </Text>
   );

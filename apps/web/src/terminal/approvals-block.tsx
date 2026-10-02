@@ -14,7 +14,7 @@ import type { HubStore } from '../store/hub-store.js';
 import type { ApprovalPolicyView } from '../store/views.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Button, Group, Stack, Text } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 
 /**
  * The APPROVALS block of the context panel (mockups 7c and 7d): not the
@@ -234,7 +234,9 @@ export function ApprovalsBlock({ project, store, scheme }: ApprovalsBlockProps):
         fz={11}
         style={{
           color:
-            refused === null ? colorForRole('textMuted', scheme) : colorForTone('blocked', scheme),
+            refused === null
+              ? colorForRole('textMuted', scheme)
+              : colorForToneText('blocked', scheme),
         }}
       >
         {refused ?? ''}

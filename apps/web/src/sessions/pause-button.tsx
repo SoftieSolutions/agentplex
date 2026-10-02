@@ -3,7 +3,7 @@ import type { FrameId, SessionHolder, SessionRef } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { shallowEqual, useHubSelector } from '../store/use-hub-store.js';
 import { Button, Group, Text } from '../ui/components.js';
-import { colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForToneText, type Scheme } from '../ui/tokens.js';
 import {
   offersPause,
   offersResume,
@@ -93,12 +93,12 @@ export function PauseButton({
       {note === null ? null : (
         // The honest word for the interval between asking and the boundary:
         // the agent is still working, and its keyboard is still open.
-        <Text fz={11} role="status" style={{ color: colorForTone('paused', scheme) }}>
+        <Text fz={11} role="status" style={{ color: colorForToneText('paused', scheme) }}>
           {note}
         </Text>
       )}
       {refused === null ? null : (
-        <Text fz={11} role="status" style={{ color: colorForTone('blocked', scheme) }}>
+        <Text fz={11} role="status" style={{ color: colorForToneText('blocked', scheme) }}>
           {refused}
         </Text>
       )}

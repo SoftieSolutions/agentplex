@@ -1,7 +1,7 @@
 import { useState, type JSX } from 'react';
 import type { GraphDocument, GraphSimulatedStep, RouteInput } from '@agentplex/protocol';
 import { Box, Button, CloseButton, Group, Stack, Text, Textarea } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForTone, colorForToneText, type Scheme } from '../ui/tokens.js';
 import {
   parseSimulateInput,
   sampleInputText,
@@ -104,7 +104,11 @@ export function SimulatePanel({
           onChange={(event) => setText(event.currentTarget.value)}
         />
         {parsed.ok ? null : (
-          <Text data-simulate-refusal fz={11} style={{ color: colorForTone('blocked', scheme) }}>
+          <Text
+            data-simulate-refusal
+            fz={11}
+            style={{ color: colorForToneText('blocked', scheme) }}
+          >
             {parsed.problem}
           </Text>
         )}
@@ -143,7 +147,7 @@ export function SimulatePanel({
               color:
                 simulation.reason === null
                   ? colorForRole('text', scheme)
-                  : colorForTone('blocked', scheme),
+                  : colorForToneText('blocked', scheme),
             }}
           >
             {simulationSummary(simulation.path, simulation.reason)}

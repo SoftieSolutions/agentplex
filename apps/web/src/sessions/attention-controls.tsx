@@ -4,7 +4,7 @@ import type { HubCommand } from '../store/commands.js';
 import type { HubStore } from '../store/hub-store.js';
 import { shallowEqual, useHubSelector } from '../store/use-hub-store.js';
 import { Button, Group, Text } from '../ui/components.js';
-import { colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForToneText, type Scheme } from '../ui/tokens.js';
 import {
   acknowledgeCommand,
   attentionFollowUp,
@@ -108,7 +108,7 @@ export function AttentionControls({
       {refused === null ? null : (
         // Beside the buttons and not in place of them: nothing changed, and
         // the sentence is why this attempt was not what changed it.
-        <Text fz={11} role="status" style={{ color: colorForTone('blocked', scheme) }}>
+        <Text fz={11} role="status" style={{ color: colorForToneText('blocked', scheme) }}>
           {refused}
         </Text>
       )}

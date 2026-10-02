@@ -4,7 +4,7 @@ import type { CommandOutcome } from '../store/commands.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Button, Group, Menu, Modal, Stack, Text, TextInput } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import {
   buildMove,
   buildRemove,
@@ -148,7 +148,7 @@ export function NodeMenu({
         centered
       >
         <Stack gap="sm">
-          <Text fz={13} style={{ color: colorForTone('blocked', scheme) }}>
+          <Text fz={13} style={{ color: colorForToneText('blocked', scheme) }}>
             {refused?.words ?? rejected}
           </Text>
           {stoppable === null || anchor === null ? null : (

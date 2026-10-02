@@ -2,6 +2,7 @@ import type { CSSProperties, JSX, ReactNode } from 'react';
 
 import type { ShellForm } from '../shell/shell-form.js';
 import { Box, Stack, Text } from '../ui/components.js';
+import { SECTION_LABEL } from '../ui/theme.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 
 /**
@@ -83,14 +84,7 @@ export interface ContextPanelProps {
  * component body because it needs nothing from it.
  */
 function headingStyle(scheme: Scheme): CSSProperties {
-  return {
-    fontFamily: 'var(--mantine-font-family-monospace)',
-    fontSize: 9,
-    fontWeight: 600,
-    letterSpacing: '0.08em',
-    textTransform: 'uppercase',
-    color: colorForRole('textMuted', scheme),
-  };
+  return { ...SECTION_LABEL, color: colorForRole('textMuted', scheme) };
 }
 
 export function ContextPanel({ blocks, form, scheme }: ContextPanelProps): JSX.Element | null {

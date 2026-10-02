@@ -215,6 +215,17 @@ describe('the onboarding wizard', () => {
     expect(container.textContent).toContain('Every agent session, every machine, one place.');
   });
 
+  it('sets the sentence as mock 7f does: 26px, 800, 1.15, tracked in by a hundredth', async () => {
+    await mount();
+
+    const heading = container.querySelector<HTMLElement>('h1');
+    expect(heading?.textContent).toBe('Every agent session, every machine, one place.');
+    expect(heading?.style.fontSize).toBe('var(--mantine-font-size-display)');
+    expect(heading?.style.fontWeight).toBe('800');
+    expect(heading?.style.lineHeight).toBe('1.15');
+    expect(heading?.style.letterSpacing).toBe('-0.01em');
+  });
+
   it('names both steps, in the order they have to happen', async () => {
     await mount();
 

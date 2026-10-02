@@ -17,6 +17,7 @@ import { hubFrames } from './store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from './store/hub-store.js';
 import { createFakeTimers } from './store/timers.js';
 import { sessionHash } from './terminal/session-route.js';
+import { phoneTypeRule, themeRules } from './ui/theme.js';
 
 /**
  * The page as the user meets it: one hub store, built the way `main.tsx`
@@ -351,5 +352,44 @@ describe('the page', () => {
 
     expect(text()).not.toContain(HERO);
     expect(shellIsDrawn()).toBe(true);
+  });
+  it('carries the theme rules Mantine has no variable for, once', async () => {
+    const page = buildPage();
+    page.tokens.write(STORED_TOKEN);
+    await mount(page);
+
+    const carried = Array.from(document.querySelectorAll('style')).filter(
+      (style) => style.textContent === themeRules(),
+    );
+    expect(carried).toHaveLength(1);
+  });
+
+  /** Whether the page carries the rule that sets the body at the phone size. */
+  function phoneTypeApplied(): boolean {
+    return Array.from(document.querySelectorAll('style')).some(
+      (style) => style.textContent === phoneTypeRule(),
+    );
+  }
+
+  it('sets the body a size up while the shell is in its phone form, and only then', async () => {
+    const wide = window.innerWidth;
+    try {
+      window.innerWidth = 390;
+      const page = buildPage();
+      page.tokens.write(STORED_TOKEN);
+      await mount(page);
+      await hubAnswers(page, hubFrames.machineStateWithServer);
+      expect(phoneTypeApplied()).toBe(true);
+
+      // Crossing the breakpoint takes the rule away without a remount: the
+      // form is read from the window as an external store.
+      window.innerWidth = 1024;
+      await act(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+      expect(phoneTypeApplied()).toBe(false);
+    } finally {
+      window.innerWidth = wide;
+    }
   });
 });

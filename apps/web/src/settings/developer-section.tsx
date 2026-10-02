@@ -25,11 +25,11 @@ export function DeveloperSection({ mock }: { readonly mock: MockSwitch }): JSX.E
         checked={on}
         onChange={(event) => setRefused(!mock.set(event.currentTarget.checked))}
       />
-      <Text size="sm" c="dimmed">
+      <Text size="md" lh="prose" c="dimmed">
         Shows sample data for features that have no backend yet. Kept on this device only.
       </Text>
       {refused && (
-        <Text size="sm" c="dimmed">
+        <Text size="md" lh="prose" c="dimmed">
           This browser refused to keep it, so it holds for this page only.
         </Text>
       )}

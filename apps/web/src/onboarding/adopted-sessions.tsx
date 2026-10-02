@@ -61,14 +61,14 @@ export function AdoptedSessions({
   if (sessions.length === 0) {
     return (
       <Stack gap={8} align="flex-start">
-        <Text fz={13} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+        <Text fz={13} lh="prose" c={colorForRole('textSecondary', scheme)}>
           No agent sessions were found on {label} yet.
         </Text>
         {/* Where to go, rather than what went wrong. An empty store on a
             machine that has just been installed is the ordinary case, and a
             first-run screen that reads like a failure here sends somebody
             hunting for a fault that is not there. */}
-        <Text fz={13} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+        <Text fz={13} lh="prose" c={colorForRole('textSecondary', scheme)}>
           Start one from the session list and it appears here on its own: that machine reports what
           turns up in the stores it watches.
         </Text>
@@ -81,7 +81,7 @@ export function AdoptedSessions({
 
   return (
     <Stack gap={8}>
-      <Text fz={13} lh={1.6} c={colorForRole('textSecondary', scheme)}>
+      <Text fz={13} lh="prose" c={colorForRole('textSecondary', scheme)}>
         {foundWords(sessions.length, label)} Nothing to confirm; this hub already has them.
       </Text>
       <Stack gap={6}>

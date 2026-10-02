@@ -6,7 +6,7 @@ import { browserTimers } from '../store/timers.js';
 import { useHubLayout } from '../store/use-hub-store.js';
 import { createShortcutRegistry, type ShortcutRegistry } from '../terminal/shortcuts.js';
 import { Box, Button, Group, Stack, Text, useComputedColorScheme } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForTone, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { createDocEditorStore, type DocEditorStore } from './doc-editor-store.js';
 import { documentName } from './doc-rows.js';
 import { editorWords, isDirty } from './editor-model.js';
@@ -145,7 +145,7 @@ export function DocPane({ nodeId, store: hub, now = Date.now }: DocPaneProps): J
           fz={11}
           px={18}
           py={6}
-          style={{ borderTop: border, color: colorForTone('blocked', scheme) }}
+          style={{ borderTop: border, color: colorForToneText('blocked', scheme) }}
         >
           {state.refusal}
         </Text>

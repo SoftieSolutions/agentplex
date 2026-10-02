@@ -25,7 +25,7 @@ import {
   type GraphNodeKind,
   type ServerRegistrationId,
 } from '@agentplex/protocol';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForTone, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { KIND_WORDS, moveNode, nodeSubtitle, zoomLabel, type GraphEdit } from './graph-model.js';
 
 /**
@@ -219,7 +219,7 @@ function CardNodeView({ id, data, selected }: NodeProps<CardNode>): JSX.Element 
               fontSize: 10,
               letterSpacing: 0,
               fontWeight: 500,
-              color: colorForTone('running', scheme),
+              color: colorForToneText('running', scheme),
             }}
           >
             running

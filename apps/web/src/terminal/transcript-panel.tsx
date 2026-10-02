@@ -2,7 +2,7 @@ import type { JSX } from 'react';
 
 import { ActivityWidget } from '../activity/activity-widget.js';
 import { Box, Button, Group, Stack, Text } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import type { TranscriptState } from './transcript-model.js';
 
 /**
@@ -81,7 +81,7 @@ export function TranscriptPanel({
             minWidth: 0,
             color:
               state.tone === 'blocked'
-                ? colorForTone('blocked', scheme)
+                ? colorForToneText('blocked', scheme)
                 : colorForRole('textFaint', scheme),
           }}
         >

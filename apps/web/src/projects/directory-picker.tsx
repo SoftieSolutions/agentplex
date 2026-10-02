@@ -3,7 +3,7 @@ import type { DirectoryEntry, FrameId, ServerRegistrationId } from '@agentplex/p
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Button, Group, Stack, Text, UnstyledButton } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import {
   breadcrumb,
   browseFor,
@@ -126,13 +126,13 @@ export function DirectoryPicker({
       ) : null}
 
       {view.kind === 'refused' ? (
-        <Text fz={13} style={{ color: colorForTone('blocked', scheme) }}>
+        <Text fz={13} style={{ color: colorForToneText('blocked', scheme) }}>
           {view.words}
         </Text>
       ) : null}
 
       {rejected === null ? null : (
-        <Text fz={13} style={{ color: colorForTone('blocked', scheme) }}>
+        <Text fz={13} style={{ color: colorForToneText('blocked', scheme) }}>
           {rejected}
         </Text>
       )}

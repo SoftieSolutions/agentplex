@@ -1,6 +1,6 @@
 import { type JSX } from 'react';
 import { Text } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForToneText, type Scheme } from '../ui/tokens.js';
 import { ageLabel, unseenPrompt, type SessionListItem } from './session-list-model.js';
 
 /**
@@ -47,7 +47,7 @@ export function SessionMetaLine({ item, scheme, now }: SessionMetaLineProps): JS
     <Text fz={11} c={muted} truncate="end" style={{ minWidth: 0 }}>
       {item.provider} {'·'}{' '}
       {unseen ? (
-        <Text component="span" fz={11} c={colorForTone('needs-you', scheme)}>
+        <Text component="span" fz={11} c={colorForToneText('needs-you', scheme)}>
           waiting {waited}
         </Text>
       ) : (
