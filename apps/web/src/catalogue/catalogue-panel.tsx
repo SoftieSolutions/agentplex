@@ -1,13 +1,5 @@
 import { useState, useSyncExternalStore, type JSX } from 'react';
-import type {
-  CatalogueGroupBy,
-  CatalogueSortKey,
-  CatalogueView,
-  Layout,
-  MachineState,
-  NodeId,
-  SortDirection,
-} from '@agentplex/protocol';
+import type { CatalogueView, Layout, MachineState, NodeId } from '@agentplex/protocol';
 import { appLayoutStore } from '../layout/app-layout.js';
 import type { LayoutStore } from '../layout/layout-store.js';
 import type { HubStore } from '../store/hub-store.js';
@@ -19,27 +11,22 @@ import {
   CloseButton,
   Group,
   SegmentedControl,
-  Select,
   Stack,
   Text,
   TextInput,
   Title,
 } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
+import { CatalogueFilters } from './catalogue-filters.js';
 import {
   countLabel,
   filterNote,
-  filterOptions,
   filterTree,
   isNarrowed,
   rowsFor,
   sessionCounts,
   shortMachinesOf,
-  withFilter,
-  withGroupBy,
-  withSort,
   withView,
-  type CatalogueShape,
 } from './catalogue-model.js';
 import { CatalogueRowView } from './catalogue-row.js';
 import { createCatalogueStore, type CatalogueStore } from './catalogue-store.js';
@@ -51,16 +38,18 @@ import { createCatalogueStore, type CatalogueStore } from './catalogue-store.js'
  * A sidebar at desk widths and a tab at phone widths -- the screen that holds
  * it decides which, because that is a fact about the screen and not about the
  * catalogue. Everything the user turns here maps onto a field of the query
- * frame: the view, the grouping, the sort key and direction, and the four
- * narrowings the filter names. Nothing is sorted or grouped in this file; the
- * hub answers one order and this draws it, which is the whole point of
+ * frame: the view on the panel itself, and the grouping, the sort key and
+ * direction and the provider and status narrowings in the popover beside the
+ * filter box (`CatalogueFilters`). Nothing is sorted or grouped in this file;
+ * the hub answers one order and this draws it, which is the whole point of
  * decision 4.
  *
- * The one thing drawn out of less than the hub answered is the tree filter,
- * and it is a second control rather than a second opinion: the search box asks
- * the hub a narrower question over the whole catalogue, and the filter box
- * narrows the page already on screen so that it can say, underneath, how many
- * nodes that took away. `filterTree` in the model argues the division.
+ * The one thing drawn out of less than the hub answered is the tree filter:
+ * the box narrows the page already on screen so that it can say, underneath,
+ * how many nodes that took away. `filterTree` in the model argues it. There is
+ * no catalogue search box beside it any more -- asking the hub a narrower
+ * question over the whole catalogue by name is what the palette does, and two
+ * boxes over one tree were two answers to what somebody meant by typing.
  *
  * No effects. The query goes out because something subscribed -- the store's
  * first subscriber is what asks -- and a change to the catalogue comes back
@@ -89,9 +78,11 @@ export interface CataloguePanelProps {
    * The sidebar's filter row is drawn over whichever tab is showing and is the
    * box for both of them (AGX-255), so on the Projects tab the letters are the
    * row's and this panel draws no box of its own: two boxes over one tree are
-   * two answers to the question of what is typed. Absent is the other
-   * mounting, the phone's Projects destination, where nothing above the panel
-   * draws a row and the panel holds the letters itself.
+   * two answers to the question of what is typed. The popover trigger goes
+   * with the box, since the sidebar's row draws the catalogue's beside its
+   * own. Absent is the other mounting, the phone's Projects destination, where
+   * nothing above the panel draws a row and the panel holds the letters and
+   * draws the trigger itself.
    */
   readonly filter?: string;
 }
@@ -99,18 +90,6 @@ export interface CataloguePanelProps {
 const VIEWS: readonly { readonly value: CatalogueView; readonly label: string }[] = [
   { value: 'tree', label: 'Tree' },
   { value: 'list', label: 'List' },
-];
-
-const GROUPINGS: readonly { readonly value: CatalogueGroupBy; readonly label: string }[] = [
-  { value: 'none', label: 'No grouping' },
-  { value: 'server', label: 'Group by machine' },
-  { value: 'project', label: 'Group by project' },
-];
-
-const SORT_KEYS: readonly { readonly value: CatalogueSortKey; readonly label: string }[] = [
-  { value: 'name', label: 'Name' },
-  { value: 'updatedAt', label: 'Last updated' },
-  { value: 'server', label: 'Machine' },
 ];
 
 /** Everything with a screen's lifetime, built once per mount. */
@@ -179,12 +158,7 @@ export function CataloguePanel({
   const hiding = filtering ? filterNote(filtered, pages.nextCursor === null) : null;
   const counts = sessionCounts(pages);
   const machines = shortMachinesOf(state);
-  const options = filterOptions(state);
   const muted = colorForRole('textMuted', scheme);
-
-  function reshape(next: CatalogueShape, when: 'now' | 'settled' = 'now'): void {
-    held.catalogue.reshape(next, when);
-  }
 
   return (
     <Stack gap={8} style={{ minWidth: 0 }}>
@@ -202,84 +176,8 @@ export function CataloguePanel({
         fullWidth
         aria-label="View"
         value={shape.view}
-        onChange={(value) => reshape(withView(shape, readView(value)))}
+        onChange={(value) => held.catalogue.reshape(withView(shape, readView(value)), 'now')}
         data={[...VIEWS]}
-      />
-
-      <Group gap={6} wrap="wrap">
-        <Select
-          size="xs"
-          aria-label="Sort by"
-          data={[...SORT_KEYS]}
-          value={shape.sort.key}
-          onChange={(value) => reshape(withSort(shape, readSortKey(value), shape.sort.direction))}
-          allowDeselect={false}
-          style={{ flex: 1, minWidth: 120 }}
-        />
-        <Button
-          size="compact-xs"
-          variant="default"
-          aria-label={`Sorted ${shape.sort.direction === 'asc' ? 'ascending' : 'descending'}`}
-          onClick={() => reshape(withSort(shape, shape.sort.key, flip(shape.sort.direction)))}
-        >
-          {shape.sort.direction === 'asc' ? 'A first' : 'Z first'}
-        </Button>
-      </Group>
-
-      {/* Grouping is offered in the list view only. In a tree the containment
-          is the grouping -- the hub labels the items and reorders nothing --
-          so a heading here would be a second arrangement over the one the user
-          made, and the two would disagree about where a thing is. */}
-      {shape.view === 'list' ? (
-        <Select
-          size="xs"
-          aria-label="Group by"
-          data={[...GROUPINGS]}
-          value={shape.groupBy}
-          onChange={(value) => reshape(withGroupBy(shape, readGroupBy(value)))}
-          allowDeselect={false}
-        />
-      ) : null}
-
-      {/* No machine control: the selector above the tabs is the one control
-          for that, because the selection is one fact narrowing this query and
-          the cards beside it at once. See `filterOptions`. */}
-      {options.providers.length === 0 ? null : (
-        <Select
-          size="xs"
-          aria-label="Provider"
-          placeholder="Any provider"
-          data={[...options.providers]}
-          value={shape.filter.provider ?? null}
-          onChange={(value) => reshape(withFilter(shape, { field: 'provider', value }))}
-          clearable
-        />
-      )}
-      {options.statuses.length === 0 ? null : (
-        <Select
-          size="xs"
-          aria-label="Status"
-          placeholder="Any status"
-          data={[...options.statuses]}
-          value={shape.filter.status ?? null}
-          onChange={(value) => reshape(withFilter(shape, { field: 'status', value }))}
-          clearable
-        />
-      )}
-      <TextInput
-        size="xs"
-        aria-label="Search the catalogue"
-        placeholder="Search the catalogue"
-        value={shape.filter.search ?? ''}
-        onChange={(event) =>
-          // The box holds what was typed at once; the query waits for the
-          // burst to settle. A frame per keystroke would have the hub sorting
-          // its catalogue four times for one word.
-          reshape(
-            withFilter(shape, { field: 'search', value: event.currentTarget.value }),
-            'settled',
-          )
-        }
       />
 
       {snapshot.notice === null ? null : (
@@ -293,32 +191,41 @@ export function CataloguePanel({
         </Text>
       )}
 
-      {/* The catalogue's own filter, directly over the rows it narrows, and a
-          separate control from the search box above on purpose. The search
-          asks the hub a narrower question -- over the whole catalogue, and
-          over working directories, session ids and machine names as well as
-          names -- and answers with a page. This narrows the page already on
-          screen, by the name drawn on the row, at the speed of a keystroke,
-          and it is the one that can say what it took away.
+      {/* The catalogue's own filter, directly over the rows it narrows, and
+          the popover holding the rest of the question beside it. The box
+          narrows the page already on screen, by the name drawn on the row, at
+          the speed of a keystroke, and it is the one that can say what it
+          took away; the popover's controls are fields of the query the hub
+          answers.
 
-          Drawn only where nobody above the panel is drawing one: see
-          `filter`. */}
+          Drawn only where nobody above the panel is drawing a row, which is
+          the phone's Projects destination: see `filter`. The store handed down
+          is the held one, because the phone mounts this panel with no
+          `catalogue` prop and builds its own. */}
       {filter === undefined ? (
-        <TextInput
-          size="xs"
-          aria-label="Filter tree"
-          placeholder="Filter tree"
-          value={ownFilter}
-          onChange={(event) => setOwnFilter(event.currentTarget.value)}
-          rightSectionPointerEvents="auto"
-          rightSection={
-            ownFilter === '' ? null : (
-              <CloseButton
-                size="sm"
-                aria-label="Clear the tree filter"
-                onClick={() => setOwnFilter('')}
-              />
-            )
+        <CatalogueFilters
+          catalogue={held.catalogue}
+          state={state}
+          scheme={scheme}
+          box={
+            <TextInput
+              size="xs"
+              aria-label="Filter tree"
+              placeholder="Filter tree"
+              value={ownFilter}
+              onChange={(event) => setOwnFilter(event.currentTarget.value)}
+              style={{ flex: 1, minWidth: 0 }}
+              rightSectionPointerEvents="auto"
+              rightSection={
+                ownFilter === '' ? null : (
+                  <CloseButton
+                    size="sm"
+                    aria-label="Clear the tree filter"
+                    onClick={() => setOwnFilter('')}
+                  />
+                )
+              }
+            />
           }
         />
       ) : null}
@@ -410,24 +317,11 @@ export function CataloguePanel({
 }
 
 /**
- * A control hands back a string, and a string is a claim. Each of these is the
- * parser for one closed set the query frame names: an unreadable value keeps
- * what was there rather than putting a word the hub would refuse on the wire.
+ * A control hands back a string, and a string is a claim. This is the parser
+ * for the closed set the query frame names for a view: an unreadable value
+ * keeps the default rather than putting a word the hub would refuse on the
+ * wire. The popover's parsers are in `catalogue-filters.tsx`.
  */
 function readView(value: string): CatalogueView {
   return value === 'list' ? 'list' : 'tree';
-}
-
-function readGroupBy(value: string | null): CatalogueGroupBy {
-  if (value === 'server' || value === 'project') return value;
-  return 'none';
-}
-
-function readSortKey(value: string | null): CatalogueSortKey {
-  if (value === 'updatedAt' || value === 'server') return value;
-  return 'name';
-}
-
-function flip(direction: SortDirection): SortDirection {
-  return direction === 'asc' ? 'desc' : 'asc';
 }

@@ -244,7 +244,7 @@ export function SessionListScreen({
           label="Filter sessions"
           text={filters.search}
           onText={(text) => filtersStore.set({ search: text })}
-          popover
+          popover="sessions"
           scheme={scheme}
           now={() => moment}
         />

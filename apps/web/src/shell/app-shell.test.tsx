@@ -76,10 +76,8 @@ function installResizeObserver(): void {
  * it is the question in both suites below: the sidebar's on a wide screen, the
  * content region's on a phone, and never both at once.
  */
-function catalogueSearchesIn(container: HTMLElement, region: string): HTMLElement[] {
-  return [
-    ...container.querySelectorAll<HTMLElement>(`${region} [aria-label="Search the catalogue"]`),
-  ];
+function cataloguePanelsIn(container: HTMLElement, region: string): HTMLElement[] {
+  return [...container.querySelectorAll<HTMLElement>(`${region} [aria-label="View"]`)];
 }
 
 /**
@@ -267,8 +265,8 @@ describe('the shell', () => {
     });
   }
 
-  function catalogueSearches(region: string): HTMLElement[] {
-    return catalogueSearchesIn(container, region);
+  function cataloguePanels(region: string): HTMLElement[] {
+    return cataloguePanelsIn(container, region);
   }
 
   /**
@@ -765,8 +763,8 @@ describe('the shell', () => {
 
     await mount();
 
-    expect(catalogueSearches('aside')).toHaveLength(1);
-    expect(catalogueSearches('main')).toHaveLength(0);
+    expect(cataloguePanels('aside')).toHaveLength(1);
+    expect(cataloguePanels('main')).toHaveLength(0);
     expect(container.querySelector('main')?.textContent).toContain('Sessions');
   });
 
@@ -782,7 +780,7 @@ describe('the shell', () => {
     await follow(destinationHash('projects'));
 
     expect(chosenTab()).toBe('projects');
-    expect(catalogueSearches('aside')).toHaveLength(1);
+    expect(cataloguePanels('aside')).toHaveLength(1);
   });
 
   it('lets a person choose the other reading under that same address', async () => {
@@ -871,8 +869,8 @@ describe('the shell on a phone', () => {
     return [...container.querySelectorAll<HTMLAnchorElement>('nav a')];
   }
 
-  function catalogueSearches(region: string): HTMLElement[] {
-    return catalogueSearchesIn(container, region);
+  function cataloguePanels(region: string): HTMLElement[] {
+    return cataloguePanelsIn(container, region);
   }
 
   it('draws the tab bar instead of the sidebar, and one content region', async () => {
@@ -982,7 +980,7 @@ describe('the shell on a phone', () => {
     await mount();
 
     // One tree, in the only place a phone has for one.
-    expect(catalogueSearches('main')).toHaveLength(1);
+    expect(cataloguePanels('main')).toHaveLength(1);
     expect(tabs().find((tab) => tab.getAttribute('aria-current') === 'page')?.textContent).toBe(
       'Projects',
     );

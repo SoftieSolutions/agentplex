@@ -48,13 +48,16 @@ import { SidebarSessions } from './sidebar-sessions.js';
  * the narrowings the popover writes and the cards in the content region read,
  * which is the whole reason that store exists.
  *
- * The popover comes with the Sessions tab and not with the other, which is
- * what mockup 6a draws: the Projects tab gets the box alone. Every narrowing
- * in it narrows sessions, and the tab is independent of the route -- with a
- * session or a document open in the content region there are no cards beside
- * the tree at all -- so on the Projects tab it would be a badge counting rows
- * nobody can see, over a line saying how many sessions are hidden directly
- * above a tree saying how many nodes are.
+ * The popover beside the box is the tab's too. On the Sessions tab it holds
+ * the sessions' narrowings; on the Projects tab it holds the catalogue
+ * query's sort and its provider and status narrowings, which is a departure
+ * from mockup 6a -- that draws the Projects tab with the box alone -- made on
+ * purpose, because those controls otherwise stack as selects above the tree.
+ * Neither tab's popover counts the other's narrowings: the tab is independent
+ * of the route, so with a session or a document open in the content region a
+ * session narrowing counted over the tree would be a badge over rows nobody
+ * can see. Mounting the catalogue's popover with the tab is also what keeps
+ * the catalogue interest to the Projects tab.
  *
  * Nothing above a fleet: with no `MachineState` there is no option to offer,
  * no count to draw and nothing to narrow, so the row is not drawn at all
@@ -145,18 +148,28 @@ export function Sidebar({
         ]}
       />
 
-      {state === null ? null : (
+      {/* Two elements rather than one with its props chosen by a ternary:
+          each tab's popover takes different props, and the union is what
+          keeps a catalogue row from being handed a session clock. */}
+      {state === null ? null : projects ? (
         <SidebarFilter
+          popover="catalogue"
+          catalogue={catalogue}
+          state={state}
+          label="Filter tree"
+          text={treeFilter}
+          onText={setTreeFilter}
+          scheme={scheme}
+        />
+      ) : (
+        <SidebarFilter
+          popover="sessions"
           state={state}
           filters={filters}
           machine={machine}
-          label={projects ? 'Filter tree' : 'Filter sessions'}
-          text={projects ? treeFilter : held.search}
-          onText={(text) => {
-            if (projects) setTreeFilter(text);
-            else filters.set({ search: text });
-          }}
-          popover={!projects}
+          label="Filter sessions"
+          text={held.search}
+          onText={(text) => filters.set({ search: text })}
           scheme={scheme}
           now={() => moment}
         />

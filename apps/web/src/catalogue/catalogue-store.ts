@@ -66,13 +66,17 @@ export interface CatalogueStore {
   /**
    * A control moved: the question changed, and it is asked from the top.
    *
-   * `when` is `'settled'` for the search box and `'now'` for everything else,
-   * and the difference is what a keystroke costs. A select is one act and its
-   * answer is wanted immediately; typing "auth" is four acts that mean one
-   * question, and a frame per keystroke would be four queries the hub sorts
-   * its whole catalogue for, three of whose answers are already stale when
-   * they arrive. The shape itself moves at once either way -- the box holds
-   * what was typed -- so what is debounced is the asking and never the typing.
+   * `when` is `'settled'` for typing and `'now'` for everything else, and the
+   * difference is what a keystroke costs. A select is one act and its answer
+   * is wanted immediately; typing "auth" is four acts that mean one question,
+   * and a frame per keystroke would be four queries the hub sorts its whole
+   * catalogue for, three of whose answers are already stale when they arrive.
+   * The shape itself moves at once either way -- a box holds what was typed --
+   * so what is debounced is the asking and never the typing.
+   *
+   * No web caller sends `'settled'` now: the catalogue search box it was built
+   * for went in AGX-368, and the palette asks its own query. The mode stays
+   * because the rule is this store's and its suite pins it.
    */
   reshape(shape: CatalogueShape, when?: 'now' | 'settled'): void;
   /** "Load more": the next page of the same question, appended. */
@@ -226,8 +230,8 @@ export function createCatalogueStore(dependencies: CatalogueStoreDependencies): 
       cancelPending?.();
       cancelPending = null;
       // The rows already held stay until the answer arrives. A control change
-      // that blanked the list would throw away the scroll position on every
-      // keystroke into the search box.
+      // that blanked the list would throw away the scroll position every time
+      // somebody turned one.
       update({ shape, notice: null });
       if (listeners.size === 0) return;
       if (when === 'settled') {

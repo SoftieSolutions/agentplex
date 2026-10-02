@@ -75,9 +75,10 @@ import { PALETTE_KINDS, type PaletteResult } from './palette-model.js';
 /**
  * How long a burst of typing settles before one query goes out.
  *
- * `catalogue-store.ts`'s number, deliberately the same: the two search boxes
- * are on one screen, and one settling faster than the other would read as one
- * of them being broken.
+ * `catalogue-store.ts`'s settling delay, deliberately the same number: a box
+ * that types a question into the catalogue settles at one speed wherever it
+ * is drawn, or the slower one reads as broken. Since AGX-368 this field is the
+ * only such box on screen.
  */
 export const PALETTE_SEARCH_DELAY_MS = 250;
 
