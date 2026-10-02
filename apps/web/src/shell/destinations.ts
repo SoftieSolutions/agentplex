@@ -28,6 +28,16 @@ import type { ShellForm } from './shell-form.js';
  * A hash is typed, pasted or restored by a browser, so it is parsed and never
  * cast -- anything this file does not recognize is the session list, which is
  * where the app starts.
+ *
+ * Settings is one destination with three addresses under it, one per section
+ * (AGX-388): Connections, Preferences and Developer. They are parsed here
+ * rather than by the settings screen because this is the one parser of the
+ * hash, and the sidebar, the content region and the links into settings all
+ * have to agree on what each address means. `#/settings` itself is Connections,
+ * the first section, so every link written before the sections existed still
+ * lands somewhere. The section addresses are matched exactly, as `#/settings`
+ * always was: a path under it that names no section was never written by this
+ * app, and it is the session list like any other unrecognised address.
  */
 
 /** A place the content region can show, by name. */
@@ -52,7 +62,7 @@ export function destinationHash(destination: Destination): string {
  * it asks this.
  */
 export function parseDestinationHash(hash: string): Destination {
-  if (hash === HASHES.settings) return 'settings';
+  if (hash === HASHES.settings || isSettingsSectionHash(hash)) return 'settings';
   if (hash === HASHES.projects) return 'projects';
   if (hash === HASHES.more) return 'more';
   return 'sessions';
@@ -111,6 +121,68 @@ export const TABS: readonly NavEntry[] = [
   { destination: 'more', label: 'More' },
 ];
 
+/** One section of the settings screen, by name. */
+export type SettingsSection = 'connections' | 'preferences' | 'developer';
+
+/** One choice of the settings section nav, wide or phone. */
+export interface SettingsSectionEntry {
+  readonly section: SettingsSection;
+  readonly label: string;
+}
+
+/**
+ * The settings sections, in the order both forms draw them. Connections first,
+ * because it is what `#/settings` opens on and what every link into settings
+ * from elsewhere in the app is about: a hub or a server that is not there.
+ */
+export const SETTINGS_SECTIONS: readonly SettingsSectionEntry[] = [
+  { section: 'connections', label: 'Connections' },
+  { section: 'preferences', label: 'Preferences' },
+  { section: 'developer', label: 'Developer' },
+];
+
+const SETTINGS_PREFIX = `${HASHES.settings}/`;
+
+export function settingsSectionHash(section: SettingsSection): string {
+  return `${SETTINGS_PREFIX}${section}`;
+}
+
+function isSettingsSectionHash(hash: string): boolean {
+  return SETTINGS_SECTIONS.some(({ section }) => hash === settingsSectionHash(section));
+}
+
+/**
+ * The section a settings address opens on. Anything that names none of the
+ * three -- plain `#/settings` above all -- is Connections, the first one.
+ */
+export function parseSettingsSectionHash(hash: string): SettingsSection {
+  const named = SETTINGS_SECTIONS.find(({ section }) => hash === settingsSectionHash(section));
+  return named === undefined ? 'connections' : named.section;
+}
+
+/**
+ * The sections there is something behind. Developer holds the sample-data
+ * switch and nothing else, so with no switch provided it is not offered: a
+ * choice that opens an empty section is a control wired to nothing.
+ */
+export function settingsSections(hasDeveloper: boolean): readonly SettingsSectionEntry[] {
+  return hasDeveloper
+    ? SETTINGS_SECTIONS
+    : SETTINGS_SECTIONS.filter(({ section }) => section !== 'developer');
+}
+
+/**
+ * The section an address is drawn as: itself, except a Developer address
+ * where no Developer section is offered, which opens Connections rather than
+ * a section with nothing in it.
+ */
+export function resolveSettingsSection(
+  section: SettingsSection,
+  hasDeveloper: boolean,
+): SettingsSection {
+  return section === 'developer' && !hasDeveloper ? 'connections' : section;
+}
+
 function subscribeToHash(listener: () => void): () => void {
   window.addEventListener('hashchange', listener);
   return () => window.removeEventListener('hashchange', listener);
@@ -129,4 +201,14 @@ function readHash(): string {
 export function useDestination(): Destination {
   const hash = useSyncExternalStore(subscribeToHash, readHash);
   return useMemo(() => parseDestinationHash(hash), [hash]);
+}
+
+/**
+ * The settings section the address names, read the way `useDestination` reads
+ * the destination. Meaningful only while that destination is `settings`; under
+ * any other address it is Connections, which nothing draws.
+ */
+export function useSettingsSection(): SettingsSection {
+  const hash = useSyncExternalStore(subscribeToHash, readHash);
+  return useMemo(() => parseSettingsSectionHash(hash), [hash]);
 }
