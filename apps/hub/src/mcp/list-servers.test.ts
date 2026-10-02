@@ -40,6 +40,7 @@ function machine(
     lastConnectedAt: 1_756_000_000_000,
     staleReason: null,
     draining: null,
+    roundTrip: null,
     problem: null,
     ...overrides,
   };

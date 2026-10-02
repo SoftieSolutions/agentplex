@@ -9,6 +9,7 @@ import {
   sessionRefKey,
   storeIdSchema,
   type GraphRunApproval,
+  type MachineLoad,
   type PendingApproval,
   type ServerRegistrationId,
   type SessionDescriptor,
@@ -37,6 +38,13 @@ const START = 1_756_000_000_000;
 
 const logger = createLogger('error', () => {});
 
+/** A load as a server's pong carries it: one real machine's answer. */
+const LOAD: MachineLoad = {
+  cpuCount: 14,
+  cpu: { percent: 31.4, windowMs: 20_000 },
+  loadAverage: [1.49951171875, 3.03271484375, 3.66796875],
+};
+
 function store(id: string): StoreId {
   return storeIdSchema.parse(id);
 }
@@ -64,6 +72,7 @@ function connection(
     problem: null,
     staleReason: phase === 'stale' ? 'unreachable' : null,
     draining: null,
+    roundTrip: null,
     ...overrides,
   };
 }
@@ -605,6 +614,102 @@ describe('the change signal', () => {
       sessions: [session('session-1')],
       reportedAt: START + 30_000,
     });
+
+    expect(seen).toEqual([]);
+  });
+
+  it('tells a subscriber when a heartbeat completes, because the figure is drawn', () => {
+    // The first pong of a connection is the first latency anybody can see.
+    // Left out of the comparison, it would move without any client being told
+    // and every screen would go on drawing no figure at all.
+    const reducer = reduce();
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+
+    const seen: number[] = [];
+    reducer.subscribe((snapshot) => seen.push(snapshot.version));
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        roundTrip: { ms: 12, load: LOAD, measuredAt: START + 20_000 },
+      }),
+    );
+
+    expect(seen).toEqual([2]);
+    expect(reducer.snapshot().servers[0]?.roundTrip).toEqual({
+      ms: 12,
+      load: LOAD,
+      measuredAt: START + 20_000,
+    });
+  });
+
+  it('tells a subscriber about a later heartbeat even when it took just as long', () => {
+    // The moment is compared as well as the figure. A client labels a reading
+    // with its age, and one that was never told of the next pong would call a
+    // live link's latency a minute old.
+    const reducer = reduce();
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        roundTrip: { ms: 12, load: LOAD, measuredAt: START + 20_000 },
+      }),
+    );
+
+    const seen: number[] = [];
+    reducer.subscribe((snapshot) => seen.push(snapshot.version));
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        roundTrip: { ms: 12, load: LOAD, measuredAt: START + 40_000 },
+      }),
+    );
+
+    expect(seen).toEqual([2]);
+  });
+
+  it('tells a subscriber when only the load in a pong changed', () => {
+    const reducer = reduce();
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        roundTrip: { ms: 12, load: LOAD, measuredAt: START + 20_000 },
+      }),
+    );
+
+    const seen: number[] = [];
+    reducer.subscribe((snapshot) => seen.push(snapshot.version));
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        roundTrip: {
+          ms: 12,
+          load: { ...LOAD, cpu: { percent: 88.5, windowMs: 20_000 } },
+          measuredAt: START + 20_000,
+        },
+      }),
+    );
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        roundTrip: { ms: 12, load: null, measuredAt: START + 20_000 },
+      }),
+    );
+
+    expect(seen).toEqual([2, 3]);
+  });
+
+  it('says nothing when the same heartbeat is applied twice', () => {
+    const reducer = reduce();
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        roundTrip: { ms: 12, load: LOAD, measuredAt: START + 20_000 },
+      }),
+    );
+
+    const seen: number[] = [];
+    reducer.subscribe((snapshot) => seen.push(snapshot.version));
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        roundTrip: {
+          ms: 12,
+          load: { ...LOAD, loadAverage: [...(LOAD.loadAverage ?? [0, 0, 0])] },
+          measuredAt: START + 20_000,
+        },
+      }),
+    );
 
     expect(seen).toEqual([]);
   });

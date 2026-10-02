@@ -31,7 +31,11 @@ import {
 } from '../../../apps/hub/src/db/test-migrated-schema.js';
 import { attentionEligibleStores } from '../../../apps/hub/src/servers/attention.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
-import { createServers, type Servers } from '../../../apps/hub/src/servers/servers.js';
+import {
+  createServers,
+  type ServerConnectionReport,
+  type Servers,
+} from '../../../apps/hub/src/servers/servers.js';
 import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
 
@@ -49,7 +53,9 @@ import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-lo
 const logger = createLogger('error', () => {});
 const hubId = 'hub-under-test' as HubId;
 const START = 1_756_000_000_000;
-const clock = { now: () => START };
+/** Still unless a test moves it: a round trip is two readings of this. */
+let now = START;
+const clock = { now: () => now };
 
 let migrated: MigratedSchema | null = null;
 let timers: FakeTimers;
@@ -141,6 +147,9 @@ async function startAll(): Promise<Servers> {
     hubId,
     timers,
     clock,
+    // The same fake as the wall clock: this suite moves time, and steps of the
+    // wall clock alone are `connection-heartbeat.test.ts`'s subject.
+    monotonic: clock.now,
     logger,
     backoff: createExponentialBackoff({ baseMs: 500, maxMs: 8000, random: () => 0 }),
   });
@@ -163,6 +172,7 @@ describe('createServers', () => {
   });
 
   beforeEach(async () => {
+    now = START;
     timers = createFakeTimers();
     machines.clear();
     unreachable.clear();
@@ -237,6 +247,35 @@ describe('createServers', () => {
     await until(() => phaseOf(running, 'box') === 'connected', 'the box to connect');
 
     expect([...attentionEligibleStores(running.snapshot())]).toEqual(['store-b']);
+  });
+
+  it('times each server it holds by its own pong, and publishes none for one it cannot reach', async () => {
+    // The fleet half of the measurement: every connection is timed on its own
+    // heartbeat, and a machine nobody can reach has no figure rather than a
+    // zero -- or, worse, a neighbour's.
+    await register('laptop');
+    await register('box');
+    unreachable.add('laptop.example');
+
+    const running = await startAll();
+    await until(() => phaseOf(running, 'laptop') === 'stale', 'the laptop to go stale');
+    await until(() => phaseOf(running, 'box') === 'connected', 'the box to connect');
+    const box = (): ServerConnectionReport | undefined =>
+      running.snapshot().find((report) => report.label === 'box');
+    expect(box()?.roundTrip).toBeNull();
+
+    // The heartbeat's interval, and the laptop's backoff with it: the retry
+    // dials into the same refusal, which is all it should do.
+    timers.fireAll();
+    now += 42;
+    await until(() => (box()?.roundTrip ?? null) !== null, 'the box to answer a ping');
+
+    expect(box()?.roundTrip).toEqual({
+      ms: 42,
+      load: createFakeMachineLoadReader().read(),
+      measuredAt: START + 42,
+    });
+    expect(running.snapshot().find((report) => report.label === 'laptop')?.roundTrip).toBeNull();
   });
 
   it('picks up a pairing added after it started', async () => {

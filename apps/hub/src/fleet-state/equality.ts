@@ -1,7 +1,9 @@
 import type {
+  MachineLoad,
   PendingApproval,
   ProviderReadiness,
   ServerDraining,
+  ServerRoundTrip,
   SessionDescriptor,
   SessionHold,
 } from '@agentplex/protocol';
@@ -47,6 +49,7 @@ export function sameConnection(
     left.problem === right.problem &&
     left.staleReason === right.staleReason &&
     sameDraining(left.draining, right.draining) &&
+    sameRoundTrip(left.roundTrip, right.roundTrip) &&
     sameProviders(left.providers, right.providers) &&
     left.stores.length === right.stores.length &&
     left.stores.every((storeId, index) => storeId === right.stores[index])
@@ -78,6 +81,43 @@ export function sameDraining(left: ServerDraining | null, right: ServerDraining 
       );
     })
   );
+}
+
+/**
+ * Whether two heartbeats say the same thing.
+ *
+ * All of it, the moment included, and that is a decision with a price. Every
+ * pong now republishes the state to every attached client: once per connected
+ * server per heartbeat interval, which is every 20 s by default. Leaving
+ * `measuredAt` out would buy that back only while the figure and the load held
+ * perfectly still -- rare for a live link, and exactly the case where a client
+ * would then label a current reading with an age that kept growing. A client
+ * shown a round trip is owed the moment it was true of.
+ */
+export function sameRoundTrip(
+  left: ServerRoundTrip | null,
+  right: ServerRoundTrip | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.ms === right.ms && left.measuredAt === right.measuredAt && sameLoad(left.load, right.load)
+  );
+}
+
+/** Whether two readings of a machine's cpus are the same reading, figure for figure. */
+function sameLoad(left: MachineLoad | null, right: MachineLoad | null): boolean {
+  if (left === null || right === null) return left === right;
+  if (left.cpuCount !== right.cpuCount) return false;
+  const cpuSame =
+    left.cpu === null || right.cpu === null
+      ? left.cpu === right.cpu
+      : left.cpu.percent === right.cpu.percent && left.cpu.windowMs === right.cpu.windowMs;
+  if (!cpuSame) return false;
+  if (left.loadAverage === null || right.loadAverage === null) {
+    return left.loadAverage === right.loadAverage;
+  }
+  const other = right.loadAverage;
+  return left.loadAverage.every((average, index) => average === other[index]);
 }
 
 /**

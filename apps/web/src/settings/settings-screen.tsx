@@ -33,7 +33,7 @@ import { PairingPanel } from './pairing-panel.js';
 import type { PairingOperations } from './pairing-operations.js';
 import { PushControl } from './push-control.js';
 import type { PushOperations } from './push-operations.js';
-import { serverRows, type ServerRowView } from './server-rows.js';
+import { roundTripWords, serverRows, type ServerRowView } from './server-rows.js';
 
 /**
  * The settings screen: hub access, server pairing, and the paired-server
@@ -69,6 +69,13 @@ export interface SettingsScreenProps {
   /** This browser's side of push, injected exactly as pairing is. */
   readonly push: PushOperations;
   readonly candidates: readonly DiscoveredCandidate[];
+  /**
+   * The clock a round trip's age is read against, injected so a test can pin
+   * one. Read once per render, during it, the way the session list reads its
+   * own: the state is republished on every pong, so the screen is redrawn well
+   * inside the window a reading stays current for.
+   */
+  readonly now?: () => number;
 }
 
 function phaseWords(snapshot: HubSnapshot): string {
@@ -95,6 +102,7 @@ export function SettingsScreen({
   pairing,
   push,
   candidates,
+  now = Date.now,
 }: SettingsScreenProps): JSX.Element {
   const scheme = useComputedColorScheme('dark');
   // From context, not a prop: the route that draws this screen has no reason
@@ -110,7 +118,7 @@ export function SettingsScreen({
         <PairingPanel pairing={pairing} candidates={candidates} scheme={scheme} />
       </Section>
       <Section scheme={scheme}>
-        <PairedServersSection snapshot={snapshot} pairing={pairing} scheme={scheme} />
+        <PairedServersSection snapshot={snapshot} pairing={pairing} scheme={scheme} now={now()} />
       </Section>
       {/* Unwrapped, unlike every other section: the control carries its own
           surface because it answers `null` in a browser without push, and a
@@ -236,10 +244,12 @@ function PairedServersSection({
   snapshot,
   pairing,
   scheme,
+  now,
 }: {
   readonly snapshot: HubSnapshot;
   readonly pairing: PairingOperations;
   readonly scheme: Scheme;
+  readonly now: number;
 }): JSX.Element {
   const rows = serverRows(snapshot.machineState);
   return (
@@ -254,7 +264,13 @@ function PairedServersSection({
       ) : (
         <Stack gap="xs">
           {rows.map((row) => (
-            <ServerRow key={row.registrationId} row={row} pairing={pairing} scheme={scheme} />
+            <ServerRow
+              key={row.registrationId}
+              row={row}
+              pairing={pairing}
+              scheme={scheme}
+              now={now}
+            />
           ))}
         </Stack>
       )}
@@ -325,10 +341,12 @@ function ServerRow({
   row,
   pairing,
   scheme,
+  now,
 }: {
   readonly row: ServerRowView;
   readonly pairing: PairingOperations;
   readonly scheme: Scheme;
+  readonly now: number;
 }): JSX.Element {
   const [refusal, setRefusal] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -371,6 +389,7 @@ function ServerRow({
             {row.phase}
             {row.stores.length > 0 &&
               ` · ${String(row.stores.length)} store${row.stores.length === 1 ? '' : 's'}`}
+            <RoundTrip row={row} scheme={scheme} now={now} />
           </Text>
           {row.problem !== null && (
             <Text size="sm" style={{ color: colorForToneText('blocked', scheme) }}>
@@ -396,5 +415,35 @@ function ServerRow({
         </Button>
       </Group>
     </Paper>
+  );
+}
+
+/**
+ * The round trip the hub measured, after the phase, or nothing before the
+ * first pong. Its own span so a slow one alone takes the warning tone; a quiet
+ * one inherits the line's.
+ */
+function RoundTrip({
+  row,
+  scheme,
+  now,
+}: {
+  readonly row: ServerRowView;
+  readonly scheme: Scheme;
+  readonly now: number;
+}): JSX.Element | null {
+  const words = roundTripWords(row.roundTrip, now);
+  if (words === null) return null;
+  return (
+    <>
+      {' · '}
+      <Text
+        component="span"
+        inherit
+        style={row.slow ? { color: colorForToneText('needs-you', scheme) } : undefined}
+      >
+        {words}
+      </Text>
+    </>
   );
 }

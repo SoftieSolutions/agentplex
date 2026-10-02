@@ -6,7 +6,12 @@ import {
   storeIdSchema,
   type ServerToHubFrame,
 } from '@agentplex/protocol';
-import { routeServerFrame, type DrainingNotice, type StoreReport } from './frame-router.js';
+import {
+  routeServerFrame,
+  type DrainingNotice,
+  type Pong,
+  type StoreReport,
+} from './frame-router.js';
 import type { InstructionOutcome, StreamAnswer, TerminalOutputFrame } from './servers.js';
 
 /**
@@ -37,6 +42,7 @@ interface Routed {
   readonly streamAnswers: readonly { replyTo: number; answer: StreamAnswer }[];
   readonly output: readonly TerminalOutputFrame[];
   readonly approvals: readonly ServerToHubFrame[];
+  readonly pongs: readonly Pong[];
 }
 
 function route(frame: ServerToHubFrame): Routed {
@@ -46,6 +52,7 @@ function route(frame: ServerToHubFrame): Routed {
   const streamAnswers: { replyTo: number; answer: StreamAnswer }[] = [];
   const output: TerminalOutputFrame[] = [];
   const approvals: ServerToHubFrame[] = [];
+  const pongs: Pong[] = [];
 
   routeServerFrame(frame, {
     onAnswer: (replyTo, outcome) => answers.push({ replyTo, outcome }),
@@ -56,9 +63,10 @@ function route(frame: ServerToHubFrame): Routed {
     onApprovalRequested: (requested) => approvals.push(requested),
     onApprovalWithdrawn: (withdrawn) => approvals.push(withdrawn),
     onApprovalSettled: (settled) => approvals.push(settled),
+    onPong: (pong) => pongs.push(pong),
   });
 
-  return { answers, reports, drains, streamAnswers, output, approvals };
+  return { answers, reports, drains, streamAnswers, output, approvals, pongs };
 }
 
 describe('an answer to an instruction', () => {
@@ -236,18 +244,42 @@ describe('a frame that belongs to something other than this switch', () => {
       stores: [],
     },
     { type: 'handshake-rejected', replyTo: 1, reason: 'unauthorized' },
-    { type: 'pong', replyTo: 2 },
     { type: 'protocol-error', code: 'bad-request', message: 'unreadable' },
   ] as readonly ServerToHubFrame[];
 
   it.each(elsewhere)('passes over $type without a word, because it is not a drop', (frame) => {
-    // The handshake's frames belong to a handshake that is over and `pong`
-    // belongs to the heartbeat reading the same socket. Neither is this
-    // switch's, and passing over one is not the same as losing it.
+    // The handshake's frames belong to a handshake that is over. They are not
+    // this switch's, and passing over one is not the same as losing it.
     const routed = route(frame);
 
     expect(routed.answers).toEqual([]);
     expect(routed.reports).toEqual([]);
+    expect(routed.pongs).toEqual([]);
+  });
+});
+
+describe('a pong', () => {
+  it('goes to the heartbeat whole, load and all, and answers nobody', () => {
+    // It used to be passed over here while the heartbeat read the socket
+    // itself, with a parser of its own. Routed, it is discriminated once like
+    // every other frame, and the load arrives already parsed.
+    const frame: Pong = {
+      type: 'pong',
+      replyTo: 2,
+      load: {
+        cpuCount: 14,
+        cpu: { percent: 31.4, windowMs: 20_000 },
+        loadAverage: [1.49951171875, 3.03271484375, 3.66796875],
+      },
+    };
+
+    const routed = route(frame);
+
+    expect(routed.pongs).toEqual([frame]);
+    // It carries a `replyTo`, and it is still not an answer: the heartbeat
+    // spent that id, and no instruction is waiting on it.
+    expect(routed.answers).toEqual([]);
+    expect(routed.streamAnswers).toEqual([]);
   });
 });
 

@@ -14,6 +14,7 @@ import type { HubSnapshot } from '../store/views.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider, MockTag } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
+import { colorForToneText } from '../ui/tokens.js';
 import { createFakePairingOperations } from './fake-pairing-operations.js';
 import { createFakePushOperations } from './fake-push-operations.js';
 import { SettingsRoute } from './settings-route.js';
@@ -172,14 +173,18 @@ describe('the settings screen with nothing paired', () => {
     return { store, snapshot };
   }
 
-  async function draw(state: string): Promise<void> {
+  async function draw(
+    state: string,
+    now: () => number = Date.now,
+    scheme: 'light' | 'dark' = 'dark',
+  ): Promise<void> {
     const { store, snapshot } = await storeOn(state);
     const storage = fakeStorage();
     const element: JSX.Element = (
       <MantineProvider
         theme={theme}
         cssVariablesResolver={cssVariablesResolver}
-        defaultColorScheme="dark"
+        defaultColorScheme={scheme}
       >
         <SettingsScreen
           snapshot={snapshot}
@@ -188,6 +193,7 @@ describe('the settings screen with nothing paired', () => {
           pairing={NO_PAIRING}
           push={createFakePushOperations()}
           candidates={[]}
+          now={now}
         />
       </MantineProvider>
     );
@@ -195,6 +201,18 @@ describe('the settings screen with nothing paired', () => {
       root = createRoot(container);
       root.render(element);
     });
+  }
+
+  /** When the captured timed machine's pong was read, by the hub's clock. */
+  const MEASURED_AT = 1_756_000_020_012;
+
+  /** The element whose own text is exactly `words`, or a failure naming them. */
+  function drawn(words: string): HTMLElement {
+    const found = [...container.querySelectorAll<HTMLElement>('*')].find(
+      (element) => element.textContent === words && element.children.length === 0,
+    );
+    if (found === undefined) throw new Error(`nothing on the screen reads ${words}`);
+    return found;
   }
 
   it('names the form above it and the installer that produces a server to pair', async () => {
@@ -287,6 +305,52 @@ describe('the settings screen with nothing paired', () => {
 
     expect(container.textContent).not.toContain('No servers are paired');
     expect(container.textContent).toContain('gpu-box-01');
+  });
+
+  it('draws the round trip the hub measured beside the phase', async () => {
+    await draw(hubFrames.machineStateMeasured, () => MEASURED_AT);
+
+    expect(container.textContent).toContain('connected · 1 store');
+    expect(drawn('12ms')).toBeDefined();
+    expect(container.textContent).not.toContain(' ago');
+  });
+
+  it('draws no figure for a machine the hub has not timed', async () => {
+    await draw(hubFrames.machineStateJustPaired, () => MEASURED_AT);
+
+    expect(container.textContent).toContain('mbp-robert');
+    expect(container.textContent).not.toMatch(/\d+ms/);
+  });
+
+  it('labels a reading with its age once it is no longer current', async () => {
+    await draw(hubFrames.machineStateMeasured, () => MEASURED_AT + 3 * 60_000);
+
+    expect(drawn('12ms · 3m ago')).toBeDefined();
+  });
+
+  it('draws a slow round trip in the warning tone', async () => {
+    // The captured frame with its one figure raised past the threshold: what
+    // is under test is the tone a number earns, and the frame still goes
+    // through the store's own parser.
+    await draw(hubFrames.machineStateMeasured.replace('"ms":12,', '"ms":410,'), () => MEASURED_AT);
+
+    expect(drawn('410ms').style.color).toBe(toCssColor(colorForToneText('needs-you', 'dark')));
+  });
+
+  it('writes a slow round trip in the warning word hue on paper, not the dot hue', async () => {
+    await draw(
+      hubFrames.machineStateMeasured.replace('"ms":12,', '"ms":410,'),
+      () => MEASURED_AT,
+      'light',
+    );
+
+    expect(drawn('410ms').style.color).toBe(toCssColor(colorForToneText('needs-you', 'light')));
+  });
+
+  it("leaves a round trip under the threshold in the row's own quiet tone", async () => {
+    await draw(hubFrames.machineStateMeasured, () => MEASURED_AT);
+
+    expect(drawn('12ms').style.color).not.toBe(toCssColor(colorForToneText('needs-you', 'dark')));
   });
 });
 
@@ -438,3 +502,10 @@ describe('the developer section', () => {
     expect(container.querySelector('input[role="switch"]')).toBeNull();
   });
 });
+
+/** A colour as the browser normalises it when it is set on an element. */
+function toCssColor(color: string): string {
+  const probe = document.createElement('span');
+  probe.style.color = color;
+  return probe.style.color;
+}

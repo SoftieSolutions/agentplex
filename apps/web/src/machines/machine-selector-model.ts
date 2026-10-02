@@ -5,7 +5,12 @@ import {
   type ServerView,
 } from '@agentplex/protocol';
 import { shortMachinesOf, withFilter, type CatalogueShape } from '../catalogue/catalogue-model.js';
-import { serverRows } from '../settings/server-rows.js';
+import {
+  isSlowRoundTrip,
+  ROUND_TRIP_FRESH_MS,
+  roundTripWords,
+  serverRows,
+} from '../settings/server-rows.js';
 import type { Tone } from '../ui/tokens.js';
 
 /**
@@ -19,12 +24,14 @@ import type { Tone } from '../ui/tokens.js';
  *   * the counts are the hub's own: it knows every pairing it supervises and
  *     which of them it is holding a connection to right now, so `3/4 online`
  *     is a fact restated rather than a number assembled here;
- *   * the latency is not knowable at all in this build. Nothing measures a
- *     round trip and `ServerView` has no field for one -- the protocol is
- *     explicit that only the end that dialled can time one, which is the hub
- *     timing its own `ping` against the `pong`. So there is a named slot here
- *     and no number in it. Drawing a figure a client computed would be a
- *     measurement of the browser's own event loop wearing a machine's name;
+ *   * the latency is the hub's measurement, restated. Only the end that
+ *     dialled can time a round trip, so the hub times its own `ping` against
+ *     the `pong` and publishes the reading with the moment it was taken. The
+ *     header's figure is the mean over the machines online now whose reading
+ *     is still current, and a row's is that machine's own, with its age once
+ *     it is old. A figure a client computed would be a measurement of the
+ *     browser's own event loop wearing a machine's name, and a zero for a
+ *     machine not yet timed would draw it as the fastest in the fleet;
  *   * the selection narrows what is shown and moves nothing. A session is
  *     `{ storeId, sessionId }` and never a machine, so the machine here is a
  *     filter over sessions: it becomes the catalogue query's `filter.server`
@@ -56,28 +63,39 @@ export interface MachineRow {
   readonly selected: boolean;
 }
 
+/** One machine as a row of the open selector, with the words that need a clock. */
+export interface MachineSelectorRow extends MachineRow {
+  /**
+   * What the row draws at its right: the round trip the hub measured, with its
+   * age once it is no longer current, or the phase words when there is no
+   * figure to draw -- and for a machine that is shutting down, whose drain is
+   * the thing on the row somebody should act on.
+   */
+  readonly trailing: string;
+  /**
+   * Whether `trailing` is a round trip rather than the phase. A figure is drawn
+   * in the row's muted tone, as the mockup (6c) draws it; the phase words keep
+   * the faint one they had.
+   */
+  readonly measured: boolean;
+  /** Whether `trailing` is a round trip past the threshold, drawn in the warning tone. */
+  readonly slow: boolean;
+}
+
 export interface MachineSelectorView {
   readonly counts: FleetCounts;
-  /** A measured round trip in milliseconds, or `null` while nobody has one. */
+  /**
+   * The mean round trip over the machines online now with a current reading,
+   * in whole milliseconds, or `null` while there is none to average.
+   */
   readonly latencyMs: number | null;
   /** What the app is narrowed to, or `null` for the whole fleet. */
   readonly selected: ServerRegistrationId | null;
-  readonly rows: readonly MachineRow[];
+  readonly rows: readonly MachineSelectorRow[];
 }
 
 /** The unnarrowed selection, in the words the header shows for it. */
 export const ALL_MACHINES = 'All machines';
-
-/**
- * The round trip this build can honestly claim.
- *
- * `null`, and the constant exists so that the absence is a named thing rather
- * than an omission somebody later reads as an oversight. When the heartbeat
- * starts publishing what the hub already measures, the figure arrives as the
- * third argument to `machineSelector` and every word that draws it is already
- * written and tested -- see the header tests, which pass a number in.
- */
-export const NO_LATENCY_MS: number | null = null;
 
 export function fleetCounts(state: MachineState | null): FleetCounts {
   const servers = state?.servers ?? [];
@@ -88,22 +106,25 @@ export function fleetCounts(state: MachineState | null): FleetCounts {
 }
 
 /**
- * Everything the selector draws, from the fleet and one chosen value.
+ * The machines as rows, from the fleet and one chosen value, with nothing that
+ * needs a clock.
  *
  * `chosen` is a string because that is what a control hands back and what a
  * query frame's filter holds; it is parsed rather than cast, and a value no
  * registration id could be selects nothing.
+ *
+ * Apart from `machineSelector` for the reader that draws once per state: the
+ * graph inspector names the machines and their phase, and a clock read there
+ * would freeze at the frame it was read on.
  */
-export function machineSelector(
+export function machineRows(
   state: MachineState | null,
   chosen: string | null,
-  latencyMs: number | null = NO_LATENCY_MS,
-): MachineSelectorView {
-  const parsed = serverRegistrationIdSchema.safeParse(chosen);
-  const selected = parsed.success ? parsed.data : null;
+): readonly MachineRow[] {
+  const selected = selectionOf(chosen);
   const short = shortMachinesOf(state);
-  const views = new Map((state?.servers ?? []).map((view) => [view.registrationId, view]));
-  const rows = serverRows(state).map((row) => ({
+  const views = viewsOf(state);
+  return serverRows(state).map((row) => ({
     registrationId: row.registrationId,
     short: short.get(row.registrationId) ?? row.label,
     label: row.label,
@@ -111,7 +132,72 @@ export function machineSelector(
     words: phaseWords(row.phase, views.get(row.registrationId)),
     selected: row.registrationId === selected,
   }));
-  return { counts: fleetCounts(state), latencyMs, selected, rows };
+}
+
+/**
+ * Everything the selector draws, from the fleet, one chosen value, and the
+ * moment it is drawn at.
+ *
+ * `now` is the browser's clock and the readings are stamped by the hub's, so
+ * an age here is as good as the two clocks' agreement -- the same bargain every
+ * other age in the app makes with `updatedAt`.
+ */
+export function machineSelector(
+  state: MachineState | null,
+  chosen: string | null,
+  now: number,
+): MachineSelectorView {
+  const views = viewsOf(state);
+  const rows = machineRows(state, chosen).map((row) => {
+    const view = views.get(row.registrationId);
+    const figure = view === undefined || view.draining !== null ? null : view.roundTrip;
+    const words = roundTripWords(figure, now);
+    return {
+      ...row,
+      trailing: words ?? row.words,
+      measured: words !== null,
+      slow: words !== null && isSlowRoundTrip(figure),
+    };
+  });
+  return {
+    counts: fleetCounts(state),
+    latencyMs: meanRoundTrip(state, now),
+    selected: selectionOf(chosen),
+    rows,
+  };
+}
+
+function selectionOf(chosen: string | null): ServerRegistrationId | null {
+  const parsed = serverRegistrationIdSchema.safeParse(chosen);
+  return parsed.success ? parsed.data : null;
+}
+
+function viewsOf(state: MachineState | null): ReadonlyMap<ServerRegistrationId, ServerView> {
+  return new Map((state?.servers ?? []).map((view) => [view.registrationId, view]));
+}
+
+/**
+ * The fleet's round trip: the mean over the machines online now whose reading
+ * is still current.
+ *
+ * Online only, because "All machines" is a claim about the machines somebody
+ * can reach. Current only, because the header has no room for an age, and a
+ * figure that cannot carry its age must not be an old one. Not draining,
+ * because a draining row draws its drain instead of its figure, and the header
+ * must not average a number no row shows. A machine with no reading is left
+ * out rather than counted as zero.
+ */
+function meanRoundTrip(state: MachineState | null, now: number): number | null {
+  const figures = (state?.servers ?? []).flatMap((view) =>
+    view.phase === 'connected' &&
+    view.draining === null &&
+    view.roundTrip !== null &&
+    now - view.roundTrip.measuredAt <= ROUND_TRIP_FRESH_MS
+      ? [view.roundTrip.ms]
+      : [],
+  );
+  if (figures.length === 0) return null;
+  return Math.round(figures.reduce((sum, ms) => sum + ms, 0) / figures.length);
 }
 
 /**

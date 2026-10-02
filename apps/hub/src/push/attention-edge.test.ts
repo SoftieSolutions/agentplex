@@ -63,6 +63,7 @@ function connection(
     problem: phase === 'stale' ? 'connection refused' : null,
     staleReason: phase === 'stale' ? 'unreachable' : null,
     draining: null,
+    roundTrip: null,
   };
 }
 

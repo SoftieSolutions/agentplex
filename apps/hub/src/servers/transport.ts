@@ -7,13 +7,14 @@ import {
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import type {
+  Clock,
   Logger,
   MessageSocket,
   SocketClosure,
   SocketDialer,
   Timers,
 } from '@agentplex/node-shared';
-import { startHeartbeat } from './connection-heartbeat.js';
+import { startHeartbeat, type RoundTripReading } from './connection-heartbeat.js';
 import {
   routeServerFrame,
   type ApprovalRequested,
@@ -96,6 +97,15 @@ export interface ServerTransportHandlers {
   onApprovalRequested(frame: ApprovalRequested): void;
   onApprovalWithdrawn(frame: ApprovalWithdrawn): void;
   onApprovalSettled(frame: ApprovalSettled): void;
+  /**
+   * One heartbeat completed: how long the round trip took by the hub's clock,
+   * and what the machine said about its cpus in the answer.
+   *
+   * On the handlers because it is something this connection says about itself
+   * on its own schedule, like a report. Only completed rounds arrive: a ping
+   * that goes unanswered is a close, not a reading.
+   */
+  onRoundTrip(reading: RoundTripReading): void;
 }
 
 export interface ServerTransport {
@@ -154,6 +164,10 @@ export interface MessageSocketTransportDependencies {
   /** Which hub is dialling. The server cannot tell two of them apart otherwise. */
   readonly hubId: HubId;
   readonly timers: Timers;
+  /** What the heartbeat dates a round trip with. */
+  readonly clock: Clock;
+  /** What the heartbeat times a round trip with; see `connection-heartbeat.ts`. */
+  readonly monotonic: () => number;
   readonly logger: Logger;
   readonly handshakeTimeoutMs?: number;
   readonly heartbeatIntervalMs?: number;
@@ -196,7 +210,7 @@ function overSocket(
   nextFrameId: () => number,
   dependencies: MessageSocketTransportDependencies,
 ): ServerTransport {
-  const { timers, logger } = dependencies;
+  const { timers, clock, monotonic, logger } = dependencies;
 
   const channel = createInstructionChannel({
     timers,
@@ -216,6 +230,24 @@ function overSocket(
   });
 
   let handlers: ServerTransportHandlers | null = null;
+
+  // The heartbeat's counter is this connection's, continued: the handshake
+  // already spent the first id, and the instructions above draw from the same
+  // one.
+  const heartbeat = startHeartbeat(socket, {
+    timers,
+    clock,
+    monotonic,
+    logger,
+    nextFrameId,
+    onRoundTrip: (reading) => handlers?.onRoundTrip(reading),
+    ...(dependencies.heartbeatIntervalMs === undefined
+      ? {}
+      : { intervalMs: dependencies.heartbeatIntervalMs }),
+    ...(dependencies.heartbeatTimeoutMs === undefined
+      ? {}
+      : { timeoutMs: dependencies.heartbeatTimeoutMs }),
+  });
 
   socket.onMessage((text) => {
     const parsed = parseTextFrame(parseServerToHubFrame, text);
@@ -240,22 +272,8 @@ function overSocket(
       onApprovalRequested: (frame) => handlers?.onApprovalRequested(frame),
       onApprovalWithdrawn: (frame) => handlers?.onApprovalWithdrawn(frame),
       onApprovalSettled: (frame) => handlers?.onApprovalSettled(frame),
+      onPong: (frame) => heartbeat.pong(frame),
     });
-  });
-
-  // The heartbeat's counter is this connection's, continued: the handshake
-  // already spent the first id, and the instructions above draw from the same
-  // one.
-  const heartbeat = startHeartbeat(socket, {
-    timers,
-    logger,
-    nextFrameId,
-    ...(dependencies.heartbeatIntervalMs === undefined
-      ? {}
-      : { intervalMs: dependencies.heartbeatIntervalMs }),
-    ...(dependencies.heartbeatTimeoutMs === undefined
-      ? {}
-      : { timeoutMs: dependencies.heartbeatTimeoutMs }),
   });
 
   const closed = new Promise<void>((resolve) => {

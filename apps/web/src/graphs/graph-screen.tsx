@@ -7,7 +7,7 @@ import type {
   ServerRegistrationId,
   StoreId,
 } from '@agentplex/protocol';
-import { machineSelector } from '../machines/machine-selector-model.js';
+import { machineRows } from '../machines/machine-selector-model.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import { GRAPH_KIND, PROJECT_KIND } from '../tree/node-kinds.js';
@@ -148,7 +148,7 @@ interface FleetFacts {
 
 /** What the canvas and the inspector need to know of the fleet, read once per snapshot. */
 function fleetFacts(state: MachineState | null): FleetFacts {
-  const rows = machineSelector(state, null).rows;
+  const rows = machineRows(state, null);
   return {
     labels: new Map(rows.map((row) => [row.registrationId, row.label])),
     machines: rows.map((row) => ({

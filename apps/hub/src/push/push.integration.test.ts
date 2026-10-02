@@ -204,6 +204,7 @@ function edgeFromATellingRow(): PushEvent {
     problem: null,
     staleReason: null,
     draining: null,
+    roundTrip: null,
   });
   const report = (session: SessionDescriptor): void => {
     state.applySessions({

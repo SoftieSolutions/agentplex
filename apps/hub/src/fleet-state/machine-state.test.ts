@@ -62,6 +62,7 @@ function connection(
     problem: phase === 'stale' ? 'connection refused' : null,
     staleReason: phase === 'stale' ? 'unreachable' : null,
     draining: null,
+    roundTrip: null,
   };
 }
 
@@ -189,6 +190,32 @@ describe('toMachineState', () => {
     const [server] = published().servers;
     expect(server).toBeDefined();
     expect(server).not.toHaveProperty('failedAttempts');
+  });
+
+  it('publishes the last heartbeat, figure, load and moment, through the wire parser', () => {
+    const load = {
+      cpuCount: 14,
+      cpu: { percent: 31.4, windowMs: 20_000 },
+      loadAverage: [1.49951171875, 3.03271484375, 3.66796875] as [number, number, number],
+    };
+    const state = createFleetState({ logger });
+    state.applyConnection({
+      ...connection('workshop', 'connected', ['store-work']),
+      roundTrip: { ms: 42, load, measuredAt: START + 20_000 },
+    });
+
+    const published = toMachineState(state.snapshot());
+    const [server] = machineStateSchema.parse(published).servers;
+
+    expect(server?.roundTrip).toEqual({ ms: 42, load, measuredAt: START + 20_000 });
+    // Copied rather than passed through, like every other nested value here:
+    // nothing a client is sent shares an object with the supervisor's own.
+    expect(published.servers[0]?.roundTrip?.load).not.toBe(load);
+  });
+
+  it('publishes null for a server no heartbeat has completed on, rather than a zero', () => {
+    const laptop = published().servers.find((server) => server.label === 'laptop');
+    expect(laptop).toHaveProperty('roundTrip', null);
   });
 
   it('keeps a stale server, its reason and its age, rather than dropping the row', () => {

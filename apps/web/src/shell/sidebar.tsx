@@ -134,7 +134,13 @@ export function Sidebar({
   const moment = now();
   return (
     <Stack gap={10} p={10} style={{ height: '100%', minHeight: 0 }}>
-      <MachineSelector state={state} chosen={machine} onPick={onPickMachine} scheme={scheme} />
+      <MachineSelector
+        state={state}
+        chosen={machine}
+        onPick={onPickMachine}
+        scheme={scheme}
+        now={() => moment}
+      />
 
       <SegmentedControl
         size="xs"

@@ -117,6 +117,8 @@ function stateWith(overrides?: {
         // Not going anywhere: this file is about drawing sessions on a machine
         // that is answering, and a drain is the settings screen's subject.
         draining: null,
+        // Not yet timed: nothing here draws a latency.
+        roundTrip: null,
         problem: null,
         ...overrides?.server,
       },

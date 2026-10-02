@@ -3,6 +3,7 @@ import type {
   ServerDraining,
   ServerId,
   ServerRegistrationId,
+  ServerRoundTrip,
   StoreId,
 } from '@agentplex/protocol';
 import {
@@ -234,6 +235,14 @@ export function startDialLoop(
    * back, which amounts to the same thing for a row on a screen.
    */
   let draining: ServerDraining | null = null;
+  /**
+   * The last heartbeat completed on the connection now held, or `null`.
+   *
+   * Cleared wherever the connection ends -- going stale, and stopping -- and
+   * never carried into the next one: a round trip is a fact about one socket,
+   * so a new connection publishes no figure until its own first pong.
+   */
+  let roundTrip: ServerRoundTrip | null = null;
 
   let stopped = false;
   /**
@@ -268,6 +277,7 @@ export function startDialLoop(
     problem,
     staleReason,
     draining,
+    roundTrip,
   });
 
   const changed = (): void => dependencies.onChange?.(report());
@@ -279,6 +289,7 @@ export function startDialLoop(
     if (phase !== 'stale') staleSince = clock.now();
     phase = 'stale';
     connectedSince = null;
+    roundTrip = null;
     staleReason = reason;
     problem = why;
     failedAttempts += 1;
@@ -437,6 +448,17 @@ export function startDialLoop(
       onApprovalRequested: (frame) => dependencies.onApprovals?.requested(registration.id, frame),
       onApprovalWithdrawn: (frame) => dependencies.onApprovals?.withdrawn(registration.id, frame),
       onApprovalSettled: (frame) => dependencies.onApprovals?.settled(registration.id, frame),
+      onRoundTrip: (reading) => {
+        // Dropped rather than held while the connection is still being
+        // recorded, unlike a report. The first ping leaves an interval after
+        // the handshake, so this is a race nothing but a very slow database
+        // produces, and the cost of dropping is one round: the next pong is an
+        // interval away. Applied early, it would publish a latency beside a
+        // phase that does not yet say connected.
+        if (pendingReports !== null) return;
+        roundTrip = { ms: reading.ms, load: reading.load, measuredAt: reading.at };
+        changed();
+      },
     });
   };
 
@@ -573,6 +595,7 @@ export function startDialLoop(
 
     phase = 'stopped';
     connectedSince = null;
+    roundTrip = null;
     held = null;
     changed();
   };

@@ -179,6 +179,7 @@ export type {
   MachineState,
   ServerCandidate,
   ServerDraining,
+  ServerRoundTrip,
   ServerView,
   SessionHolder,
   SessionRow,

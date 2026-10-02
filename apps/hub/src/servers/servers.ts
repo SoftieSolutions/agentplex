@@ -8,6 +8,7 @@ import type {
   ServerDraining,
   ServerId,
   ServerRegistrationId,
+  ServerRoundTrip,
   ServerToHubFrame,
   SessionDescriptor,
   SessionHold,
@@ -144,6 +145,17 @@ export interface ServerConnectionReport {
    * handshake clears it -- a server that is answering again is not going down.
    */
   readonly draining: ServerDraining | null;
+  /**
+   * The last heartbeat completed on the connection now held: its round trip by
+   * the hub's clock, the load the pong carried, and when it arrived.
+   *
+   * `null` until the first pong of a connection, and cleared the moment that
+   * connection ends -- unlike the store list, which is kept. The stores are
+   * still on that machine's disk while nobody can reach it; a round trip was
+   * only ever true of a socket, and one kept past its close would be a latency
+   * for a link that is not there.
+   */
+  readonly roundTrip: ServerRoundTrip | null;
 }
 
 /**
@@ -363,6 +375,12 @@ export interface ServersDependencies {
   readonly hubId: HubId;
   readonly timers: Timers;
   readonly clock: Clock;
+  /**
+   * What a heartbeat's round trip is timed with, never the wall clock, which
+   * steps. Defaults to `performance.now()`, beside the transport that uses it;
+   * a test that asserts a figure passes its own.
+   */
+  readonly monotonic?: () => number;
   readonly logger: Logger;
   /** Shared by every connection: it is a schedule, and it holds no state. */
   readonly backoff?: BackoffPolicy;
@@ -502,6 +520,8 @@ export function createServers(dependencies: ServersDependencies): Servers {
       dialer,
       hubId,
       timers,
+      clock,
+      monotonic: dependencies.monotonic ?? (() => performance.now()),
       logger,
       ...(dependencies.handshakeTimeoutMs === undefined
         ? {}
