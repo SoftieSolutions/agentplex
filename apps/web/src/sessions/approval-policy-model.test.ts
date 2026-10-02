@@ -182,17 +182,25 @@ describe('the project a session is filed under', () => {
   });
 
   it('has no project for a session filed at the root', () => {
-    // The captured arrangement: two sessions at the top of the tree, neither of
-    // them inside anything. There is nowhere for a rule about them to live.
-    expect(projectForSession(arranged, FILED)).toEqual({ kind: 'unfiled' });
+    // The captured arrangement still has one session at the top of the tree,
+    // where discovery put it, inside nothing. There is nowhere for a rule about
+    // it to live.
+    const unfiled = sessionRefSchema.parse({
+      storeId: 'store-agentplex',
+      sessionId: 'session-spike-wasm',
+    });
+    expect(projectForSession(arranged, unfiled)).toEqual({ kind: 'unfiled' });
   });
 
-  it('does not borrow the project a folder happens to contain', () => {
-    // `hub-7` is a folder holding the project, so the project is below the
-    // session rather than above it. Containment is the relation, and it only
-    // runs one way: a rule written here would be written into a policy the hub
-    // would never consult for this session.
-    expect(projectForSession(filedUnder(arranged, 'hub-7'), FILED)).toEqual({ kind: 'unfiled' });
+  it('names the project above the folder the session sits in', () => {
+    // The captured arrangement: the session inside a folder inside HOME.
+    // Containment runs up through the folder to the project that holds it, and
+    // HOME is a project like any other for that walk.
+    expect(projectForSession(arranged, FILED)).toEqual({
+      kind: 'project',
+      id: 'home',
+      label: 'HOME',
+    });
   });
 
   it('cannot place a session the tree does not hold, or place any while there is no tree', () => {

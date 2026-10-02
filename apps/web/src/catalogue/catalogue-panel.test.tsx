@@ -279,15 +279,15 @@ describe('the catalogue panel', () => {
 
     await filterBy('plan');
 
-    // The document matched; the project and folder over it are where it is;
-    // the session and the empty folder outside them are the two nodes
-    // hidden, and they are counted.
+    // The document matched and the project over it is where it is; the
+    // folder in HOME, the session inside it and the session at the top are
+    // the three nodes hidden, and they are counted.
     expect(words()).toContain('plan.md');
     expect(words()).toContain('agentplex (main checkout)');
-    expect(words()).toContain('this week');
+    expect(words()).not.toContain('this week');
+    expect(words()).not.toContain('fix-auth-refresh');
     expect(words()).not.toContain('spike-wasm');
-    expect(words()).not.toContain('later');
-    expect(words()).toContain('2 hidden by filter');
+    expect(words()).toContain('3 hidden by filter');
   });
 
   it('says the filter matched nothing rather than drawing an empty project list', async () => {
@@ -317,8 +317,9 @@ describe('the catalogue panel', () => {
     // pages nobody has asked for yet.
     await mount(heldPages(hubFrames.catalogueTreePagePartial));
 
-    // The page holds HOME and one session at the root; the session matches.
-    await filterBy('fix-auth');
+    // The page holds HOME and the folder made inside it. HOME matches, and a
+    // child of a match is still a row the filter takes away.
+    await filterBy('HOME');
 
     expect(words()).toContain('1 hidden by filter, of what has loaded so far');
   });
@@ -326,7 +327,7 @@ describe('the catalogue panel', () => {
   it('clears the filter from the button in the box', async () => {
     await mount(heldPages(hubFrames.catalogueTreePage));
     await filterBy('plan');
-    expect(words()).toContain('2 hidden by filter');
+    expect(words()).toContain('3 hidden by filter');
 
     const clear = container.querySelector('[aria-label="Clear the tree filter"]');
     if (clear === null) throw new Error('a filled filter box offers no way to clear it');
@@ -414,7 +415,7 @@ describe('the catalogue panel', () => {
     expect(container.querySelector('input[aria-label="Filter tree"]')).toBeNull();
     expect(words()).toContain('plan.md');
     expect(words()).not.toContain('spike-wasm');
-    expect(words()).toContain('2 hidden by filter');
+    expect(words()).toContain('3 hidden by filter');
   });
 
   /** Every control a closed popover keeps off the panel, by its name. */
