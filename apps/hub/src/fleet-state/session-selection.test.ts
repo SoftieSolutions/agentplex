@@ -4,7 +4,7 @@ import {
   storeIdSchema,
   type ServerRegistrationId,
   type SessionDescriptor,
-  type SessionStatus,
+  type SessionProcess,
 } from '@agentplex/protocol';
 import { chooseReportedSession, type ReportedSession } from './session-selection.js';
 
@@ -24,6 +24,7 @@ function descriptor(overrides: Partial<SessionDescriptor> = {}): SessionDescript
     sessionId: sessionIdSchema.parse('session-1'),
     provider: 'claude',
     status: 'idle',
+    process: 'none',
     updatedAt: START,
     cwd: '/srv/work',
     branch: null,
@@ -71,10 +72,12 @@ describe('chooseReportedSession', () => {
   });
 
   it('prefers the server that can see the process when the readings are level', () => {
-    // Only the server running the session can say `working`; the other one is
-    // reporting the absence of a process it was never going to find.
-    const watcher = reported('registration-a', true, { status: 'idle' });
-    const holder = reported('registration-b', true, { status: 'working' });
+    // Only the server running the session can say `running`; the other one is
+    // reporting the absence of a process it was never going to find. Both
+    // say `idle`: the process is alive at a prompt, which is the case a
+    // status could never tell apart.
+    const watcher = reported('registration-a', true, { process: 'none' });
+    const holder = reported('registration-b', true, { process: 'running' });
 
     expect(chooseReportedSession([watcher, holder])).toBe(holder);
     expect(chooseReportedSession([holder, watcher])).toBe(holder);
@@ -83,8 +86,16 @@ describe('chooseReportedSession', () => {
   it('does not let a stale `working` outrank a later reading', () => {
     // The process exited and the other server has read past that. Preferring
     // the holder here would put a spinner on a session that has finished.
-    const holder = reported('registration-a', true, { status: 'working', updatedAt: START });
-    const later = reported('registration-b', true, { status: 'idle', updatedAt: START + 1_000 });
+    const holder = reported('registration-a', true, {
+      status: 'working',
+      process: 'running',
+      updatedAt: START,
+    });
+    const later = reported('registration-b', true, {
+      status: 'idle',
+      process: 'none',
+      updatedAt: START + 1_000,
+    });
 
     expect(chooseReportedSession([holder, later])).toBe(later);
   });
@@ -122,25 +133,20 @@ describe('chooseReportedSession', () => {
   });
 });
 
-describe('status ranking', () => {
-  /** Every status a provider can be reduced to, except the one that means a process. */
-  const withoutAProcess: readonly SessionStatus[] = [
-    'awaiting-permission',
-    'awaiting-input',
-    'idle',
-    'unknown',
-  ];
+describe('process ranking', () => {
+  /** Every answer a server can give about a process, except a sighting of one. */
+  const withoutAProcess: readonly SessionProcess[] = ['none', 'unknown'];
 
-  it('treats only `working` as evidence of a process on that server', () => {
-    // `awaiting-permission` is read out of the transcript, so both servers
-    // holding the volume report it and it says nothing about which one is
-    // running anything. `working` is the one status the adapter will not
-    // produce without having found a live process.
-    for (const status of withoutAProcess) {
-      const watcher = reported('registration-a', true, { status });
-      const holder = reported('registration-b', true, { status: 'working' });
+  it('treats only a running process as evidence of one on that server, not a working status', () => {
+    // `working` is a reading of the transcript, which every server holding
+    // the volume can make, and a session can be idle at a prompt with its
+    // process alive. Only `running` is a server saying it saw the process.
+    for (const process of withoutAProcess) {
+      const watcher = reported('registration-a', true, { status: 'working', process });
+      const holder = reported('registration-b', true, { status: 'idle', process: 'running' });
 
       expect(chooseReportedSession([watcher, holder]).registrationId).toBe('registration-b');
+      expect(chooseReportedSession([holder, watcher]).registrationId).toBe('registration-b');
     }
   });
 });

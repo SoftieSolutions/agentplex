@@ -74,6 +74,7 @@ function session(id: string, model?: string, activity?: Activity): SessionDescri
     sessionId: sessionIdSchema.parse(id),
     provider: 'claude',
     status: 'awaiting-permission',
+    process: 'none',
     updatedAt: START,
     cwd: '/srv/work',
     branch: null,
@@ -296,7 +297,9 @@ describe('toMachineState', () => {
 
   it('carries the session descriptor whole, with who saw it beside it', () => {
     const [row] = published().stores[0]?.sessions ?? [];
-    expect(row?.descriptor).toEqual(session('session-1'));
+    // Whole but for the one field the hub lowers. The laptop mounts this store
+    // too, stale or not, so the workshop's `none` cannot speak for it.
+    expect(row?.descriptor).toEqual({ ...session('session-1'), process: 'unknown' });
     expect(row?.source).toBe(registration('workshop'));
     expect(row?.reportedBy).toEqual([registration('workshop')]);
     // The reducer's `ref` is not restated: it is the descriptor's own two

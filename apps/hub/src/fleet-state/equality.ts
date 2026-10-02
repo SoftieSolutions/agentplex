@@ -241,6 +241,7 @@ export function sameSessions(
       descriptor.storeId === other.storeId &&
       descriptor.provider === other.provider &&
       descriptor.status === other.status &&
+      descriptor.process === other.process &&
       descriptor.updatedAt === other.updatedAt &&
       descriptor.cwd === other.cwd &&
       descriptor.title === other.title

@@ -18,7 +18,11 @@ import type { ServerRegistrationId, SessionDescriptor } from '@agentplex/protoco
 /** One server's reading of one session, with what the hub knows about the reader. */
 export interface ReportedSession {
   readonly registrationId: ServerRegistrationId;
-  /** Exactly what that server said, unmodified. */
+  /**
+   * Exactly what that server said, unmodified. The row built from the chosen
+   * reading may lower its `process` (see `buildSessionRows`); the choice is
+   * made on what the server said.
+   */
   readonly descriptor: SessionDescriptor;
   /** When the report carrying this reading arrived. */
   readonly reportedAt: number;
@@ -27,16 +31,15 @@ export interface ReportedSession {
 }
 
 /**
- * Whether this reading implies a live process on the server that made it.
+ * Whether the server that made this reading saw a live process on it.
  *
- * `working` is the only status an adapter will not produce without having
- * found a running process, so it is the only one that distinguishes the server
- * holding the session from a server merely watching the same volume. The two
- * loud statuses come out of the transcript, which both servers can read, and
- * so say nothing about who is running what.
+ * `running` is a sighting: a terminal that server spawned, or a registry
+ * entry it verified against its own process table. Status is not, because it
+ * is read out of the transcript every server on the volume can read, and a
+ * session idle at a prompt still has its process alive.
  */
 function sawAProcess(reading: ReportedSession): boolean {
-  return reading.descriptor.status === 'working';
+  return reading.descriptor.process === 'running';
 }
 
 /**
@@ -51,7 +54,7 @@ function sawAProcess(reading: ReportedSession): boolean {
  *    volume being copied.
  * 3. Then the server that could see a process. This is below freshness on
  *    purpose: if the other server has read past the moment the process exited,
- *    keeping `working` would leave a spinner on a session that has finished.
+ *    keeping `running` would leave a spinner on a session that has finished.
  * 4. Then the registration id, so that a genuine tie resolves the same way on
  *    every snapshot rather than flickering between two machines that agree.
  */
