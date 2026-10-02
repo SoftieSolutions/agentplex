@@ -26,6 +26,7 @@ import {
 } from '../../../apps/hub/src/servers/server-handshake.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
 import { createFakeProjectFiles } from '../../../apps/server/src/projects/fake-project-files.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * The handshake over a real socket, against the real server role.
@@ -54,6 +55,7 @@ afterEach(async () => {
 async function startServer(storePaths: readonly string[] = []) {
   const files = createFakeStoreFiles();
   return startSessionServer({
+    signaller: createFakeProcessSignaller(),
     logger,
     ids,
     host: '127.0.0.1',

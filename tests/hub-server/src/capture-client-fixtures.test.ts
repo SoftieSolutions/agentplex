@@ -94,6 +94,7 @@ import {
   CLIENT_TICKET_PATH,
 } from '../../../apps/hub/src/client-auth/client-auth.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * Captures what a real hub says to a client, for the web store's tests.
@@ -743,6 +744,8 @@ function buildLiveMachine(): LiveMachine {
     terminals,
     sessionFiles,
     sessions: createSessionController({
+      signaller: createFakeProcessSignaller(),
+      timers: createFakeTimers(),
       stores,
       providers: createProviderRegistry([createFakeProviderAdapter({ provider: 'claude', files })]),
       terminals,

@@ -66,6 +66,7 @@ import { createFakeCatalogue } from '../../../apps/hub/src/catalogue/fake-catalo
 import { createFakeDocs } from '../../../apps/hub/src/docs/fake-docs.js';
 import { createFakeGraphs } from '../../../apps/hub/src/graphs/fake-graphs.js';
 import { createFakeGraphRuns } from '../../../apps/hub/src/graph-runs/fake-graph-runs.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * `read_terminal`, from a pty on one machine to an agent reading it as text.
@@ -167,6 +168,8 @@ async function start(): Promise<Harness> {
         terminals,
         machineLoad: createFakeMachineLoadReader(),
         sessions: createSessionController({
+          signaller: createFakeProcessSignaller(),
+          timers: createFakeTimers(),
           stores,
           providers: createProviderRegistry([
             createFakeProviderAdapter({

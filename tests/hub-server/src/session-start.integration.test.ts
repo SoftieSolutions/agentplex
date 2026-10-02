@@ -87,6 +87,7 @@ import { createSessions, type Sessions } from '../../../apps/hub/src/sessions/se
 import { createTasks } from '../../../apps/hub/src/tasks/tasks.js';
 import { createTerminal } from '../../../apps/hub/src/terminal/terminal.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * A start, from a client's frame to a process on another machine and back.
@@ -326,6 +327,8 @@ function serveMachine(machine: Machine): DialResult {
     terminals: machine.terminals,
     machineLoad: createFakeMachineLoadReader(),
     sessions: createSessionController({
+      signaller: createFakeProcessSignaller(),
+      timers: createFakeTimers(),
       stores,
       providers: createProviderRegistry([adapter]),
       terminals: machine.terminals,

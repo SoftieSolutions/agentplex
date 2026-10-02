@@ -55,6 +55,7 @@ import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-lo
 import { createDirectoryBrowser } from '../../../apps/server/src/directories/directory-browse.js';
 import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
 import { createProjects, type Projects } from '../../../apps/hub/src/projects/projects.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * The act tools, from an agent's call to a pty on another machine and back.
@@ -187,6 +188,8 @@ async function start(
         terminals,
         machineLoad: createFakeMachineLoadReader(),
         sessions: createSessionController({
+          signaller: createFakeProcessSignaller(),
+          timers: createFakeTimers(),
           stores,
           providers: createProviderRegistry([
             createFakeProviderAdapter({

@@ -41,6 +41,7 @@ import { ensureServerIdentity } from '@agentplex/providers';
 import { createHubAudience } from './hub/hub-audience.js';
 import { sweepGrants } from './hub/grant-sweep.js';
 import { createSessionController } from './sessions/session-control.js';
+import type { ProcessSignaller } from './sessions/process-signaller.js';
 import type { ServerAbout } from './about/server-about.js';
 import type { MachineLoadReader } from './machine-load/machine-load.js';
 import { createProjectDocs } from './projects/project-docs.js';
@@ -178,6 +179,11 @@ export interface SessionServerDependencies {
    * on working.
    */
   readonly terminals: TerminalManager;
+  /**
+   * How a retake ends a provider process this server did not start: the only
+   * signal this server sends to a pid it did not fork. See `process-signaller.ts`.
+   */
+  readonly signaller: ProcessSignaller;
   /**
    * How long shutdown waits for the turns this server holds to end before it
    * kills them, in milliseconds.
@@ -341,6 +347,7 @@ export async function startSessionServer(
     preflight,
     clock,
     terminals,
+    signaller,
     drainMs,
     operations,
     workingTree,
@@ -506,6 +513,8 @@ export async function startSessionServer(
       approvals === null
         ? null
         : { open: (store, hook) => launches?.open(store, hook) ?? Promise.resolve(null) },
+    signaller,
+    timers,
     clock,
     logger,
   });

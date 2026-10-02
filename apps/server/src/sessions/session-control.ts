@@ -11,16 +11,24 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import { SESSION_BRANCH_MAX_CHARS } from '@agentplex/protocol';
-import type { Clock, Logger } from '@agentplex/node-shared';
+import type { Clock, Logger, Timers } from '@agentplex/node-shared';
 import {
+  type LiveProcess,
+  type ProviderAdapter,
   type ProviderRegistry,
   type SessionOrigin,
   discoverStoreSessions,
 } from '@agentplex/providers';
 import type { LaunchApprovals, OpenLaunchApproval } from '../approvals/approval-launch.js';
 import type { DirectoryGuard } from '../directories/directory-browse.js';
-import type { Terminal, TerminalManager, TerminalOutcome } from '../terminal/terminal-manager.js';
+import {
+  KILL_GRACE_MS,
+  type Terminal,
+  type TerminalManager,
+  type TerminalOutcome,
+} from '../terminal/terminal-manager.js';
 import { readWorkingTrees, type WorkingTree } from '../working-tree/working-tree.js';
+import type { ProcessSignaller } from './process-signaller.js';
 
 /**
  * What a server does when a hub tells it to run a session.
@@ -113,6 +121,14 @@ export interface SessionControllerDependencies {
    * a test has to be able to name one.
    */
   readonly homeDirectory: string;
+  /**
+   * How a retake ends a process this server did not start. Injected because a
+   * test cannot supply one that ignores SIGHUP, and because the only real one
+   * belongs in `main`, where every signal this server can send is in one place.
+   */
+  readonly signaller: ProcessSignaller;
+  /** A retake's polls and its grace before SIGKILL, which a test fires by hand. */
+  readonly timers: Timers;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -132,6 +148,29 @@ export interface StartSessionRequest {
    */
   readonly directory: string | null;
 }
+
+/**
+ * A session to take over from a provider process outside agentplex.
+ *
+ * Named, like a stop, and never a process: the pid comes out of the provider's
+ * own registry, verified at the moment it is signalled.
+ */
+export interface RetakeSessionRequest {
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
+  /** Which adapter knows where this provider registers its processes. */
+  readonly provider: Provider;
+}
+
+/** How often a retake asks whether the process it signalled has gone. */
+export const RETAKE_POLL_MS = 250;
+
+/**
+ * How long a retake waits for the process to go before it gives up: the grace
+ * a process gets before SIGKILL, and two seconds after it for the kernel to
+ * take a killed process down and the registry to say so.
+ */
+export const RETAKE_BOUND_MS = KILL_GRACE_MS + 2_000;
 
 /**
  * What this server did, or why it did nothing.
@@ -233,6 +272,12 @@ export interface StoreReport {
 
 export interface SessionController {
   start(request: StartSessionRequest): Promise<SessionOutcome>;
+  /**
+   * Ends the process an outside terminal is running a session in, and resumes
+   * the session here. Answers as a resume does, or refuses in words; it never
+   * signals a process it could not verify at that moment, nor one mid-turn.
+   */
+  retake(request: RetakeSessionRequest): Promise<SessionOutcome>;
   stop(session: SessionRef): SessionOutcome;
   /** Withholds a session's input from its next turn boundary. Kills nothing. */
   pause(session: SessionRef): PauseOutcome;
@@ -267,8 +312,18 @@ export interface SessionController {
 export function createSessionController(
   dependencies: SessionControllerDependencies,
 ): SessionController {
-  const { stores, providers, terminals, workingTree, browse, approvals, homeDirectory, clock } =
-    dependencies;
+  const {
+    stores,
+    providers,
+    terminals,
+    workingTree,
+    browse,
+    approvals,
+    homeDirectory,
+    signaller,
+    timers,
+    clock,
+  } = dependencies;
   const logger = dependencies.logger.child({ part: 'sessions' });
 
   const storeOf = (storeId: StoreId): StoreDescriptor | undefined =>
@@ -354,6 +409,27 @@ export function createSessionController(
     hold: null,
   });
 
+  const refused = (problem: string): SessionOutcome => ({
+    ok: false,
+    code: 'refused',
+    problem,
+    hold: null,
+  });
+
+  /** The refusal for a session one of this server's own terminals holds, naming the hold. */
+  const alreadyHeld = (session: SessionRef): SessionOutcome => {
+    const holder = terminals.holder(session);
+    return {
+      ok: false,
+      code: 'refused',
+      problem: 'this server is already running that session',
+      hold:
+        holder === undefined
+          ? null
+          : { sessionId: session.sessionId, stoppable: holder.stoppable, pause: holder.pause },
+    };
+  };
+
   return {
     async start(request: StartSessionRequest): Promise<SessionOutcome> {
       const store = storeOf(request.storeId);
@@ -425,52 +501,28 @@ export function createSessionController(
         };
       }
 
+      return await resumeSession(store, adapter, {
+        storeId: store.storeId,
+        sessionId: request.sessionId,
+      });
+    },
+
+    async retake(request: RetakeSessionRequest): Promise<SessionOutcome> {
+      const store = storeOf(request.storeId);
+      if (store === undefined) return refused('this server does not have that store mounted');
+
+      const found = providers.lookup(request.provider);
+      if (!found.ok) return refused(found.problem);
+      const { adapter } = found;
+
       const session: SessionRef = { storeId: store.storeId, sessionId: request.sessionId };
-
-      // A resume needs the directory the session already ran in, and only the
-      // provider's own files know it. Nobody gets to choose it: a session
-      // resumed elsewhere is a different session that happens to share a
-      // history, and every relative path in that history now points somewhere
-      // else.
-      const { sessions: known, origins } = await discover(store);
-      // The same join a report makes, made here off the same scan. A terminal
-      // this server spawned is not bound to its session until a report finds
-      // it, and in that window a resume would start a second process on the
-      // transcript its own first one is writing; bound, it meets the hold
-      // rule in `terminals.resume` below like any session this server runs.
-      bindSpawned(store.storeId, known, origins);
-      const descriptor = known.find((one) => one.sessionId === request.sessionId);
-      if (descriptor === undefined) {
-        return {
-          ok: false,
-          code: 'refused',
-          problem: 'this server cannot find that session in that store',
-          hold: null,
-        };
-      }
-
-      const refusal = runningElsewhere(session, origins.get(session.sessionId)?.pid ?? null);
-      if (refusal !== null) {
-        logger.info('session resume refused', { ...session, problem: refusal });
-        return { ok: false, code: 'refused', problem: refusal, hold: null };
-      }
-
-      const opened = await approvals?.open(store, adapter.permissionHook);
-      const launch = adapter.resume({
-        store,
-        session,
-        cwd: descriptor.cwd,
-        approval: opened?.approval ?? null,
-      });
-      const resumed = terminals.resume(session, launch);
-      retireWith(resumed, opened ?? null);
-      if (resumed.ok) oursIn(store.storeId).add(session.sessionId);
-      logger.info('session resume', {
+      const outcome = await retakeSession(store, adapter, session);
+      logger.info('session retake', {
         ...session,
-        ok: resumed.ok,
-        asks: opened !== undefined && opened !== null,
+        ok: outcome.ok,
+        ...(outcome.ok ? {} : { problem: outcome.problem }),
       });
-      return answer(store.storeId, resumed);
+      return outcome;
     },
 
     stop(session: SessionRef): SessionOutcome {
@@ -650,6 +702,255 @@ export function createSessionController(
     const allowed = await browse.allow(directory);
     if (allowed.ok) return { ok: true, directory: allowed.directory };
     return { ok: false, code: allowed.code, problem: allowed.problem };
+  }
+
+  /**
+   * The resume half of a start, and the last step of a retake.
+   *
+   * A resume needs the directory the session already ran in, and only the
+   * provider's own files know it. Nobody gets to choose it: a session resumed
+   * elsewhere is a different session that happens to share a history, and
+   * every relative path in that history now points somewhere else.
+   *
+   * After a retake the session must also read as run by no process at all --
+   * `none`, a look that found nothing. The process the retake ended has gone,
+   * but a look that could not be made (`unknown`) is not proof that nothing
+   * else took the session in the meantime, and a second process on one
+   * transcript damages it for both.
+   */
+  async function resumeSession(
+    store: StoreDescriptor,
+    adapter: ProviderAdapter,
+    session: SessionRef,
+    after: 'start' | 'retake' = 'start',
+  ): Promise<SessionOutcome> {
+    const { sessions: known, origins } = await discover(store);
+    // The same join a report makes, made here off the same scan. A terminal
+    // this server spawned is not bound to its session until a report finds
+    // it, and in that window a resume would start a second process on the
+    // transcript its own first one is writing; bound, it meets the hold rule
+    // in `terminals.resume` below like any session this server runs.
+    bindSpawned(store.storeId, known, origins);
+    const descriptor = known.find((one) => one.sessionId === session.sessionId);
+    if (descriptor === undefined) {
+      return refused('this server cannot find that session in that store');
+    }
+
+    if (after === 'retake' && descriptor.process !== 'none') {
+      return refused(
+        'the process running that session ended, but this server cannot confirm ' +
+          'that nothing else runs it, so it did not resume it',
+      );
+    }
+
+    const refusal = runningElsewhere(session, origins.get(session.sessionId)?.pid ?? null);
+    if (refusal !== null) {
+      logger.info('session resume refused', { ...session, problem: refusal });
+      return refused(refusal);
+    }
+
+    const opened = await approvals?.open(store, adapter.permissionHook);
+    const launch = adapter.resume({
+      store,
+      session,
+      cwd: descriptor.cwd,
+      approval: opened?.approval ?? null,
+    });
+    const resumed = terminals.resume(session, launch);
+    retireWith(resumed, opened ?? null);
+    if (resumed.ok) oursIn(store.storeId).add(session.sessionId);
+    logger.info('session resume', {
+      ...session,
+      ok: resumed.ok,
+      asks: opened !== undefined && opened !== null,
+      after,
+    });
+    return answer(store.storeId, resumed);
+  }
+
+  /**
+   * Ends the outside process running a session, then resumes it here.
+   *
+   * Every check that can refuse runs before anything is signalled, and the
+   * signal goes to a pid the adapter verified in the same breath -- nothing
+   * awaited between the second `liveProcess` and the SIGHUP -- because a pid
+   * is stale the moment it is read and this one is about to be ended.
+   *
+   * Only at the prompt or at a question. `idle` and `waiting` are a process
+   * whose transcript already holds everything it did; a turn in flight, a
+   * command somebody typed, or a process that did not say are all work that
+   * ending it would cut off, and the person running it is the one to stop it.
+   */
+  async function retakeSession(
+    store: StoreDescriptor,
+    adapter: ProviderAdapter,
+    session: SessionRef,
+  ): Promise<SessionOutcome> {
+    if (terminals.isRunning(session)) return alreadyHeld(session);
+
+    // First look: the refusals that need no scan, before paying for one.
+    const first = await liveProcessOf(store, adapter, session);
+    if (!first.ok) return first.outcome;
+    const before = retakeable(first.process);
+    if (!before.ok) return refused(before.problem);
+
+    // A terminal of this server's that is not yet bound to its session would
+    // otherwise be the "outside" process this is about to end.
+    const { sessions: known, origins } = await discover(store);
+    bindSpawned(store.storeId, known, origins);
+    if (terminals.isRunning(session)) return alreadyHeld(session);
+    if (!known.some((one) => one.sessionId === session.sessionId)) {
+      return refused('this server cannot find that session in that store');
+    }
+
+    // Nothing is ended that cannot be resumed. A claude nobody has spoken to
+    // has a registry entry and no transcript, and `--resume` would find no
+    // conversation; ending it would close somebody's terminal for nothing.
+    const transcript = await transcriptOf(store, adapter, session);
+    if (!transcript) {
+      return refused(
+        'this server finds no transcript to resume that session from, so it ends nothing',
+      );
+    }
+
+    // The re-verify, and the signal straight after it.
+    const now = await liveProcessOf(store, adapter, session);
+    if (!now.ok) return now.outcome;
+    const target = retakeable(now.process);
+    if (!target.ok) return refused(target.problem);
+    if (ownPid(target.pid)) return alreadyHeld(session);
+
+    const hung = signaller.signal(target.pid, 'SIGHUP');
+    if (!hung.ok) {
+      return refused(`this server could not end the process running that session: ${hung.problem}`);
+    }
+    logger.info('session retake signalled', { ...session, signal: 'SIGHUP' });
+
+    const ended = await untilEnded(store, adapter, session, target.pid);
+    if (ended !== null) return refused(ended);
+
+    return await resumeSession(store, adapter, session, 'retake');
+  }
+
+  /**
+   * Waits for a signalled process to go, sending SIGKILL once the grace is
+   * spent, and answers `null` when it has gone or the words for why not.
+   *
+   * Asked of the adapter every `RETAKE_POLL_MS` and counted in polls rather
+   * than read off the clock: a timer fires no earlier than it was set for, so
+   * the count is a floor on the time waited, which is the direction the grace
+   * has to err in. The SIGKILL goes to a pid the poll just before it verified,
+   * for the reason the SIGHUP did.
+   */
+  async function untilEnded(
+    store: StoreDescriptor,
+    adapter: ProviderAdapter,
+    session: SessionRef,
+    pid: number,
+  ): Promise<string | null> {
+    let waited = 0;
+    let killed = false;
+    for (;;) {
+      await new Promise<void>((resolve) => timers.schedule(RETAKE_POLL_MS, resolve));
+      waited += RETAKE_POLL_MS;
+
+      const now = await liveProcessOf(store, adapter, session);
+      if (!now.ok) {
+        return 'this server could not tell whether that process ended, so it did not resume it';
+      }
+      if (now.process === null) return null;
+      if (now.process.pid !== pid) {
+        return 'another process took that session while this server waited, so it did not resume it';
+      }
+      if (waited >= RETAKE_BOUND_MS) {
+        return 'the process running that session did not end, so this server did not resume it';
+      }
+      if (!killed && waited >= KILL_GRACE_MS) {
+        killed = true;
+        const sent = signaller.signal(pid, 'SIGKILL');
+        if (!sent.ok) {
+          return `this server could not end the process running that session: ${sent.problem}`;
+        }
+        logger.info('session retake signalled', { ...session, signal: 'SIGKILL' });
+      }
+    }
+  }
+
+  /**
+   * The adapter's answer, with a throwing adapter costing its own retake: an
+   * adapter is somebody else's code once this is open source.
+   */
+  async function liveProcessOf(
+    store: StoreDescriptor,
+    adapter: ProviderAdapter,
+    session: SessionRef,
+  ): Promise<
+    | { readonly ok: true; readonly process: LiveProcess | null }
+    | { readonly ok: false; readonly outcome: SessionOutcome }
+  > {
+    try {
+      return { ok: true, process: await adapter.liveProcess(store, session) };
+    } catch (error) {
+      logger.error('a provider adapter failed to name a process', {
+        ...session,
+        provider: adapter.provider,
+        problem: String(error),
+      });
+      return {
+        ok: false,
+        outcome: {
+          ok: false,
+          code: 'internal',
+          problem: 'this server could not tell which process runs that session',
+          hold: null,
+        },
+      };
+    }
+  }
+
+  /** Whether the adapter can read this session's transcript, which a resume continues. */
+  async function transcriptOf(
+    store: StoreDescriptor,
+    adapter: ProviderAdapter,
+    session: SessionRef,
+  ): Promise<boolean> {
+    try {
+      return (await adapter.transcript({ store, session, limit: 1 })).ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The pid that may be ended now, or why none may. */
+  function retakeable(
+    process: LiveProcess | null,
+  ):
+    { readonly ok: true; readonly pid: number } | { readonly ok: false; readonly problem: string } {
+    if (process === null) {
+      return {
+        ok: false,
+        problem: 'this server cannot tell which process runs it, so it ends none',
+      };
+    }
+    switch (process.phase) {
+      case 'idle':
+      case 'waiting':
+        return { ok: true, pid: process.pid };
+      case 'working':
+      case 'unknown':
+        return {
+          ok: false,
+          problem:
+            'that session is working elsewhere; it can be retaken only while it is idle or waiting',
+        };
+    }
+  }
+
+  /** Whether one of this server's own live terminals is this pid. */
+  function ownPid(pid: number): boolean {
+    return terminals.terminals.some(
+      (terminal) => terminal.run.exit === null && terminal.run.pid === pid,
+    );
   }
 
   /**
