@@ -154,6 +154,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     runHistories: new Map(),
     pushPublicKey: null,
     transcripts: new Map(),
+    resumes: new Map(),
     ...overrides,
   };
 }
