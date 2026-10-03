@@ -372,6 +372,35 @@ export function createSessionController(
   const isRetaking = (session: SessionRef): boolean =>
     retaking.get(session.storeId)?.has(session.sessionId) === true;
 
+  /**
+   * The process each retake signalled and has not yet seen end, by store and
+   * session: the pid, with the start date the adapter verified for it.
+   *
+   * A retake that gives up at its bound leaves a process this server signalled
+   * still holding the pid, and Claude Code dropped its registry entry when the
+   * SIGHUP arrived, so a scan reads the session as run by nothing. Kept until
+   * the process table says that pid is dead or holds a later process, and
+   * asked again at every start and retake of the session, because nothing
+   * else on this machine still knows the process is there.
+   */
+  const outstanding = new Map<StoreId, Map<SessionId, LiveProcess>>();
+
+  const signalledFor = (session: SessionRef): LiveProcess | undefined =>
+    outstanding.get(session.storeId)?.get(session.sessionId);
+
+  function rememberSignalled(session: SessionRef, process: LiveProcess): void {
+    const inStore = outstanding.get(session.storeId) ?? new Map<SessionId, LiveProcess>();
+    outstanding.set(session.storeId, inStore);
+    inStore.set(session.sessionId, process);
+  }
+
+  function forgetSignalled(session: SessionRef): void {
+    const inStore = outstanding.get(session.storeId);
+    if (inStore === undefined) return;
+    inStore.delete(session.sessionId);
+    if (inStore.size === 0) outstanding.delete(session.storeId);
+  }
+
   function oursIn(storeId: StoreId): Set<SessionId> {
     const known = ours.get(storeId) ?? new Set<SessionId>();
     ours.set(storeId, known);
@@ -459,6 +488,13 @@ export function createSessionController(
   /** The refusal for a session a retake here is in the middle of taking over. */
   const takingOver = (): SessionOutcome =>
     refused('agentplex is taking that session over on this machine; try again once it has');
+
+  /** The refusal for a session whose signalled process has not been seen to end. */
+  const stillSignalled = (): SessionOutcome =>
+    refused(
+      'the process agentplex signalled for that session has not exited yet, ' +
+        'so this server will not start another beside it',
+    );
 
   return {
     async start(request: StartSessionRequest): Promise<SessionOutcome> {
@@ -775,6 +811,14 @@ export function createSessionController(
           }
         : outcome;
 
+    if (after === 'start' && !(await signalledHasEnded(session))) {
+      logger.info('session resume refused', {
+        ...session,
+        problem: 'its signalled process runs on',
+      });
+      return stillSignalled();
+    }
+
     const { sessions: known, origins } = await discover(store);
     // The same join a report makes, made here off the same scan. A terminal
     // this server spawned is not bound to its session until a report finds
@@ -809,6 +853,16 @@ export function createSessionController(
       opened?.close();
       logger.info('session resume refused', { ...session, problem: 'a retake is taking it over' });
       return takingOver();
+    }
+    // A retake that began and gave up inside the awaits above leaves its
+    // record behind it; one asked about at the top was dead or is gone.
+    if (after === 'start' && signalledFor(session) !== undefined) {
+      opened?.close();
+      logger.info('session resume refused', {
+        ...session,
+        problem: 'its signalled process runs on',
+      });
+      return stillSignalled();
     }
     const launch = adapter.resume({
       store,
@@ -855,6 +909,10 @@ export function createSessionController(
     session: SessionRef,
   ): Promise<SessionOutcome> {
     if (terminals.isRunning(session)) return alreadyHeld(session);
+    // An earlier retake's process, still on the pid it was signalled at. The
+    // registry no longer names it, so the look below would find nothing to end
+    // and say only that it cannot tell what runs the session.
+    if (!(await signalledHasEnded(session))) return stillSignalled();
 
     // First look: the refusals that need no scan, before paying for one.
     const first = await liveProcessOf(store, adapter, session);
@@ -916,6 +974,7 @@ export function createSessionController(
     if (!hung.ok) {
       return refused(`this server could not end the process running that session: ${hung.problem}`);
     }
+    rememberSignalled(session, target.process);
     logger.info('session retake signalled', {
       ...session,
       pid: target.process.pid,
@@ -924,6 +983,7 @@ export function createSessionController(
 
     const ended = await untilEnded(session, target.process);
     if (ended !== null) return refused(ended);
+    forgetSignalled(session);
 
     return await resumeSession(store, adapter, session, 'retake');
   }
@@ -973,6 +1033,21 @@ export function createSessionController(
         logger.info('session retake signalled', { ...session, pid, signal: 'SIGKILL' });
       }
     }
+  }
+
+  /**
+   * Whether the process a retake signalled for this session has been seen to
+   * end, asking the process table again now, and forgetting it once it has.
+   * `true` when no retake left one.
+   */
+  async function signalledHasEnded(session: SessionRef): Promise<boolean> {
+    const process = signalledFor(session);
+    if (process === undefined) return true;
+    if ((await stillRunning(process)) !== 'gone') return false;
+    // Only the record that was asked about: a retake may have signalled the
+    // session again while the probe answered.
+    if (signalledFor(session) === process) forgetSignalled(session);
+    return true;
   }
 
   /**
