@@ -605,6 +605,11 @@ export function createSessionController(
         outcome = await retakeSession(store, adapter, session);
       } finally {
         claimed.delete(session.sessionId);
+        // A store's set goes with its last claim, so the map holds only the
+        // retakes in flight rather than every store ever retaken in.
+        if (claimed.size === 0 && retaking.get(store.storeId) === claimed) {
+          retaking.delete(store.storeId);
+        }
       }
       logger.info('session retake', {
         ...session,
