@@ -64,8 +64,9 @@ export type PaneState =
       readonly action: null;
     }
   /**
-   * The hub said this pane's start went out, and a state since shows nothing
-   * running the session: a resume that exited before its machine reported it.
+   * The hub said this page's start went out, and a state since shows nothing
+   * in agentplex holding the session: a resume, or a spawn rebound once named,
+   * that exited before its machine reported it held.
    */
   | {
       readonly kind: 'lapsed';
@@ -161,15 +162,15 @@ export function paneState(input: PaneStateInput): PaneState {
             kind: 'lapsed',
             machine,
             words:
-              `this session was resumed on ${machine}, but that machine's next report shows ` +
-              'nothing running it: the process may have exited as soon as it started',
+              `this session was started on ${machine}, but that machine's next report shows ` +
+              'nothing in agentplex running it: the process may have exited as soon as it started',
             action: 'try-again',
           };
         }
         return {
           kind: 'starting',
           send: false,
-          words: `resumed on ${machine}; waiting for that machine to report it running`,
+          words: `started on ${machine}; waiting for that machine to report it running`,
           action: null,
         };
       }

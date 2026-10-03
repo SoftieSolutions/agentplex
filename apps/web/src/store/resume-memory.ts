@@ -1,4 +1,4 @@
-import type { FrameId, MachineState, SessionRef } from '@agentplex/protocol';
+import type { ClientTerminalTarget, FrameId, MachineState, SessionRef } from '@agentplex/protocol';
 import type { Reply } from './answers.js';
 import type { HubCommand } from './commands.js';
 
@@ -102,6 +102,47 @@ export function rememberCommand(
     default:
       return memories;
   }
+}
+
+/**
+ * A start this page sent that turned out to be this session, remembered as
+ * this session's start -- unless the page already knows the session ran, or
+ * has a start of its own out for it.
+ *
+ * A spawn names no session when it is sent, so `rememberCommand` has nothing
+ * to file it under, and the pane rebound to the session once the provider
+ * named it would otherwise be a pane on a session nothing here started and
+ * nothing has seen run -- which it resumes. The agent quitting at its first
+ * prompt, before any state showed it held, is exactly that. Filed as this
+ * page's start instead, it is answered by the hold or lapses like any other.
+ */
+export function rememberStarted(
+  memories: ResumeMemories,
+  ref: Addressed,
+  start: FrameId,
+): ResumeMemories {
+  return withMemory(memories, ref, (memory) =>
+    memory.ran || memory.start !== null ? memory : { ...memory, start, lapsed: false },
+  );
+}
+
+/** The two facts of a watched terminal `rememberNamed` reads; a `TerminalWatchView` is one. */
+export interface NamedWatch {
+  readonly target: ClientTerminalTarget;
+  readonly session: Addressed | null;
+}
+
+/** Every watch by start handle that a frame has since named, as `rememberStarted`. */
+export function rememberNamed(
+  memories: ResumeMemories,
+  terminals: ReadonlyMap<string, NamedWatch>,
+): ResumeMemories {
+  let next = memories;
+  for (const view of terminals.values()) {
+    if (view.target.by !== 'start' || view.session === null) continue;
+    next = rememberStarted(next, view.session, view.target.startId);
+  }
+  return next;
 }
 
 /**

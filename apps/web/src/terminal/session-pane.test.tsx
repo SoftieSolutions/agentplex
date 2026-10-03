@@ -5,7 +5,10 @@ import {
   parseClientFrame,
   parseHubFrame,
   parseTextFrame,
+  providerSchema,
+  serverRegistrationIdSchema,
   sessionRefSchema,
+  storeIdSchema,
   TERMINAL_INPUT_MAX_CHARS,
   type ClientFrame,
 } from '@agentplex/protocol';
@@ -2620,6 +2623,46 @@ describe('a pane on a session nothing holds', () => {
 
     expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
     expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+  });
+
+  it('never resumes a spawn this page started that exits once named, before it is seen held', async () => {
+    const connected = await connectedTo(hubFrames.machineState);
+    const { store } = connected.hub;
+    // The captured conversation's ids: the start is frame 2, a frame the
+    // capture spent on a refused subscribe is 3, and the pending pane's
+    // subscribe by the start's handle is 4.
+    const start = store.sendCommand({
+      type: 'session-start',
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: null,
+      provider: providerSchema.parse('claude'),
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    if (!start.accepted) throw new Error(start.reason);
+    expect(start.id).toBe(2);
+    store.sendCommand({
+      type: 'directory-list',
+      server: serverRegistrationIdSchema.parse('registration-mbp-robert'),
+      directory: null,
+    });
+    await act(async () => {
+      store.watchTerminal({ by: 'start', startId: start.id });
+      connected.socket.deliver(hubFrames.sessionStarted);
+      connected.socket.deliver(hubFrames.sessionSubscribedPending);
+      connected.socket.deliver(hubFrames.terminalOutputNamed);
+    });
+
+    // Named: the pending pane is rebound to the session its start became,
+    // before any state has a row for it. Then the agent quits at its first
+    // prompt, and the state that says so is the first to show the row.
+    await mount(pane(connected.hub, 'store-work', 'session-spawned'));
+    await deliver(connected.socket, hubFrames.machineStateSpawnExited);
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('lapsed');
+    expect(action()?.textContent).toBe('Try again');
   });
 
   /**

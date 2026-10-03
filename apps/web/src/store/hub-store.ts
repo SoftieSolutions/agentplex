@@ -22,7 +22,13 @@ import {
 import { createConnection, type StoreSocket } from './connection.js';
 import type { FrameIds } from './frame-ids.js';
 import { createGraphReplies } from './graph-replies.js';
-import { rememberCommand, rememberRan, rememberState } from './resume-memory.js';
+import {
+  rememberCommand,
+  rememberNamed,
+  rememberRan,
+  rememberStarted,
+  rememberState,
+} from './resume-memory.js';
 import { createSessionReplies } from './session-replies.js';
 import { createTerminals } from './terminals.js';
 import type { Timers } from './timers.js';
@@ -311,7 +317,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     live: connection.live,
     frameIds,
     feedBytes: dependencies.terminalFeedBytes ?? DEFAULT_FEED_BYTES,
-    publish: (views) => update({ terminals: views }),
+    // In the same update as the views, so no render sees a pending pane's
+    // session named before the store knows this page started it.
+    publish: (views) =>
+      update({ terminals: views, resumes: rememberNamed(snapshot.resumes, views) }),
   });
   const catalogue = createCatalogueChannel({
     live: connection.live,
@@ -438,6 +447,17 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         return;
       }
       case 'session-started': {
+        // A start whose answer names its session is that session's start
+        // from here on, whether or not it named one when it was sent.
+        if (frame.sessionId !== null) {
+          update({
+            resumes: rememberStarted(
+              snapshot.resumes,
+              { storeId: frame.storeId, sessionId: frame.sessionId },
+              frame.replyTo,
+            ),
+          });
+        }
         remember(frame);
         sessions.started(frame);
         // The reply is also the moment a subscription by this start's handle

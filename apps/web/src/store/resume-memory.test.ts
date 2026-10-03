@@ -13,6 +13,7 @@ import { hubFrames } from './hub-frames.fixture.js';
 import {
   NO_RESUME_MEMORY,
   rememberCommand,
+  rememberNamed,
   rememberRan,
   rememberState,
   resumeMemoryOf,
@@ -132,6 +133,32 @@ describe('resume memory', () => {
     const stopped = rememberState(held, stateFrom(hubFrames.machineStateResumable), NO_REPLIES);
     expect(resumeMemoryOf(stopped, SPIKE).ran).toBe(true);
     expect(stopped).toBe(held);
+  });
+
+  it("files a spawn under the session a frame named it as, as this page's start", () => {
+    const named = new Map([
+      ['start', { target: { by: 'start' as const, startId: FIRST }, session: SPIKE }],
+      [
+        'pending',
+        { target: { by: 'start' as const, startId: frameIdSchema.parse(9) }, session: null },
+      ],
+      ['session', { target: { by: 'session' as const, ...OTHER }, session: OTHER }],
+    ]);
+    const memories = rememberNamed(NONE, named);
+    expect(resumeMemoryOf(memories, SPIKE)).toEqual({ ran: false, start: FIRST, lapsed: false });
+    expect(resumeMemoryOf(memories, OTHER)).toEqual(NO_RESUME_MEMORY);
+    // Publishing the same views again changes nothing.
+    expect(rememberNamed(memories, named)).toBe(memories);
+  });
+
+  it('leaves a session it already saw run, or already has a start for, as it was', () => {
+    const named = new Map([
+      ['start', { target: { by: 'start' as const, startId: FIRST }, session: SPIKE }],
+    ]);
+    const ran = rememberRan(NONE, SPIKE);
+    expect(rememberNamed(ran, named)).toBe(ran);
+    const asked = rememberCommand(NONE, startOf(SPIKE), frameIdSchema.parse(8));
+    expect(rememberNamed(asked, named)).toBe(asked);
   });
 
   it('records a run once, and hands back the same memories after', () => {
