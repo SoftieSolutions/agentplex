@@ -140,6 +140,37 @@ function idsIn(layout: readonly { readonly id: NodeId }[]): readonly NodeId[] {
   return layout.map((node) => node.id);
 }
 
+/** A folder made through the mutations, or a failure that says it was not. */
+async function folderIn(tree: Catalogue, parentId: NodeId, name: string): Promise<NodeId> {
+  const made = await tree.createFolder({ parentId, name });
+  if (!made.ok) throw new Error(`the folder ${name} should have been made: ${made.problem}`);
+  return made.nodeId;
+}
+
+/**
+ * A node of a kind the mutations never create, written the way its own feature
+ * writes one. Docs and graphs are only ever made under a project, which is the
+ * one place this puts them.
+ */
+async function insertNode(
+  nodeId: string,
+  kind: 'doc' | 'graph',
+  parentId: NodeId,
+): Promise<NodeId> {
+  const id = nodeIdSchema.parse(nodeId);
+  await database().query(
+    `INSERT INTO nodes (id, parent_id, kind, position, name, name_source, created_at)
+     VALUES (?, ?, ?, 0, ?, 'user', ?)`,
+    [id, parentId, kind, nodeId, NOW],
+  );
+  return id;
+}
+
+/** Every node's place, so a refusal can be shown to have changed nothing. */
+async function treeShape(): Promise<unknown> {
+  return (await database().query('SELECT id, parent_id, position FROM nodes ORDER BY id')).rows;
+}
+
 /** An id no node has, for every "not there" answer below. */
 const ABSENT: NodeId = nodeIdSchema.parse('no-such-node');
 
@@ -168,10 +199,11 @@ beforeEach(async () => {
 });
 
 describe('making a folder', () => {
-  it('makes one at the root, named by the user from the first millisecond', async () => {
+  it('makes one inside a project, named by the user from the first millisecond', async () => {
     const tree = catalogue();
+    const project = await makeProject('node-project', 'agentplex', '/srv/agentplex');
 
-    const made = await tree.createFolder({ parentId: null, name: '  this week  ' });
+    const made = await tree.createFolder({ parentId: project, name: '  this week  ' });
 
     if (!made.ok) throw new Error(`the folder should have been made: ${made.problem}`);
     const node = await findNode(database(), made.nodeId);
@@ -179,11 +211,38 @@ describe('making a folder', () => {
     // spellings of one intent.
     expect(node?.name).toBe('this week');
     expect(node?.named).toBe(true);
-    expect(node?.parentId).toBeNull();
+    expect(node?.parentId).toBe(project);
+  });
+
+  it('makes one inside a folder that is inside a project', async () => {
+    const tree = catalogue();
+    const project = await makeProject('node-project', 'agentplex', '/srv/agentplex');
+    const outer = await folderIn(tree, project, 'this week');
+
+    const made = await tree.createFolder({ parentId: outer, name: 'monday' });
+
+    if (!made.ok) throw new Error(`the folder should have been made: ${made.problem}`);
+    expect((await findNode(database(), made.nodeId))?.parentId).toBe(outer);
+  });
+
+  it('refuses one at the root, in words, and makes nothing', async () => {
+    const tree = catalogue();
+    await makeProject('node-project', 'agentplex', '/srv/agentplex');
+    const before = await treeShape();
+
+    const made = await tree.createFolder({ parentId: null, name: 'this week' });
+
+    expect(made).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'only projects sit at the top level; make the folder inside a project, or in HOME',
+      holder: null,
+    });
+    expect(await treeShape()).toEqual(before);
   });
 
   it('refuses a name that is nothing but spaces, in words rather than by throwing', async () => {
-    const made = await catalogue().createFolder({ parentId: null, name: '   ' });
+    const made = await catalogue().createFolder({ parentId: HOME_PROJECT_ID, name: '   ' });
 
     expect(made).toEqual({
       ok: false,
@@ -233,11 +292,10 @@ describe('renaming a node', () => {
 
   it('refuses a blank name and leaves the old one alone', async () => {
     const tree = catalogue();
-    const made = await tree.createFolder({ parentId: null, name: 'this week' });
-    if (!made.ok) throw new Error('the folder should have been made');
+    const folder = await folderIn(tree, HOME_PROJECT_ID, 'this week');
 
-    expect(await tree.rename(made.nodeId, ' ')).toMatchObject({ ok: false, code: 'refused' });
-    expect((await findNode(database(), made.nodeId))?.name).toBe('this week');
+    expect(await tree.rename(folder, ' ')).toMatchObject({ ok: false, code: 'refused' });
+    expect((await findNode(database(), folder))?.name).toBe('this week');
   });
 
   it('refuses a node this hub does not have', async () => {
@@ -252,36 +310,34 @@ describe('renaming a node', () => {
 describe('moving a node', () => {
   it('puts it where it was asked to go, among the siblings it will have', async () => {
     const tree = catalogue();
-    const folder = await tree.createFolder({ parentId: null, name: 'this week' });
-    if (!folder.ok) throw new Error('the folder should have been made');
+    const folder = await folderIn(tree, HOME_PROJECT_ID, 'this week');
     await scan(tree, [descriptor('session-one'), descriptor('session-two')]);
 
-    expect(await tree.move(await nodeFor('session-one'), { parentId: folder.nodeId, position: 0 }));
+    expect(await tree.move(await nodeFor('session-one'), { parentId: folder, position: 0 }));
     const moved = await tree.move(await nodeFor('session-two'), {
-      parentId: folder.nodeId,
+      parentId: folder,
       position: 0,
     });
 
     expect(moved).toEqual({ ok: true });
     const layout = await tree.readLayout();
-    expect(
-      layout.filter((node) => node.parentId === folder.nodeId).map((node) => node.name),
-    ).toEqual(['session-two', 'session-one']);
+    expect(layout.filter((node) => node.parentId === folder).map((node) => node.name)).toEqual([
+      'session-two',
+      'session-one',
+    ]);
   });
 
   it('refuses a move that would put a node inside its own subtree', async () => {
     const tree = catalogue();
-    const outer = await tree.createFolder({ parentId: null, name: 'outer' });
-    if (!outer.ok) throw new Error('the folder should have been made');
-    const inner = await tree.createFolder({ parentId: outer.nodeId, name: 'inner' });
-    if (!inner.ok) throw new Error('the folder should have been made');
+    const outer = await folderIn(tree, HOME_PROJECT_ID, 'outer');
+    const inner = await folderIn(tree, outer, 'inner');
 
-    const moved = await tree.move(outer.nodeId, { parentId: inner.nodeId, position: 0 });
+    const moved = await tree.move(outer, { parentId: inner, position: 0 });
 
     expect(moved).toMatchObject({ ok: false, code: 'refused' });
     if (moved.ok) throw new Error('a node cannot hold its own ancestor');
     expect(moved.problem).toContain('inside itself');
-    expect((await findNode(database(), outer.nodeId))?.parentId).toBeNull();
+    expect((await findNode(database(), outer))?.parentId).toBe(HOME_PROJECT_ID);
   });
 
   it('refuses a parent of a kind that holds no children', async () => {
@@ -295,48 +351,27 @@ describe('moving a node', () => {
     expect((await findNode(database(), one))?.parentId).toBeNull();
   });
 
-  it('refuses a project landing inside another project', async () => {
+  it('moves a session and a folder from one project to another, and into HOME', async () => {
     const tree = catalogue();
-    const outer = await makeProject('node-outer', 'agentplex', '/srv/agentplex');
-    const inner = await makeProject('node-inner', 'the docs', '/srv/docs');
+    const agentplex = await makeProject('node-agentplex', 'agentplex', '/srv/agentplex');
+    const docs = await makeProject('node-docs', 'the docs', '/srv/docs');
+    await scan(tree, [descriptor('session-one', '/srv/agentplex')]);
+    const session = await nodeFor('session-one');
+    const folder = await folderIn(tree, agentplex, 'archive');
 
-    const moved = await tree.move(inner, { parentId: outer, position: 0 });
+    expect(await tree.move(session, { parentId: docs, position: 0 })).toEqual({ ok: true });
+    expect(await tree.move(folder, { parentId: docs, position: 0 })).toEqual({ ok: true });
+    expect((await findNode(database(), session))?.parentId).toBe(docs);
+    expect((await findNode(database(), folder))?.parentId).toBe(docs);
 
-    expect(moved).toMatchObject({ ok: false, code: 'refused' });
-    if (moved.ok) throw new Error('a project holds no project');
-    expect(moved.problem).toContain('definite one of them');
-    expect((await findNode(database(), inner))?.parentId).toBeNull();
-  });
-
-  /**
-   * The rule is about where a project ends up, not about what was dragged. A
-   * folder with a project inside it nests one just as surely, and a check that
-   * only looked at the node being moved would let it through.
-   */
-  it('refuses a folder carrying a project into a project', async () => {
-    const tree = catalogue();
-    const project = await makeProject('node-project', 'agentplex', '/srv/agentplex');
-    const nested = await makeProject('node-nested', 'the docs', '/srv/docs');
-    const folder = await tree.createFolder({ parentId: null, name: 'archive' });
-    if (!folder.ok) throw new Error('the folder should have been made');
-    expect(await tree.move(nested, { parentId: folder.nodeId, position: 0 })).toEqual({ ok: true });
-
-    const moved = await tree.move(folder.nodeId, { parentId: project, position: 0 });
-
-    expect(moved).toMatchObject({ ok: false, code: 'refused' });
-    expect((await findNode(database(), folder.nodeId))?.parentId).toBeNull();
-  });
-
-  it('lets a project into a folder, which is the whole point of a folder', async () => {
-    const tree = catalogue();
-    const project = await makeProject('node-project', 'agentplex', '/srv/agentplex');
-    const folder = await tree.createFolder({ parentId: null, name: 'archive' });
-    if (!folder.ok) throw new Error('the folder should have been made');
-
-    expect(await tree.move(project, { parentId: folder.nodeId, position: 0 })).toEqual({
+    expect(await tree.move(session, { parentId: HOME_PROJECT_ID, position: 0 })).toEqual({
       ok: true,
     });
-    expect((await findNode(database(), project))?.parentId).toBe(folder.nodeId);
+    expect(await tree.move(folder, { parentId: HOME_PROJECT_ID, position: 0 })).toEqual({
+      ok: true,
+    });
+    expect((await findNode(database(), session))?.parentId).toBe(HOME_PROJECT_ID);
+    expect((await findNode(database(), folder))?.parentId).toBe(HOME_PROJECT_ID);
   });
 
   it('refuses a node this hub does not have', async () => {
@@ -344,6 +379,118 @@ describe('moving a node', () => {
       ok: false,
       code: 'refused',
     });
+  });
+});
+
+/**
+ * The root holds projects, and a project is held by nothing.
+ *
+ * Two rules and one shape: every node that is not a project lives inside one,
+ * and every project lives at the top. Each case asserts the sentence and then
+ * that the tree did not move, because a refusal that half-applied would be a
+ * node in a place the rules say it cannot be.
+ */
+describe('the top level', () => {
+  const NOT_AT_ROOT = 'only projects sit at the top level; move it into a project, or into HOME';
+  const NOT_BELOW = 'a project sits at the top level and never inside another node';
+
+  /** One of each kind the mutations can be asked to move, all inside a project. */
+  async function oneOfEach(tree: Catalogue): Promise<Record<string, NodeId>> {
+    const project = await makeProject('node-project', 'agentplex', '/srv/agentplex');
+    await scan(tree, [descriptor('session-one', '/srv/agentplex')]);
+    return {
+      session: await nodeFor('session-one'),
+      folder: await folderIn(tree, project, 'archive'),
+      doc: await insertNode('node-doc', 'doc', project),
+      graph: await insertNode('node-graph', 'graph', project),
+    };
+  }
+
+  it.each(['session', 'folder', 'doc', 'graph'])(
+    'refuses a %s moved to the top level, and leaves it where it was',
+    async (kind) => {
+      const tree = catalogue();
+      const nodes = await oneOfEach(tree);
+      const nodeId = nodes[kind];
+      if (nodeId === undefined) throw new Error(`no ${kind} was made`);
+      const before = await treeShape();
+
+      expect(await tree.move(nodeId, { parentId: null, position: 1 })).toEqual({
+        ok: false,
+        code: 'refused',
+        problem: NOT_AT_ROOT,
+        holder: null,
+      });
+      expect(await treeShape()).toEqual(before);
+    },
+  );
+
+  it.each([
+    ['a folder', 'folder'],
+    ['another project', 'project'],
+    ['HOME', 'home'],
+  ] as const)('refuses a project moved into %s, and leaves it at the top', async (_, target) => {
+    const tree = catalogue();
+    const project = await makeProject('node-project', 'agentplex', '/srv/agentplex');
+    const other = await makeProject('node-other', 'the docs', '/srv/docs');
+    const folder = await folderIn(tree, other, 'archive');
+    const parentId = { folder, project: other, home: HOME_PROJECT_ID }[target];
+    const before = await treeShape();
+
+    expect(await tree.move(project, { parentId, position: 0 })).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: NOT_BELOW,
+      holder: null,
+    });
+    expect(await treeShape()).toEqual(before);
+  });
+
+  /**
+   * What the old nested-project rule guarded against -- a folder carrying a
+   * project into another one -- cannot be built any more: no folder takes a
+   * project in, so there is never one to carry.
+   */
+  it('refuses a project into a folder in HOME, so no folder ever carries one', async () => {
+    const tree = catalogue();
+    const project = await makeProject('node-project', 'agentplex', '/srv/agentplex');
+    const folder = await folderIn(tree, HOME_PROJECT_ID, 'archive');
+    const before = await treeShape();
+
+    const moved = await tree.move(project, { parentId: folder, position: 0 });
+
+    expect(moved).toMatchObject({ ok: false, code: 'refused', problem: NOT_BELOW });
+    expect(await treeShape()).toEqual(before);
+  });
+
+  it('reorders a project along the top level', async () => {
+    const tree = catalogue();
+    const one = await makeProject('node-one', 'one', '/srv/one');
+    const two = await makeProject('node-two', 'two', '/srv/two');
+
+    expect(await tree.move(two, { parentId: null, position: 1 })).toEqual({ ok: true });
+
+    expect(idsIn(await tree.readLayout())).toEqual([HOME_PROJECT_ID, two, one]);
+  });
+
+  /**
+   * HOME is first, always, and a reorder that would put a project before it is
+   * clamped rather than refused -- the same answer an index past the end gets,
+   * for the same reason: the client asked for something reasonable against a
+   * tree it may have read a frame ago.
+   */
+  it.each([0, -3])('puts a project reordered to position %d just after HOME', async (position) => {
+    const tree = catalogue();
+    const one = await makeProject('node-one', 'one', '/srv/one');
+    const two = await makeProject('node-two', 'two', '/srv/two');
+
+    expect(await tree.move(two, { parentId: null, position })).toEqual({ ok: true });
+
+    expect(idsIn(await tree.readLayout())).toEqual([HOME_PROJECT_ID, two, one]);
+    // In storage and not only in the order a reading puts things: the layout
+    // orders by the stored position, and a HOME renumbered to 1 would read as
+    // second in it while a query that sorts HOME first still showed it first.
+    expect((await findNode(database(), HOME_PROJECT_ID))?.position).toBe(0);
   });
 });
 
@@ -368,7 +515,7 @@ describe('removing a node', () => {
 
   it('remembers every session under a folder, not the folder', async () => {
     const tree = catalogue();
-    const folder = await tree.createFolder({ parentId: null, name: 'this week' });
+    const folder = await tree.createFolder({ parentId: HOME_PROJECT_ID, name: 'this week' });
     if (!folder.ok) throw new Error('the folder should have been made');
     await scan(tree, [descriptor('session-one'), descriptor('session-two')]);
     for (const sessionId of ['session-one', 'session-two']) {
@@ -390,7 +537,7 @@ describe('removing a node', () => {
 
   it('refuses while a session in the subtree is still running, and names the holder', async () => {
     const tree = catalogue();
-    const folder = await tree.createFolder({ parentId: null, name: 'this week' });
+    const folder = await tree.createFolder({ parentId: HOME_PROJECT_ID, name: 'this week' });
     if (!folder.ok) throw new Error('the folder should have been made');
     await scan(tree, [descriptor('session-one')]);
     await tree.move(await nodeFor('session-one'), { parentId: folder.nodeId, position: 0 });
@@ -513,9 +660,21 @@ describe('HOME', () => {
     expect(await home()).toEqual(before);
   });
 
+  it('refuses a blank rename in its own words, not as a blank name', async () => {
+    const before = await home();
+
+    expect(await catalogue().rename(HOME_PROJECT_ID, '   ')).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'HOME is where every session without a project goes, so its name stays HOME',
+      holder: null,
+    });
+    expect(await home()).toEqual(before);
+  });
+
   it('refuses a move into a folder, in words, and stays where it is', async () => {
     const tree = catalogue();
-    const folder = await tree.createFolder({ parentId: null, name: 'elsewhere' });
+    const folder = await tree.createFolder({ parentId: HOME_PROJECT_ID, name: 'elsewhere' });
     if (!folder.ok) throw new Error('the folder should have been made');
     const before = await home();
 
@@ -587,7 +746,7 @@ describe('the version every attached client is told', () => {
     const versions: number[] = [];
     const stop = tree.subscribe((version) => versions.push(version));
 
-    const folder = await tree.createFolder({ parentId: null, name: 'this week' });
+    const folder = await tree.createFolder({ parentId: HOME_PROJECT_ID, name: 'this week' });
     if (!folder.ok) throw new Error('the folder should have been made');
     await tree.rename(folder.nodeId, 'last week');
     await tree.rename(folder.nodeId, '   ');
@@ -596,7 +755,7 @@ describe('the version every attached client is told', () => {
 
     expect(versions).toEqual([1, 2, 3]);
     stop();
-    await tree.createFolder({ parentId: null, name: 'after' });
+    await tree.createFolder({ parentId: HOME_PROJECT_ID, name: 'after' });
     expect(versions).toEqual([1, 2, 3]);
   });
 

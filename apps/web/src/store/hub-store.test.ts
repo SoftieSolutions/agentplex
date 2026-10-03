@@ -2214,12 +2214,14 @@ describe('the catalogue query', () => {
     // the cut forward rather than back, so a page boundary never falls between
     // a parent and its first child -- which is what lets the client indent off
     // the depth on the row instead of walking a parent chain it may not hold.
-    const child = rest.items.findIndex((item) => item.kind === 'project');
+    // The captured folder sits in HOME, so its session is two below the top.
+    const child = rest.items.findIndex((item) => item.kind === 'session');
     const folder = child - 1;
     expect(child).toBeGreaterThan(0);
     expect(rest.items[folder]?.kind).toBe('folder');
     expect(rest.items[child]?.parentId).toBe(rest.items[folder]?.id);
-    expect(rest.items[child]?.depth).toBe(1);
+    expect(rest.items[folder]?.depth).toBe(1);
+    expect(rest.items[child]?.depth).toBe(2);
     // The list view drops containers; this is the view that does not.
     expect(rest.items.some((item) => item.session !== null)).toBe(true);
   });

@@ -197,7 +197,7 @@ describe('the answer', () => {
     expect(WITH_CONTAINERS.items.some((item) => item.kind === 'folder')).toBe(true);
     const results = catalogueResults(WITH_CONTAINERS.items);
 
-    expect(results.map((result) => result.kind)).toEqual(['session', 'project', 'doc']);
+    expect(results.map((result) => result.kind)).toEqual(['session', 'project', 'doc', 'session']);
   });
 
   it('turns a project into a row that says which kind it is and goes to the tree', () => {

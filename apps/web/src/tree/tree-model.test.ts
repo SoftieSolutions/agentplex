@@ -58,14 +58,15 @@ describe('where a node may be put', () => {
   });
 
   it('leaves out the node itself and everything under it', () => {
-    // `hub-7` is the folder and `hub-5` the project inside it. Neither is
-    // somewhere the folder can go, and the hub would refuse both -- but a
-    // menu offering a click that can only be refused is a menu wasting one.
-    // HOME, which migration 0020 seeds, is a container like any other here;
-    // which targets the menu keeps for each kind is AGX-385's.
-    expect(moveTargets(ARRANGED, node('hub-7'))).toEqual([
+    // `home` holds `hub-7`, the folder. Neither is somewhere HOME's subtree can
+    // go, and the hub would refuse both -- but a menu offering a click that can
+    // only be refused is a menu wasting one. HOME is asked about here only
+    // because it is the captured container with a container under it; which
+    // targets the menu keeps for each kind, HOME's none among them, is
+    // AGX-385's.
+    expect(moveTargets(ARRANGED, node('home'))).toEqual([
       { parentId: null, label: 'Top level' },
-      { parentId: 'home', label: 'HOME' },
+      { parentId: 'hub-5', label: 'agentplex (main checkout)' },
     ]);
   });
 
