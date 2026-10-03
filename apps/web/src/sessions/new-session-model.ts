@@ -379,8 +379,8 @@ export function sessionPaneHash(ref: SessionRef): string {
  * provider has not written its id yet -- and a route invented around a missing
  * id would never match the id the provider eventually mints, a page that is
  * permanently wrong rather than merely early. That case is `started`: said in
- * words, naming the machine the hub picked, while the session's row arrives
- * with the scan that learns its id.
+ * words, naming the machine the hub picked, and pointing at the sidebar, which
+ * carries a row for the start until the hub names the session it became.
  *
  * `idle` is a start nothing more is coming for, as `followUp` reads it, and
  * leaves the control free for a second try.
@@ -459,7 +459,7 @@ export function startFollowUp(
       const label = state === null ? started.server : serverLabel(state, started.server);
       return {
         kind: 'started',
-        words: `started on ${label}; the session appears in the list once the provider writes its first turn`,
+        words: `started on ${label}; it is in the list now`,
       };
     }
   }

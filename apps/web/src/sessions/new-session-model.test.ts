@@ -405,11 +405,15 @@ describe('the follow-up to a start', () => {
     // id yet, so there is no pane address to navigate to -- inventing one would
     // give a page that never matches the id the provider mints.
     expect(started.sessionId).toBeNull();
-    expect(startFollowUp(started.replyTo, answersOf(started), single, null)).toEqual({
+    // The start has a row of its own in the sidebar from the moment the hub
+    // accepted it, so the sentence says where to look rather than promising a
+    // row that will only come once the provider has written something.
+    const said = startFollowUp(started.replyTo, answersOf(started), single, null);
+    expect(said).toEqual({
       kind: 'started',
-      words:
-        'started on mbp-robert; the session appears in the list once the provider writes its first turn',
+      words: 'started on mbp-robert; it is in the list now',
     });
+    expect(said.kind === 'started' && said.words).not.toContain('first turn');
   });
 
   it('navigates immediately when the reply names the session', () => {
