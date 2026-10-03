@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOGUE_PAGE_MAX_LIMIT,
+  HOME_PROJECT_ID,
+  HOME_PROJECT_NAME,
   nodeIdSchema,
   nodeKindSchema,
   serverAddressSchema,
@@ -1019,5 +1021,135 @@ describe('the project each session is filed under', () => {
     expect(read.get(keyFor('session-bench'))?.nodeId).toBe(groups.get(nodeIdSchema.parse('filed')));
     expect(read.get(keyFor('session-draft'))).toBeUndefined();
     expect(groups.get(nodeIdSchema.parse('unfiled'))).toBeNull();
+  });
+});
+
+/**
+ * HOME, which migration 0020 seeds: a project with no directory, first at the
+ * root whatever the rows are sorted by, and first among the headings of a list
+ * grouped by project.
+ *
+ * First is the point of it. HOME is where everything without a project goes,
+ * and a place that moved every time somebody changed the sort would be a place
+ * nobody could find by where it is.
+ */
+describe('HOME', () => {
+  // Named so that every sort key, either way round, would put HOME anywhere
+  // but first: 'HOME' sorts between 'Alpha' and 'zulu' by name, and HOME has
+  // no session row, so no updatedAt and no server, which sorts last. 'Alpha'
+  // is capitalised so that a heading order by label alone, which compares
+  // bytes, would put it before 'HOME' too.
+  const rows = [
+    project('alpha', null, 1, 'Alpha'),
+    project(HOME_PROJECT_ID, null, 0, HOME_PROJECT_NAME),
+    project('zulu', null, 2, 'zulu'),
+    session('in-alpha', 'alpha', 0, 'session-alpha', 'in alpha'),
+    session('loose', HOME_PROJECT_ID, 0, 'session-loose', 'loose'),
+    folder('drafts', HOME_PROJECT_ID, 1, 'drafts'),
+    session('drafted', 'drafts', 0, 'session-drafted', 'drafted'),
+    session('in-zulu', 'zulu', 0, 'session-zulu', 'in zulu'),
+  ];
+  const readings: Reading[] = [
+    { sessionId: 'session-alpha', updatedAt: START - 10, source: BOX },
+    { sessionId: 'session-loose', updatedAt: START - 20, source: LAPTOP },
+    { sessionId: 'session-drafted', updatedAt: START - 30, source: LAPTOP },
+    { sessionId: 'session-zulu', updatedAt: START, source: BOX },
+  ];
+
+  const keyFor = (sessionId: string): string =>
+    sessionRefKey({ storeId: STORE, sessionId: sessionIdSchema.parse(sessionId) });
+
+  it('files a session under HOME, directly or inside a folder in it', () => {
+    const placements = sessionProjectsIn(rows.map((row) => nodeRowSchema.parse(row)));
+    const home = { nodeId: HOME_PROJECT_ID, name: HOME_PROJECT_NAME };
+
+    expect(placements.get(keyFor('session-loose'))).toEqual(home);
+    expect(placements.get(keyFor('session-drafted'))).toEqual(home);
+  });
+
+  it('answers HOME on a tree page as a project with no directory', async () => {
+    const directories = new Map([[nodeIdSchema.parse('alpha'), '/srv/alpha']]);
+    const answered = await over(rows, readings, { directories }).page({ view: 'tree' });
+    const home = answered.items.find((item) => item.id === HOME_PROJECT_ID);
+
+    expect(home?.kind).toBe('project');
+    expect(home?.displayName).toBe(HOME_PROJECT_NAME);
+    expect(home?.directory).toBeNull();
+  });
+
+  for (const key of ['name', 'updatedAt', 'server'] as const) {
+    for (const direction of ['asc', 'desc'] as const) {
+      it(`leads the root of a tree sorted by ${key}, ${direction}`, async () => {
+        const answered = await over(rows, readings).page({
+          view: 'tree',
+          sort: { key, direction },
+        });
+        const roots = answered.items.filter((item) => item.depth === 0);
+
+        expect(roots[0]?.id).toBe(HOME_PROJECT_ID);
+        // And the others are still in the asked-for order among themselves.
+        const others = roots.slice(1).map((item) => item.id);
+        expect([...others].sort()).toEqual(['alpha', 'zulu']);
+      });
+    }
+  }
+
+  it('keeps the other root projects in the asked-for order behind it', async () => {
+    const ascending = await over(rows, readings).page({
+      view: 'tree',
+      sort: { key: 'name', direction: 'asc' },
+    });
+    const descending = await over(rows, readings).page({
+      view: 'tree',
+      sort: { key: 'name', direction: 'desc' },
+    });
+
+    const roots = (items: readonly CatalogueItem[]): readonly string[] =>
+      items.filter((item) => item.depth === 0).map((item) => item.id);
+    expect(roots(ascending.items)).toEqual([HOME_PROJECT_ID, 'alpha', 'zulu']);
+    expect(roots(descending.items)).toEqual([HOME_PROJECT_ID, 'zulu', 'alpha']);
+  });
+
+  // The open set decides how much of each project is drawn; it does not decide
+  // where a project sits. Both rules meet at the root, and HOME still leads it.
+  for (const direction of ['asc', 'desc'] as const) {
+    it(`leads every project closed, sorted by name ${direction}`, async () => {
+      const answered = await over(rows, readings).page({
+        view: 'tree',
+        openProjects: [],
+        sort: { key: 'name', direction },
+      });
+
+      expect(idsOf(answered.items)).toEqual(
+        direction === 'asc'
+          ? [HOME_PROJECT_ID, 'alpha', 'zulu']
+          : [HOME_PROJECT_ID, 'zulu', 'alpha'],
+      );
+      expect(answered.total).toBe(3);
+    });
+  }
+
+  it('draws its contents right behind it when HOME is the one open', async () => {
+    const answered = await over(rows, readings).page({
+      view: 'tree',
+      openProjects: [HOME_PROJECT_ID],
+      sort: { key: 'name', direction: 'desc' },
+    });
+
+    expect(idsOf(answered.items)).toEqual([
+      HOME_PROJECT_ID,
+      'loose',
+      'drafts',
+      'drafted',
+      'zulu',
+      'alpha',
+    ]);
+  });
+
+  it("puts HOME's heading first in a list grouped by project, and the rest by label", async () => {
+    const answered = await over(rows, readings).page({ groupBy: 'project' });
+    const headings = [...new Set(answered.items.map((item) => item.group?.key ?? null))];
+
+    expect(headings).toEqual([HOME_PROJECT_ID, 'alpha', 'zulu']);
   });
 });

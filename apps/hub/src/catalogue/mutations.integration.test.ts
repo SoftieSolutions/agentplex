@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
   nodeIdSchema,
   sessionIdSchema,
   storeIdSchema,
@@ -134,6 +135,11 @@ async function makeProject(nodeId: string, name: string, directory: string): Pro
   return id;
 }
 
+/** The ids in a layout, in the order it lists them. */
+function idsIn(layout: readonly { readonly id: NodeId }[]): readonly NodeId[] {
+  return layout.map((node) => node.id);
+}
+
 /** An id no node has, for every "not there" answer below. */
 const ABSENT: NodeId = nodeIdSchema.parse('no-such-node');
 
@@ -145,8 +151,14 @@ afterAll(async () => {
   await migrated?.close();
 });
 
+/**
+ * HOME survives the reset rather than being deleted and seeded again: what every
+ * case here runs against is then the tree migration 0020 actually left, and
+ * there is no second copy of its INSERT in this file to drift from the one in
+ * the migration.
+ */
 beforeEach(async () => {
-  await database().query('DELETE FROM nodes');
+  await database().query('DELETE FROM nodes WHERE id <> ?', [HOME_PROJECT_ID]);
   await database().query('DELETE FROM node_removals');
   await database().query('DELETE FROM projects');
   stores.clear();
@@ -185,7 +197,9 @@ describe('making a folder', () => {
     const made = await catalogue().createFolder({ parentId: ABSENT, name: 'anywhere' });
 
     expect(made).toMatchObject({ ok: false, code: 'refused' });
-    expect(await database().query('SELECT id FROM nodes')).toMatchObject({ rows: [] });
+    expect(await database().query('SELECT id FROM nodes')).toMatchObject({
+      rows: [{ id: HOME_PROJECT_ID }],
+    });
   });
 
   it('refuses a parent of a kind that holds no children', async () => {
@@ -371,7 +385,7 @@ describe('removing a node', () => {
       ['session-one', 'session-two'],
     );
     await scan(tree, [descriptor('session-one'), descriptor('session-two')]);
-    expect(await tree.readLayout()).toEqual([]);
+    expect(idsIn(await tree.readLayout())).toEqual([HOME_PROJECT_ID]);
   });
 
   it('refuses while a session in the subtree is still running, and names the holder', async () => {
@@ -477,7 +491,93 @@ describe('forgetting a removal', () => {
 
     expect(await tree.forgetRemoval(ref('session-one'))).toEqual({ ok: true });
     expect(await listRemovals(database())).toEqual([]);
-    expect(await tree.readLayout()).toEqual([]);
+    expect(idsIn(await tree.readLayout())).toEqual([HOME_PROJECT_ID]);
+  });
+});
+
+describe('HOME', () => {
+  /** HOME as the migration left it, read back so a refusal can be shown to have changed nothing. */
+  async function home(): Promise<unknown> {
+    return findNode(database(), HOME_PROJECT_ID);
+  }
+
+  it('refuses a rename, in words, and keeps its name', async () => {
+    const before = await home();
+
+    expect(await catalogue().rename(HOME_PROJECT_ID, 'somewhere else')).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'HOME is where every session without a project goes, so its name stays HOME',
+      holder: null,
+    });
+    expect(await home()).toEqual(before);
+  });
+
+  it('refuses a move into a folder, in words, and stays where it is', async () => {
+    const tree = catalogue();
+    const folder = await tree.createFolder({ parentId: null, name: 'elsewhere' });
+    if (!folder.ok) throw new Error('the folder should have been made');
+    const before = await home();
+
+    expect(await tree.move(HOME_PROJECT_ID, { parentId: folder.nodeId, position: 0 })).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'HOME stays at the top level',
+      holder: null,
+    });
+    expect(await home()).toEqual(before);
+  });
+
+  it('refuses a move along the top level too, so it stays first', async () => {
+    const tree = catalogue();
+    await makeProject('project-one', 'one', '/srv/one');
+    const before = await home();
+
+    expect(await tree.move(HOME_PROJECT_ID, { parentId: null, position: 1 })).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'HOME stays at the top level',
+      holder: null,
+    });
+    expect(await home()).toEqual(before);
+  });
+
+  it('refuses a removal, in words, and keeps everything in it', async () => {
+    const tree = catalogue();
+    await scan(tree, [descriptor('session-one')]);
+    const session = await nodeFor('session-one');
+    expect(await tree.move(session, { parentId: HOME_PROJECT_ID, position: 0 })).toEqual({
+      ok: true,
+    });
+    const before = await home();
+
+    expect(await tree.remove(HOME_PROJECT_ID)).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'HOME holds every session without a project, so it cannot be removed',
+      holder: null,
+    });
+    expect(await home()).toEqual(before);
+    expect((await findNode(database(), session))?.parentId).toBe(HOME_PROJECT_ID);
+    expect(await listRemovals(database())).toEqual([]);
+  });
+
+  it('takes a session moved into it', async () => {
+    const tree = catalogue();
+    await scan(tree, [descriptor('session-one')]);
+    const session = await nodeFor('session-one');
+
+    expect(await tree.move(session, { parentId: HOME_PROJECT_ID, position: 0 })).toEqual({
+      ok: true,
+    });
+    expect((await findNode(database(), session))?.parentId).toBe(HOME_PROJECT_ID);
+  });
+
+  it('takes a folder made inside it', async () => {
+    const made = await catalogue().createFolder({ parentId: HOME_PROJECT_ID, name: 'drafts' });
+
+    if (!made.ok) throw new Error(`the folder should have been made: ${made.problem}`);
+    expect((await findNode(database(), made.nodeId))?.parentId).toBe(HOME_PROJECT_ID);
   });
 });
 

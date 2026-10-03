@@ -90,7 +90,7 @@ function heldPages(text: string): CataloguePages {
 /** Two machines, two providers, four statuses. */
 const populated = stateFrom(hubFrames.machineStatePopulated);
 
-/** The captured tree page, whose `total` is 6. */
+/** The captured tree page, whose `total` counts the whole tree rather than this page. */
 const TREE_PAGE = heldPages(hubFrames.catalogueTreePage);
 
 /** A machine, a provider, a status and a reversed sort: everything at once. */
@@ -353,7 +353,7 @@ describe('the catalogue filter row', () => {
     draw();
     await open();
 
-    await click(buttonSaying('Show 6'));
+    await click(buttonSaying(`Show ${String(TREE_PAGE.total)}`));
 
     expect(trigger().getAttribute('aria-expanded')).toBe('false');
     expect(fake.reshapes).toEqual([]);

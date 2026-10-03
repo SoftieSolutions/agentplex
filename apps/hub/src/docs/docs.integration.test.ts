@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
   docNameSchema,
   nodeIdSchema,
   serverAddressSchema,
@@ -177,7 +178,7 @@ describe('the docs feature over a real schema', () => {
 
   beforeEach(async () => {
     await db().query('DELETE FROM docs');
-    await db().query('DELETE FROM nodes');
+    await db().query('DELETE FROM nodes WHERE id <> ?', [HOME_PROJECT_ID]);
     await db().query('DELETE FROM servers');
     await pairServers();
     await makeProject();

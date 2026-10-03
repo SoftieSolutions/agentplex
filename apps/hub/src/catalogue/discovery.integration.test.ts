@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
   nodeIdSchema,
   sessionIdSchema,
   storeIdSchema,
@@ -11,6 +12,7 @@ import { openMigratedSchema, type MigratedSchema } from '../db/test-migrated-sch
 import type { DiscoveredSession } from './catalogue.js';
 import { discoverNodes } from './discovery.js';
 import { findNodeForSession, listNodes, listRemovals } from './reads.js';
+import type { TreeNode } from './rows.js';
 import { createFolder, moveNode, removeNode, renameNode, forgetRemoval } from './writes.js';
 
 /**
@@ -81,6 +83,15 @@ async function makeProject(directory: string): Promise<NodeId> {
   return id;
 }
 
+/**
+ * Every node but HOME. Migration 0020 seeds HOME at the root of every hub, and
+ * nothing here places anything in it or around it, so it is left out of the
+ * counts rather than counted in each of them.
+ */
+async function placed(): Promise<readonly TreeNode[]> {
+  return (await listNodes(db())).filter((node) => node.id !== HOME_PROJECT_ID);
+}
+
 describe('discovery and the node tree', () => {
   beforeAll(async () => {
     migrated = await openMigratedSchema('layout-discovery-probe');
@@ -91,7 +102,7 @@ describe('discovery and the node tree', () => {
   });
 
   beforeEach(async () => {
-    await db().query('DELETE FROM nodes');
+    await db().query('DELETE FROM nodes WHERE id <> ?', [HOME_PROJECT_ID]);
     await db().query('DELETE FROM node_removals');
     minted = 0;
   });
@@ -205,7 +216,7 @@ describe('discovery and the node tree', () => {
     const second = await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
 
     expect(second.created).toEqual([]);
-    expect(await listNodes(db())).toHaveLength(1);
+    expect(await placed()).toHaveLength(1);
   });
 
   it('appends discovered sessions after each other rather than stacking them at 0', async () => {
@@ -215,8 +226,9 @@ describe('discovery and the node tree', () => {
       found('s3', 'three'),
     ]);
 
-    const positions = (await listNodes(db())).map((node) => node.position).sort();
-    expect(positions).toEqual([0, 1, 2]);
+    // After HOME, which 0020 seeded at the root's position 0.
+    const positions = (await placed()).map((node) => node.position).sort();
+    expect(positions).toEqual([1, 2, 3]);
   });
 
   it('follows the transcript title while nobody has renamed the node', async () => {
@@ -325,7 +337,7 @@ describe('discovery and the node tree', () => {
       await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
     }
 
-    expect(await listNodes(db())).toEqual([]);
+    expect(await placed()).toEqual([]);
     expect(await listRemovals(db())).toHaveLength(1);
   });
 
@@ -363,14 +375,14 @@ describe('discovery and the node tree', () => {
     const outcome = await discoverNodes(db(), ids, clock, [found('s1', 'one'), found('s2', 'two')]);
 
     expect(outcome.created).toEqual([]);
-    expect(await listNodes(db())).toEqual([]);
+    expect(await placed()).toEqual([]);
   });
 
   it('reports nothing and writes nothing when a scan found no sessions', async () => {
     const outcome = await discoverNodes(db(), ids, clock, []);
 
     expect(outcome).toEqual({ created: [], retitled: [], suppressed: [] });
-    expect(await listNodes(db())).toEqual([]);
+    expect(await placed()).toEqual([]);
   });
 
   /**
@@ -384,6 +396,6 @@ describe('discovery and the node tree', () => {
       { ref: { storeId: other, sessionId: sessionIdSchema.parse('s1') }, title: 'in b', cwd: null },
     ]);
 
-    expect(await listNodes(db())).toHaveLength(2);
+    expect(await placed()).toHaveLength(2);
   });
 });

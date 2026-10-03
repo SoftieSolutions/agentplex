@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { emptyGraphDocument, nodeIdSchema, type GraphDocument } from '@agentplex/protocol';
+import {
+  HOME_PROJECT_ID,
+  emptyGraphDocument,
+  nodeIdSchema,
+  type GraphDocument,
+} from '@agentplex/protocol';
 import type { Database } from '../db/database.js';
 import { openMigratedSchema, type MigratedSchema } from '../db/test-migrated-schema.js';
 import {
@@ -75,7 +80,7 @@ describe('the graph rows over a real schema', () => {
   });
 
   beforeEach(async () => {
-    await db().query('DELETE FROM nodes');
+    await db().query('DELETE FROM nodes WHERE id <> ?', [HOME_PROJECT_ID]);
     await makeProject();
     minted = 0;
   });

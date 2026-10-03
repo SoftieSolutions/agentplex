@@ -51,6 +51,7 @@ describe('where a node may be put', () => {
   it('offers the root and every container the hub sent', () => {
     expect(moveTargets(ARRANGED, node('hub-2'))).toEqual([
       { parentId: null, label: 'Top level' },
+      { parentId: 'home', label: 'HOME' },
       { parentId: 'hub-7', label: 'this week' },
       { parentId: 'hub-5', label: 'agentplex (main checkout)' },
     ]);
@@ -60,7 +61,12 @@ describe('where a node may be put', () => {
     // `hub-7` is the folder and `hub-5` the project inside it. Neither is
     // somewhere the folder can go, and the hub would refuse both -- but a
     // menu offering a click that can only be refused is a menu wasting one.
-    expect(moveTargets(ARRANGED, node('hub-7'))).toEqual([{ parentId: null, label: 'Top level' }]);
+    // HOME, which migration 0020 seeds, is a container like any other here;
+    // which targets the menu keeps for each kind is AGX-385's.
+    expect(moveTargets(ARRANGED, node('hub-7'))).toEqual([
+      { parentId: null, label: 'Top level' },
+      { parentId: 'home', label: 'HOME' },
+    ]);
   });
 
   it('offers the root alone before any tree has been answered', () => {

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
   nodeIdSchema,
   sessionIdSchema,
   storeIdSchema,
@@ -17,6 +18,7 @@ import {
   listRemovals,
   readLayout,
 } from './reads.js';
+import type { TreeNode } from './rows.js';
 import { createFolder, forgetRemoval, moveNode, removeNode, renameNode } from './writes.js';
 
 /**
@@ -51,6 +53,15 @@ function ref(sessionId: string): SessionRef {
 /** An id no node has, for the three "not there" answers below. */
 const ABSENT: NodeId = nodeIdSchema.parse('no-such-node');
 
+/**
+ * Every node but HOME. Migration 0020 seeds HOME at the root of every hub, and
+ * the writes asserted here neither place anything in it nor move it, so it is
+ * left out of the counts rather than counted in each of them.
+ */
+async function placed(): Promise<readonly TreeNode[]> {
+  return (await listNodes(db())).filter((node) => node.id !== HOME_PROJECT_ID);
+}
+
 describe('the node tree', () => {
   beforeAll(async () => {
     migrated = await openMigratedSchema('layout-tree-probe');
@@ -61,7 +72,7 @@ describe('the node tree', () => {
   });
 
   beforeEach(async () => {
-    await db().query('DELETE FROM nodes');
+    await db().query('DELETE FROM nodes WHERE id <> ?', [HOME_PROJECT_ID]);
     await db().query('DELETE FROM node_removals');
     minted = 0;
   });
@@ -155,8 +166,9 @@ describe('the node tree', () => {
 
     await moveNode(db(), middle.id, { parentId: folder.id });
 
+    // HOME at 0, the two sessions left behind, and the folder: no gap where s2 was.
     const roots = (await listNodes(db())).filter((node) => node.parentId === null);
-    expect(roots.map((node) => node.position).sort()).toEqual([0, 1, 2]);
+    expect(roots.map((node) => node.position).sort()).toEqual([0, 1, 2, 3]);
   });
 
   it('answers null when asked to move a node that is not there', async () => {
@@ -182,7 +194,7 @@ describe('the node tree', () => {
     await removeNode(db(), clock, outer.id);
 
     expect(await findNode(db(), inner.id)).toBeNull();
-    expect(await listNodes(db())).toEqual([]);
+    expect(await placed()).toEqual([]);
   });
 
   it('remembers a session nested two folders deep when the outer one is removed', async () => {
@@ -215,7 +227,7 @@ describe('the node tree', () => {
       await createFolder(db(), ids, clock, { parentId: null, name });
     }
 
-    expect(await listNodes(db())).toHaveLength(3);
+    expect(await placed()).toHaveLength(3);
   });
 
   it('forgets nothing when asked to forget a removal that was never remembered', async () => {
@@ -243,10 +255,19 @@ describe('the node tree', () => {
 
     expect(layout).toEqual([
       {
+        id: HOME_PROJECT_ID,
+        parentId: null,
+        kind: 'project',
+        position: 0,
+        name: 'HOME',
+        named: true,
+        anchor: null,
+      },
+      {
         id: folder.id,
         parentId: null,
         kind: 'folder',
-        position: 0,
+        position: 1,
         name: 'folder',
         named: true,
         anchor: null,

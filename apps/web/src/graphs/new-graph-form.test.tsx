@@ -3,8 +3,10 @@ import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
   nodeIdSchema,
   parseClientFrame,
+  parseHubFrame,
   parseTextFrame,
   type ClientFrame,
 } from '@agentplex/protocol';
@@ -51,6 +53,24 @@ function installResizeObserver(): void {
     unobserve(): void {}
     disconnect(): void {}
   };
+}
+
+/**
+ * The captured tree with a project in it, less HOME.
+ *
+ * Every hub's tree holds HOME since migration 0020, and the hub takes no
+ * graph under it (HOME has no directory, so no `projects` row). Whether this
+ * picker offers HOME at all is AGX-389's to decide; what these cases are about
+ * is one project and one create, so they are given the tree with the one
+ * project the capture made, every other node exactly as the hub sent it.
+ */
+function layoutWithOneProject(): string {
+  const parsed = parseTextFrame(parseHubFrame, hubFrames.layoutWithProject);
+  if (!parsed.ok || parsed.value.type !== 'layout') {
+    throw new Error('the fixture is not a layout frame');
+  }
+  const nodes = parsed.value.nodes.filter((node) => node.id !== HOME_PROJECT_ID);
+  return JSON.stringify({ ...parsed.value, nodes });
 }
 
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -127,7 +147,7 @@ describe('NewGraphForm', () => {
     await act(() => {
       socket.open();
       socket.deliver(hubFrames.welcome);
-      socket.deliver(hubFrames.layoutWithProject);
+      socket.deliver(layoutWithOneProject());
     });
     return socket;
   }
