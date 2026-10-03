@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
   frameIdSchema,
   nodeIdSchema,
   parseClientFrame,
@@ -17,6 +18,7 @@ import {
   deliveryWords,
   parsePrompt,
   providerOffer,
+  resolveProject,
   resolveProvider,
   serverOverrideChoices,
   sessionPaneHash,
@@ -244,9 +246,39 @@ describe('the chosen provider', () => {
   });
 });
 
+describe('the project a start goes to', () => {
+  const projects = [
+    { id: 'home', label: 'HOME' },
+    { id: 'hub-5', label: 'agentplex (main checkout)' },
+  ];
+
+  it('is HOME until somebody picks another', () => {
+    // A session with no other project ends up in HOME anyway, so HOME is the
+    // answer a form left alone gives -- and it is an answer, never `null`.
+    expect(resolveProject(projects, null)).toBe(HOME_PROJECT_ID);
+  });
+
+  it('is the project picked, by its node id', () => {
+    expect(resolveProject(projects, 'hub-5')).toBe('hub-5');
+  });
+
+  it('falls back to HOME for a pick the tree no longer lists, and before a tree arrives', () => {
+    // The choice survives in state in case its option returns; while it is not
+    // on offer the start goes where one with no choice goes.
+    expect(resolveProject(projects, 'hub-404')).toBe(HOME_PROJECT_ID);
+    expect(resolveProject([], null)).toBe(HOME_PROJECT_ID);
+  });
+});
+
 describe('the frame', () => {
   it('builds a session-start the protocol parser accepts, exactly as typed', () => {
-    const command = buildStart(AGENTPLEX, 'claude', null, '  fix the auth refresh loop  ');
+    const command = buildStart(
+      AGENTPLEX,
+      'claude',
+      null,
+      '  fix the auth refresh loop  ',
+      HOME_PROJECT_ID,
+    );
     const parsed = parseClientFrame({ ...command, id: 7 });
     if (!parsed.ok) throw new Error(parsed.reason);
     expect(parsed.value).toEqual({
@@ -257,7 +289,7 @@ describe('the frame', () => {
       provider: 'claude',
       prompt: 'fix the auth refresh loop',
       server: null,
-      project: null,
+      project: 'home',
     });
   });
 
@@ -271,20 +303,23 @@ describe('the frame', () => {
     const offer = providerOffer(mixed, MIXED, null);
     const provider = resolveProvider(offer, 'codex');
     if (provider === null) throw new Error('the mixed fixture offers no codex');
-    const command = buildStart(MIXED, provider, null, '');
+    const command = buildStart(MIXED, provider, null, '', HOME_PROJECT_ID);
     expect(command.type === 'session-start' && command.provider).toBe('codex');
   });
 
   it('carries the override when one was picked', () => {
     const [gpu] = serverOverrideChoices(shared, SHARED);
     if (gpu === undefined) throw new Error('the shared fixture offers no override');
-    const command = buildStart(SHARED, 'claude', gpu.id, '');
+    const command = buildStart(SHARED, 'claude', gpu.id, '', HOME_PROJECT_ID);
     expect(command.type === 'session-start' && command.server).toBe('registration-gpu-box-01');
   });
 
   it('a whitespace prompt is the absence of a prompt: the wire refuses an empty string', () => {
     expect(parsePrompt('   ')).toBeNull();
-    const parsed = parseClientFrame({ ...buildStart(AGENTPLEX, 'claude', null, '   '), id: 1 });
+    const parsed = parseClientFrame({
+      ...buildStart(AGENTPLEX, 'claude', null, '   ', HOME_PROJECT_ID),
+      id: 1,
+    });
     expect(parsed.ok && parsed.value.type === 'session-start' && parsed.value.prompt).toBeNull();
   });
 });

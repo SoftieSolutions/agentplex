@@ -3,10 +3,14 @@ import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
+  nodeIdSchema,
   parseClientFrame,
+  parseHubFrame,
   parseTextFrame,
   type CatalogueQuery,
   type ClientFrame,
+  type HubFrame,
 } from '@agentplex/protocol';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
@@ -18,7 +22,8 @@ import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { NewSessionForm } from './new-session-form.js';
 
 /**
- * What the form does with a refusal that names a holder.
+ * What the form does with a refusal that names a holder, and which project a
+ * start goes to.
  *
  * The refusals delivered here are captured: a real hub answered a real start
  * and a real stop with each of them, holder and all. What is asserted is that
@@ -55,6 +60,11 @@ function installResizeObserver(): void {
   };
 }
 
+/** A chooser opened on a value scrolls that option into view; jsdom has no scrolling. */
+function installScrollIntoView(): void {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 /** The autosizing prompt waits on the font set; jsdom ships none. */
 function installFontFaceSet(): void {
   Object.defineProperty(document, 'fonts', {
@@ -63,12 +73,46 @@ function installFontFaceSet(): void {
   });
 }
 
+function capturedLayout(): Extract<HubFrame, { type: 'layout' }> {
+  const parsed = parseTextFrame(parseHubFrame, hubFrames.layoutWithProject);
+  if (!parsed.ok || parsed.value.type !== 'layout') {
+    throw new Error('the fixture is not a layout frame');
+  }
+  return parsed.value;
+}
+
+/**
+ * The captured tree with a second project beside the one the capture made: a
+ * copy of the captured project node under its own id and name, so every field
+ * but those is what the hub sent.
+ */
+function layoutWithTwoProjects(): string {
+  const frame = capturedLayout();
+  const captured = frame.nodes.find((node) => node.id === 'hub-5');
+  if (captured === undefined) throw new Error('the capture made no project');
+  const second = { ...captured, id: nodeIdSchema.parse('hub-90'), position: 2, name: 'scratch' };
+  return JSON.stringify({ ...frame, nodes: [...frame.nodes, second] });
+}
+
+/**
+ * The captured tree with HOME and nothing else: every node outside HOME taken
+ * away, the rest exactly as the hub sent them, which is what a hub with no
+ * project of its own sends.
+ */
+function layoutWithOnlyHome(): string {
+  const frame = capturedLayout();
+  const nodes = frame.nodes.filter(
+    (node) => node.id === HOME_PROJECT_ID || node.parentId === HOME_PROJECT_ID,
+  );
+  return JSON.stringify({ ...frame, nodes });
+}
+
 /** Lets the ticket promise inside `connect` settle. */
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-describe('the new-session form meeting a holder', () => {
+describe('the new-session form', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
   let store: HubStore;
@@ -79,6 +123,7 @@ describe('the new-session form meeting a holder', () => {
     installMatchMedia();
     installResizeObserver();
     installFontFaceSet();
+    installScrollIntoView();
     container = document.createElement('div');
     document.body.append(container);
     sockets = createFakeSocketFactory();
@@ -300,5 +345,110 @@ describe('the new-session form meeting a holder', () => {
     expect(shown()).toContain('that session is already running on mbp-robert');
     expect(shown()).toContain('held by mbp-robert');
     expect(document.body.querySelector('button[aria-label^="stop "]')).toBeNull();
+  });
+
+  /** The tree delivered to the form, as the hub answers its layout request. */
+  async function deliverTree(socket: FakeSocket, layout: string): Promise<void> {
+    await act(() => {
+      socket.deliver(layout);
+    });
+  }
+
+  function projectInput(): HTMLInputElement {
+    const input = document.body.querySelector<HTMLInputElement>('input[aria-label="Project"]');
+    if (input === null) throw new Error('the form drew no project chooser');
+    return input;
+  }
+
+  /** The project chooser's own options, opened: every chooser keeps its list in the page. */
+  async function openProjects(): Promise<HTMLElement[]> {
+    await act(() => {
+      projectInput().click();
+    });
+    const list = document.getElementById(projectInput().getAttribute('aria-controls') ?? '');
+    if (list === null) throw new Error('the project chooser has no list');
+    return [...list.querySelectorAll<HTMLElement>('[role="option"]')];
+  }
+
+  async function chooseProject(label: string): Promise<void> {
+    const option = (await openProjects()).find((candidate) => candidate.textContent === label);
+    if (option === undefined) throw new Error(`the chooser offered no ${label}`);
+    await act(() => {
+      option.click();
+    });
+  }
+
+  function lastStart(socket: FakeSocket): Extract<ClientFrame, { type: 'session-start' }> {
+    const start = sentFrames(socket).findLast((frame) => frame.type === 'session-start');
+    if (start === undefined || start.type !== 'session-start') throw new Error('no start was sent');
+    return start;
+  }
+
+  describe('the project a start goes to', () => {
+    it('lists HOME first and opens on it, with no empty choice and nothing to clear', async () => {
+      const socket = await mountForm();
+      await deliverTree(socket, layoutWithTwoProjects());
+
+      // HOME is what a start in no project would have been, so it is the
+      // default rather than a second name for "No project" beside it.
+      expect(projectInput().value).toBe('HOME');
+      expect(projectInput().placeholder).toBe('');
+      const wrapper = projectInput().closest('.mantine-Select-root');
+      if (wrapper === null) throw new Error('the chooser has no root');
+      expect(wrapper.querySelectorAll('button')).toHaveLength(0);
+      const options = await openProjects();
+      expect(options.map((option) => option.textContent)).toEqual([
+        'HOME',
+        'agentplex (main checkout)',
+        'scratch',
+      ]);
+      expect(shown()).not.toContain('No project');
+    });
+
+    it('starts in HOME when the chooser is left alone', async () => {
+      const socket = await mountForm();
+      await deliverTree(socket, layoutWithTwoProjects());
+      await chooseProvider('claude');
+
+      await submit();
+
+      expect(lastStart(socket).project).toBe(HOME_PROJECT_ID);
+    });
+
+    it('starts in the project picked, by its node id', async () => {
+      const socket = await mountForm();
+      await deliverTree(socket, layoutWithTwoProjects());
+      await chooseProvider('claude');
+      await chooseProject('agentplex (main checkout)');
+
+      await submit();
+
+      expect(lastStart(socket).project).toBe('hub-5');
+    });
+
+    it('names HOME in words when it is the only project, and starts there', async () => {
+      const socket = await mountForm();
+      await deliverTree(socket, layoutWithOnlyHome());
+      await chooseProvider('claude');
+
+      // One project is not a choice, the rule the store and the provider follow.
+      expect(document.body.querySelector('input[aria-label="Project"]')).toBeNull();
+      expect(shown()).toContain('project: HOME');
+      await submit();
+
+      expect(lastStart(socket).project).toBe(HOME_PROJECT_ID);
+    });
+
+    it('starts in HOME before the tree has arrived, never in no project', async () => {
+      const socket = await mountForm();
+      await chooseProvider('claude');
+
+      await submit();
+
+      // HOME is a well-known id, not a node the form has to have read, and a
+      // start that said `null` would be HOME under a spelling the form no
+      // longer uses.
+      expect(lastStart(socket).project).toBe(HOME_PROJECT_ID);
+    });
   });
 });

@@ -56,7 +56,11 @@ export function NewGraphForm({
   const [name, setName] = useState('');
   const [projectChoice, setProjectChoice] = useState<string | null>(null);
 
-  const projects = projectChoices(layout);
+  // HOME left out: it has no directory, so the hub holds no project row for it
+  // and refuses a graph there. Every count below -- the one-project shortcut
+  // and the sentence for none -- is then a count of projects a graph can
+  // actually belong to.
+  const projects = projectChoices(layout, { includeHome: false });
   // The choice survives in state in case its option returns, but only a
   // project the current tree lists is used; one project needs no choosing.
   const offered = projectChoice !== null && projects.some((choice) => choice.id === projectChoice);

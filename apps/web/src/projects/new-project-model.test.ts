@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
   frameIdSchema,
+  nodeIdSchema,
   parseClientFrame,
   parseHubFrame,
   parseTextFrame,
@@ -144,17 +146,43 @@ describe('what the form does with the answer', () => {
 });
 
 describe('the projects a picker offers', () => {
-  it('reads them off the tree, by kind, in the order the hub sent them', () => {
+  /**
+   * The captured tree with one more project beside the one the capture made,
+   * named HOME by a person: a copy of the captured project node with its own
+   * id, so every field but the two that tell it apart is what the hub sent.
+   * HOME is told by its id and never by its name, and this is the project
+   * that would catch a picker that read the name instead.
+   */
+  const captured = withProject.find((node) => node.id === 'hub-5');
+  if (captured === undefined) throw new Error('the capture made no project');
+  const namedHome = {
+    ...captured,
+    id: nodeIdSchema.parse('hub-90'),
+    position: 2,
+    name: 'HOME',
+  };
+  const withTwoProjects: Layout = [...withProject, namedHome];
+
+  it('lists HOME first when the picker takes it, then the rest in the hub order', () => {
     // HOME first, because the hub sends it first: migration 0020 seeds it at
     // the root's position 0.
-    expect(projectChoices(withProject)).toEqual([
-      { id: 'home', label: 'HOME' },
+    expect(projectChoices(withTwoProjects, { includeHome: true })).toEqual([
+      { id: HOME_PROJECT_ID, label: 'HOME' },
       { id: 'hub-5', label: 'agentplex (main checkout)' },
+      { id: 'hub-90', label: 'HOME' },
+    ]);
+  });
+
+  it('leaves HOME out where the hub would refuse it, and keeps a project merely named HOME', () => {
+    expect(projectChoices(withTwoProjects, { includeHome: false })).toEqual([
+      { id: 'hub-5', label: 'agentplex (main checkout)' },
+      { id: 'hub-90', label: 'HOME' },
     ]);
   });
 
   it('offers nothing before a tree has arrived', () => {
-    expect(projectChoices(null)).toEqual([]);
+    expect(projectChoices(null, { includeHome: true })).toEqual([]);
+    expect(projectChoices(null, { includeHome: false })).toEqual([]);
   });
 
   it('passes over every node that is not a project', () => {
@@ -162,6 +190,6 @@ describe('the projects a picker offers', () => {
     // would be offering a start inside a session.
     expect(withProject.filter((node) => node.kind === 'session').length).toBeGreaterThan(0);
     const projects = withProject.filter((node) => node.kind === 'project');
-    expect(projectChoices(withProject)).toHaveLength(projects.length);
+    expect(projectChoices(withProject, { includeHome: true })).toHaveLength(projects.length);
   });
 });
