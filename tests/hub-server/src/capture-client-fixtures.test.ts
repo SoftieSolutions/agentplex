@@ -3751,8 +3751,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
           .stores.some((view) =>
             view.sessions.some(
               (row) =>
-                row.descriptor.sessionId === 'session-cli-run' &&
-                row.descriptor.process === 'none',
+                row.descriptor.sessionId === 'session-cli-run' && row.descriptor.process === 'none',
             ),
           ) && !sessionHeld('session-spike-wasm')(),
       () => `the stop to be reported with cli-run quit: ${resumer.received.join('\n')}`,
