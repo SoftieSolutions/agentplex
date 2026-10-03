@@ -134,8 +134,8 @@ describe('a session card', () => {
     expect(placeLine('docs-sweep')).toBe('universe · gpu-box-01');
   });
 
-  it('keeps the machine alone form on a session the tree places in no project', () => {
-    expect(placeLine('fix-auth-refresh')).toBe('store-agentplex · mbp-robert');
+  it('names HOME on a session discovery filed in no other project', () => {
+    expect(placeLine('fix-auth-refresh')).toBe('HOME · mbp-robert');
   });
 
   it('draws no separator with nothing in front of it', () => {

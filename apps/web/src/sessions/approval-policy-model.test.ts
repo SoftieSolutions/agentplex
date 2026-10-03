@@ -181,15 +181,29 @@ describe('the project a session is filed under', () => {
     });
   });
 
-  it('has no project for a session filed at the root', () => {
-    // The captured arrangement still has one session at the top of the tree,
-    // where discovery put it, inside nothing. There is nowhere for a rule about
-    // it to live.
-    const unfiled = sessionRefSchema.parse({
+  it('names HOME for a session discovery left there', () => {
+    // The captured arrangement still has one session where discovery put it,
+    // directly in HOME. HOME is a project, so a rule about it lives there.
+    const inHome = sessionRefSchema.parse({
       storeId: 'store-agentplex',
       sessionId: 'session-spike-wasm',
     });
-    expect(projectForSession(arranged, unfiled)).toEqual({ kind: 'unfiled' });
+    expect(projectForSession(arranged, inHome)).toEqual({
+      kind: 'project',
+      id: 'home',
+      label: 'HOME',
+    });
+  });
+
+  it('has no project for a session filed at the root', () => {
+    // A hub files every session it places under a project, so no capture has a
+    // session at the top of the tree; the one in HOME is moved there by hand,
+    // the way `filedUnder` moves one into a project. There is nowhere for a
+    // rule about it to live.
+    const atRoot = arranged.map((node) =>
+      node.anchor?.sessionId === FILED.sessionId ? { ...node, parentId: null } : node,
+    );
+    expect(projectForSession(atRoot, FILED)).toEqual({ kind: 'unfiled' });
   });
 
   it('names the project above the folder the session sits in', () => {

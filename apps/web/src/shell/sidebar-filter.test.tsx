@@ -92,7 +92,7 @@ function heldPages(text: string): CataloguePages {
   return pageAdopted(NO_PAGES, { items, nextCursor, total, version }, 'replace');
 }
 
-/** Two machines, two stores, two providers, one project, four statuses. */
+/** Two machines, two stores, two providers, two projects, four statuses. */
 const populated = stateFrom(hubFrames.machineStatePopulated);
 /** One machine, one store, one provider, two statuses. */
 const single = stateFrom(hubFrames.machineStateSingle);
@@ -317,9 +317,16 @@ describe('the sidebar filter row', () => {
     draw();
     await open();
 
-    // No Project: the captured fleet puts one store's sessions in `universe`
-    // and the other's in no project, which is one option and not a choice.
-    expect(sections()).toEqual(['Status', 'Machine', 'Store', 'Provider', 'Last updated']);
+    // The captured fleet puts one store's sessions in `universe` and leaves the
+    // other's in HOME, where discovery filed them: two projects, so a choice.
+    expect(sections()).toEqual([
+      'Status',
+      'Machine',
+      'Project',
+      'Store',
+      'Provider',
+      'Last updated',
+    ]);
   });
 
   it('draws neither machine, store nor provider over a one-machine fleet', async () => {

@@ -181,7 +181,7 @@ describe('a session row', () => {
     // matches, and no longer the line -- what the agent is doing beats where
     // it is doing it on the one line a row has.
     expect(text).toContain('migrate-db-v9');
-    expect(text).toContain('store-agentplex · mbp-robert');
+    expect(text).toContain('HOME · mbp-robert');
     expect(text).toContain("printf 'hello' > probe.txt failed with exit status 1");
     expect(text).toContain('codex');
     expect(text).toContain('waiting 3m');
