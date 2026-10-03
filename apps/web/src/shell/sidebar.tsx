@@ -3,6 +3,7 @@ import type { FrameId, Layout, MachineState, ServerRegistrationId } from '@agent
 import { CataloguePanel } from '../catalogue/catalogue-panel.js';
 import type { CatalogueStore } from '../catalogue/catalogue-store.js';
 import { appLayoutStore } from '../layout/app-layout.js';
+import type { LayoutStore } from '../layout/layout-store.js';
 import { MachineSelector } from '../machines/machine-selector.js';
 import { pendingRows } from '../sessions/pending-rows-model.js';
 import { appSessionFiltersStore } from '../sessions/session-filters-store.js';
@@ -129,6 +130,8 @@ export interface SidebarProps {
    * `Date.now` in one render are two answers to how old a session is.
    */
   readonly now?: () => number;
+  /** Where a start's row opens its pane: the page's arrangement unless a test's. */
+  readonly layoutStore?: LayoutStore;
 }
 
 export function Sidebar({
@@ -144,6 +147,7 @@ export function Sidebar({
   sections,
   scheme,
   now = Date.now,
+  layoutStore,
 }: SidebarProps): JSX.Element {
   const [tab, setTab] = useState<SidebarTab>('projects');
   // The address the tab was last reconciled with, so a move to Projects is
@@ -247,7 +251,7 @@ export function Sidebar({
           <SidebarSessions
             state={state}
             pending={pending}
-            onOpenPending={(startId) => openPending(store, startId)}
+            onOpenPending={(startId) => openPending(layoutStore ?? appLayoutStore(store), startId)}
             filters={filters}
             machine={machine}
             scheme={scheme}
@@ -318,7 +322,7 @@ function startsAndTerminals(snapshot: HubSnapshot): Pick<HubSnapshot, 'starts' |
  * layout store holding a pending pane is not something the shell is looking
  * at.
  */
-function openPending(store: HubStore, startId: FrameId): void {
-  appLayoutStore(store).showPendingSession(startId);
+function openPending(layout: LayoutStore, startId: FrameId): void {
+  layout.showPendingSession(startId);
   window.location.hash = startHash(startId);
 }

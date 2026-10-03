@@ -1,5 +1,5 @@
 import { useCallback, useState, useSyncExternalStore, type JSX } from 'react';
-import type { NodeId, SessionRef } from '@agentplex/protocol';
+import type { FrameId, NodeId, SessionRef } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { createShortcutRegistry, type ShortcutRegistry } from '../terminal/shortcuts.js';
@@ -151,6 +151,12 @@ export interface LayoutScreenProps {
   readonly session: SessionRef | null;
   /** The document the address names, or `null` for no document route. */
   readonly doc?: NodeId | null;
+  /**
+   * The start the address names, or `null` for no start route. Shown like the
+   * other two: a pane already waiting on it is focused rather than opened
+   * again, which is the case when the sidebar's row opened it a moment ago.
+   */
+  readonly pending?: FrameId | null;
   /** The page's one hub store, handed down from the root. */
   readonly store: HubStore;
   readonly layoutStore?: LayoutStore;
@@ -159,6 +165,7 @@ export interface LayoutScreenProps {
 export function LayoutScreen({
   session,
   doc = null,
+  pending = null,
   store: hub,
   layoutStore,
 }: LayoutScreenProps): JSX.Element {
@@ -175,9 +182,10 @@ export function LayoutScreen({
       const detach = layout.subscribe(listener);
       if (session !== null) layout.showSession(session);
       if (doc !== null) layout.showDoc(doc);
+      if (pending !== null) layout.showPendingSession(pending);
       return detach;
     },
-    [layout, session, doc],
+    [layout, session, doc, pending],
   );
   const snapshot = useSyncExternalStore(subscribe, layout.getSnapshot);
 

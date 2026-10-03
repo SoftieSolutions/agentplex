@@ -2,7 +2,7 @@
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { sessionRefSchema } from '@agentplex/protocol';
+import { sessionRefSchema, storeIdSchema } from '@agentplex/protocol';
 import { fakeStorage } from '../auth/fake-storage.js';
 import { createTokenStore, type TokenStore } from '../auth/token.js';
 import { createMockSwitch, type MockSwitch } from '../mock/mock-switch.js';
@@ -11,7 +11,10 @@ import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import type { HubCommand } from '../store/commands.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
+import { createLayoutStore, type LayoutStore } from '../layout/layout-store.js';
+import { startHash } from '../terminal/start-route.js';
 import { createFakeTimers } from '../store/timers.js';
 import { installFlowMocks } from '../graphs/flow-test-setup.js';
 import { graphHash } from '../graphs/graph-route.js';
@@ -134,6 +137,24 @@ const SESSION = sessionRefSchema.parse({
 /** The moment the fixture was reported, so a pinned clock gives the real ages. */
 const NOW = 1_756_000_000_000;
 
+/** A fresh spawn, as the New form sends one. */
+const START: HubCommand = {
+  type: 'session-start',
+  storeId: storeIdSchema.parse('store-agentplex'),
+  sessionId: null,
+  provider: 'claude',
+  prompt: null,
+  server: null,
+  project: null,
+};
+
+/** A captured reply, re-addressed to the frame this test's store sent. */
+function addressedTo(frame: string, replyTo: number): string {
+  const parsed: unknown = JSON.parse(frame);
+  if (typeof parsed !== 'object' || parsed === null) throw new Error('not a frame');
+  return JSON.stringify({ ...parsed, replyTo });
+}
+
 describe('the shell', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
@@ -209,8 +230,19 @@ describe('the shell', () => {
   async function mount(
     now: () => number = Date.now,
     mock: MockSwitch | null = null,
+    layoutStore?: LayoutStore,
   ): Promise<FakeSocket> {
-    const shell = <AppShell hub={store} tokens={tokens} now={now} sidebarWidth={sidebarWidth} />;
+    const shell = (
+      <AppShell
+        hub={store}
+        tokens={tokens}
+        now={now}
+        sidebarWidth={sidebarWidth}
+        // Only where a test reads the panes: the page's own layout store
+        // is a singleton bound to the first hub store this file built.
+        {...(layoutStore === undefined ? {} : { layoutStore })}
+      />
+    );
     await act(async () => {
       root = createRoot(container);
       // No StrictMode: its simulated remount would subscribe, hang up and
@@ -648,6 +680,34 @@ describe('the shell', () => {
     // the page: the chrome is still there, and it is still one of it.
     expect(sidebars()).toHaveLength(1);
     expect(navLinks().map((link) => link.textContent)).toEqual(['Settings']);
+  });
+
+  it('draws the list for a start address this tab never asked for', async () => {
+    // A start's frame id is this tab's own name for it, so a reload or a
+    // pasted link carries a number that means nothing here: the list, not a
+    // blank region and not a pane waiting on nothing.
+    window.location.hash = '#/start/999';
+
+    await mount();
+
+    const main = container.querySelector('main');
+    expect(main?.textContent).toContain('Sessions');
+    expect(main?.textContent).not.toContain('starting');
+  });
+
+  it('draws the pane waiting on a start this tab sent, at its address', async () => {
+    const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
+    const socket = await mount(Date.now, null, layoutStore);
+    const sent = store.sendCommand(START);
+    if (!sent.accepted) throw new Error(sent.reason);
+
+    await follow(startHash(sent.id));
+    await act(() => {
+      socket.deliver(hubFrames.paneLayoutEmpty);
+      socket.deliver(addressedTo(hubFrames.sessionStarted, sent.id));
+    });
+
+    expect(container.querySelector('main')?.textContent).toContain('starting on mbp-robert');
   });
 
   it('keeps the sidebar when the address names a graph, and draws the graph in the content region', async () => {
