@@ -34,9 +34,10 @@ import { machineLabel } from './presentation.js';
  * Resume is owed what became of that press over anything the row said before
  * it. Then the session ending, which never resumes on its own -- a session
  * somebody just stopped is not one to restart behind their back. That covers
- * every session a pane on this page has seen run, held or not: a pane resumes
- * on its own only a session that was already not running when it opened, and
- * one that stops while it watches -- somebody quitting their own claude in
+ * every session this page has seen run since it loaded, held or not, in a
+ * pane or only in the sidebar: a pane resumes on its own only a session no
+ * state has shown held or running the whole time, and one that stopped at any
+ * point before or while it watched -- somebody quitting their own claude in
  * another terminal -- is said to have stopped, with Resume to press. Then what
  * the row says about a process, degrading towards not acting: `running` and
  * unheld is somebody else's process, `unknown` is a question only a person
@@ -119,8 +120,9 @@ export interface PaneStateInput {
   /** The watched terminal's ending, when the pane is watching one. */
   readonly terminal: { readonly ended: SubscriptionEndReason | null } | null;
   /**
-   * Whether a pane on this page has seen a process run the session: held by
-   * agentplex, run outside it, ended under a pane, or stopped from here.
+   * Whether this page has seen a process run the session since it loaded:
+   * held by agentplex or run outside it in any state, ended under a pane, or
+   * stopped from here.
    */
   readonly ran: boolean;
   /** Whether a state since the start was answered still shows nothing running it. */

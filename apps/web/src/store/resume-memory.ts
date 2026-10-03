@@ -15,14 +15,15 @@ import type { HubCommand } from './commands.js';
  * left them.
  *
  * By session and not by pane means a second pane on the session reads the
- * first one's facts too, which errs the safe way: what any pane on this page
- * saw running is never restarted behind anybody's back by another.
+ * first one's facts too, which errs the safe way: what this page saw running,
+ * in a pane or in the sidebar, is never restarted behind anybody's back.
  */
 export interface ResumeMemory {
   /**
-   * Whether a process was seen running this session: held by agentplex, run
-   * outside it, ended under a pane, or stopped from this page. A session that
-   * ran is resumed only by a press.
+   * Whether this page has seen a process run this session since it loaded:
+   * held by agentplex or run outside it in any state received, ended under a
+   * pane, or stopped from this page. A session that ran is resumed only by a
+   * press.
    */
   readonly ran: boolean;
   /**
@@ -72,7 +73,7 @@ function withMemory(
   return new Map(memories).set(keyOf(ref), after);
 }
 
-/** A pane saw a process run the session. The same memories back when it already knew. */
+/** The page saw a process run the session. The same memories back when it already knew. */
 export function rememberRan(memories: ResumeMemories, ref: Addressed): ResumeMemories {
   return withMemory(memories, ref, (memory) => ({ ...memory, ran: true }));
 }
@@ -104,8 +105,15 @@ export function rememberCommand(
 }
 
 /**
- * What a state says about each remembered start: held answers it, and unheld
- * after the hub said it started means it lapsed.
+ * What a state says about every session in it: held or running means it ran,
+ * and for a remembered start, held answers it and unheld after the hub said
+ * it started means it lapsed.
+ *
+ * Ran is read off every row, not only the ones a pane is open on. The page saw
+ * the session run whether the sidebar or a pane was the thing drawing it, and
+ * a pane opened later on one that has since stopped is opened on a session
+ * somebody stopped -- not one to restart behind them. Only a session no state
+ * since the page loaded has shown running is resumed on its own.
  *
  * Unheld and not "no process": a row on a shared store, or one whose machine
  * could not read its registry, says `unknown` whatever runs it, and one an
@@ -125,7 +133,12 @@ export function rememberState(
     for (const row of store.sessions) {
       const ref = { storeId: store.storeId, sessionId: row.descriptor.sessionId };
       const { start } = resumeMemoryOf(next, ref);
-      if (start === null) continue;
+      if (start === null) {
+        if (row.holder !== null || row.descriptor.process === 'running') {
+          next = rememberRan(next, ref);
+        }
+        continue;
+      }
       if (row.holder !== null) {
         next = withMemory(next, ref, () => NO_RESUME_MEMORY_RAN);
       } else if (replies.get(start)?.type === 'session-started') {

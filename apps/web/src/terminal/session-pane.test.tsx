@@ -2587,6 +2587,29 @@ describe('a pane on a session nothing holds', () => {
     expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
   });
 
+  it('does not restart a session the page saw held before any pane opened on it', async () => {
+    // The sidebar is what saw it: the state showed it held, and no pane was
+    // open on it then.
+    const connected = await connectedTo(hubFrames.machineStateResumed);
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+    expect(action()?.textContent).toBe('Resume');
+  });
+
+  it('resumes, once, a session no state since the page loaded has shown running', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+  });
+
   it('shows its own start, and sends no second, when it is remounted while starting', async () => {
     const connected = await connectedTo(hubFrames.machineStateResumable);
     const spike = pane(connected.hub, 'store-agentplex', 'session-spike-wasm');

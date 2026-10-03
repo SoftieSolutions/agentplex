@@ -533,10 +533,9 @@ export function SessionPane({
    * resume: drawn while the pane sees a process and the store does not yet
    * know, and gone once it does.
    *
-   * Running counts whoever runs it -- agentplex, or somebody's own claude in
-   * another terminal -- and so does an ending the hub reported. A pane opened
-   * on a session already not running resumes it; a session that stops while
-   * a pane watches it was stopped by somebody, and waits for a press.
+   * Only the ending the hub reported: the store already marks every row a
+   * state shows held or running, pane or no pane, and the end of a watch is
+   * the one sign of a run that only a pane is told.
    */
   const noteRan = useCallback(
     (node: HTMLElement | null): void => {
@@ -544,7 +543,6 @@ export function SessionPane({
     },
     [hub, sessionRef],
   );
-  const sawRunning = standing === 'held' || endedHere || row?.descriptor.process === 'running';
   /**
    * The tree, for the one question the panel asks of it: which project this
    * session is filed under, and therefore whose standing policy decides what it
@@ -1162,7 +1160,7 @@ export function SessionPane({
       // pty. React's onKeyDownCapture is the capture-phase listener.
       onKeyDownCapture={(event) => registry.handleKeyDown(event)}
     >
-      {sawRunning && !memory.ran && <span ref={noteRan} hidden />}
+      {endedHere && !memory.ran && <span ref={noteRan} hidden />}
       <Group gap={10} px={18} py={10} style={{ borderBottom: border }} wrap="nowrap">
         {/* The three readings of one row, each from a function in
             presentation.ts, each marked with a `data-` attribute the suite

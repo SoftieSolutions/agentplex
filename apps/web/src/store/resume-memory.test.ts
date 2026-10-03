@@ -83,9 +83,8 @@ describe('resume memory', () => {
 
   it('keeps a start still owed its answer while the state shows nothing running it', () => {
     const asked = rememberCommand(NONE, startOf(SPIKE), FIRST);
-    expect(rememberState(asked, stateFrom(hubFrames.machineStateResumable), NO_REPLIES)).toBe(
-      asked,
-    );
+    const kept = rememberState(asked, stateFrom(hubFrames.machineStateResumable), NO_REPLIES);
+    expect(resumeMemoryOf(kept, SPIKE)).toEqual(resumeMemoryOf(asked, SPIKE));
   });
 
   it('marks an answered start lapsed when a state after the answer shows nothing running it', () => {
@@ -118,6 +117,21 @@ describe('resume memory', () => {
     const replies = rememberAnswer(NO_REPLIES, replyFrom(hubFrames.sessionStartedResumed, FIRST));
     const lapsed = rememberState(asked, stateFrom(hubFrames.machineStateResumable), replies);
     expect(resumeMemoryOf(lapsed, OTHER)).toMatchObject({ start: FIRST, lapsed: true });
+  });
+
+  it('counts every session any state shows held or running as one that ran, pane or no pane', () => {
+    const seen = rememberState(NONE, stateFrom(hubFrames.machineStateResumable), NO_REPLIES);
+    // Run outside agentplex.
+    expect(resumeMemoryOf(seen, OTHER).ran).toBe(true);
+    // Nothing runs it, and nothing here has ever seen anything run it.
+    expect(resumeMemoryOf(seen, SPIKE)).toEqual(NO_RESUME_MEMORY);
+
+    const held = rememberState(seen, stateFrom(hubFrames.machineStateResumed), NO_REPLIES);
+    expect(resumeMemoryOf(held, SPIKE)).toEqual({ ran: true, start: null, lapsed: false });
+    // And it stays seen once the holder has gone.
+    const stopped = rememberState(held, stateFrom(hubFrames.machineStateResumable), NO_REPLIES);
+    expect(resumeMemoryOf(stopped, SPIKE).ran).toBe(true);
+    expect(stopped).toBe(held);
   });
 
   it('records a run once, and hands back the same memories after', () => {
