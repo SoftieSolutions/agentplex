@@ -144,11 +144,30 @@ describe('resume memory', () => {
       ],
       ['session', { target: { by: 'session' as const, ...OTHER }, session: OTHER }],
     ]);
-    const memories = rememberNamed(NONE, named);
+    const memories = rememberNamed(NONE, named, null);
     expect(resumeMemoryOf(memories, SPIKE)).toEqual({ ran: false, start: FIRST, lapsed: false });
     expect(resumeMemoryOf(memories, OTHER)).toEqual(NO_RESUME_MEMORY);
     // Publishing the same views again changes nothing.
-    expect(rememberNamed(memories, named)).toBe(memories);
+    expect(rememberNamed(memories, named, null)).toBe(memories);
+  });
+
+  it('lapses a spawn named after a state that, after its answer, showed it unheld', () => {
+    const spawned = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-spawned' });
+    const named = new Map([
+      ['start', { target: { by: 'start' as const, startId: FIRST }, session: spawned }],
+    ]);
+    const exited = stateFrom(hubFrames.machineStateSpawnExited);
+    const answered = rememberAnswer(NO_REPLIES, replyFrom(hubFrames.sessionStarted, FIRST));
+
+    // The state came first and found no start to lapse; the name files one
+    // and holds it to that state, as the state would have.
+    const before = rememberState(NONE, exited, answered);
+    const lapsed = rememberNamed(before, named, { state: exited, replies: answered });
+    expect(resumeMemoryOf(lapsed, spawned)).toEqual({ ran: false, start: FIRST, lapsed: true });
+
+    // A state from before the answer says nothing about this start.
+    const early = rememberNamed(NONE, named, { state: exited, replies: NO_REPLIES });
+    expect(resumeMemoryOf(early, spawned)).toEqual({ ran: false, start: FIRST, lapsed: false });
   });
 
   it('leaves a session it already saw run, or already has a start for, as it was', () => {
@@ -156,9 +175,9 @@ describe('resume memory', () => {
       ['start', { target: { by: 'start' as const, startId: FIRST }, session: SPIKE }],
     ]);
     const ran = rememberRan(NONE, SPIKE);
-    expect(rememberNamed(ran, named)).toBe(ran);
+    expect(rememberNamed(ran, named, null)).toBe(ran);
     const asked = rememberCommand(NONE, startOf(SPIKE), frameIdSchema.parse(8));
-    expect(rememberNamed(asked, named)).toBe(asked);
+    expect(rememberNamed(asked, named, null)).toBe(asked);
   });
 
   it('records a run once, and hands back the same memories after', () => {

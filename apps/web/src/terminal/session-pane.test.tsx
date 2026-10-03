@@ -2665,6 +2665,43 @@ describe('a pane on a session nothing holds', () => {
     expect(action()?.textContent).toBe('Try again');
   });
 
+  it('shows a spawn lapsed, and sends nothing, when the state of its exit arrives before its name', async () => {
+    const connected = await connectedTo(hubFrames.machineState);
+    const { store } = connected.hub;
+    // The same captured conversation as above, delivered in the other order
+    // a socket may carry it: the machine reports the exited spawn's unheld
+    // row before the output chunk that names the spawn reaches this page.
+    const start = store.sendCommand({
+      type: 'session-start',
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: null,
+      provider: providerSchema.parse('claude'),
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    if (!start.accepted) throw new Error(start.reason);
+    expect(start.id).toBe(2);
+    store.sendCommand({
+      type: 'directory-list',
+      server: serverRegistrationIdSchema.parse('registration-mbp-robert'),
+      directory: null,
+    });
+    await act(async () => {
+      store.watchTerminal({ by: 'start', startId: start.id });
+      connected.socket.deliver(hubFrames.sessionStarted);
+      connected.socket.deliver(hubFrames.sessionSubscribedPending);
+      connected.socket.deliver(hubFrames.machineStateSpawnExited);
+      connected.socket.deliver(hubFrames.terminalOutputNamed);
+    });
+
+    await mount(pane(connected.hub, 'store-work', 'session-spawned'));
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('lapsed');
+    expect(action()?.textContent).toBe('Try again');
+  });
+
   it('says a session run outside agentplex stopped, and resumes it only when pressed', async () => {
     const connected = await connectedTo(hubFrames.machineStateResumable);
     await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));

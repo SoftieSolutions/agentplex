@@ -126,21 +126,45 @@ export function rememberStarted(
   );
 }
 
+/**
+ * The latest state this page received, with the answers it had received when
+ * that state arrived: an answer among `replies` came before `state` did.
+ */
+export interface StateSeen {
+  readonly state: MachineState;
+  readonly replies: ReadonlyMap<FrameId, Reply>;
+}
+
 /** The two facts of a watched terminal `rememberNamed` reads; a `TerminalWatchView` is one. */
 export interface NamedWatch {
   readonly target: ClientTerminalTarget;
   readonly session: Addressed | null;
 }
 
-/** Every watch by start handle that a frame has since named, as `rememberStarted`. */
+/**
+ * Every watch by start handle that a frame has since named, as
+ * `rememberStarted`, held to the latest state as `rememberState` would have
+ * held it.
+ *
+ * A socket may carry the state that shows the spawned session's row before
+ * the output chunk that names the spawn. That state found no start filed
+ * under the row and passed it by, so a start filed by the name afterwards
+ * would wait for a holder that state already said was not there -- with
+ * nothing to press until another state arrived. Read against `seen`, the
+ * start lapses, or is answered by the hold, exactly as it would have had the
+ * name come first.
+ */
 export function rememberNamed(
   memories: ResumeMemories,
   terminals: ReadonlyMap<string, NamedWatch>,
+  seen: StateSeen | null,
 ): ResumeMemories {
   let next = memories;
   for (const view of terminals.values()) {
     if (view.target.by !== 'start' || view.session === null) continue;
-    next = rememberStarted(next, view.session, view.target.startId);
+    const filed = rememberStarted(next, view.session, view.target.startId);
+    if (filed === next) continue;
+    next = seen === null ? filed : rememberRows(filed, seen.state, seen.replies, view.session);
   }
   return next;
 }
@@ -169,9 +193,21 @@ export function rememberState(
   state: MachineState,
   replies: ReadonlyMap<FrameId, Reply>,
 ): ResumeMemories {
+  return rememberRows(memories, state, replies, null);
+}
+
+/** `rememberState`, over every row or over only the one `only` addresses. */
+function rememberRows(
+  memories: ResumeMemories,
+  state: MachineState,
+  replies: ReadonlyMap<FrameId, Reply>,
+  only: Addressed | null,
+): ResumeMemories {
   let next = memories;
   for (const store of state.stores) {
+    if (only !== null && store.storeId !== only.storeId) continue;
     for (const row of store.sessions) {
+      if (only !== null && row.descriptor.sessionId !== only.sessionId) continue;
       const ref = { storeId: store.storeId, sessionId: row.descriptor.sessionId };
       const { start } = resumeMemoryOf(next, ref);
       if (start === null) {

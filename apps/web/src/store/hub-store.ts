@@ -28,6 +28,7 @@ import {
   rememberRan,
   rememberStarted,
   rememberState,
+  type StateSeen,
 } from './resume-memory.js';
 import { createSessionReplies } from './session-replies.js';
 import { createTerminals } from './terminals.js';
@@ -280,6 +281,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
 
   let layoutWatchers = 0;
   let paneLayoutWatchers = 0;
+  // The latest state with the answers received before it, for a spawn named
+  // after that state arrived. Not in the snapshot: nothing renders it.
+  let stateSeen: StateSeen | null = null;
 
   function update(changes: Partial<HubSnapshot>): void {
     snapshot = { ...snapshot, ...changes };
@@ -320,7 +324,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     // In the same update as the views, so no render sees a pending pane's
     // session named before the store knows this page started it.
     publish: (views) =>
-      update({ terminals: views, resumes: rememberNamed(snapshot.resumes, views) }),
+      update({ terminals: views, resumes: rememberNamed(snapshot.resumes, views, stateSeen) }),
   });
   const catalogue = createCatalogueChannel({
     live: connection.live,
@@ -427,6 +431,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // No client-side version arithmetic: the hub already never re-sends a
         // version on one connection, and a fresh connection starts with the
         // whole current state. The latest frame received is the state.
+        stateSeen = { state: frame.state, replies: snapshot.answers.replies };
         update({
           machineState: frame.state,
           machineStateCurrent: true,
