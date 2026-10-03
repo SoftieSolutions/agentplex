@@ -331,6 +331,21 @@ describe('the standing policy beside a session', () => {
     );
   });
 
+  it('tells a session in HOME that HOME keeps no rules, and asks the hub nothing', async () => {
+    const socket = await connect();
+
+    await mount({ kind: 'home' });
+
+    // Not "in no project": HOME is a project. It is the one the hub keeps no
+    // policy for, so there is nothing to read and nothing to forget.
+    expect(words()).toContain('No policy: HOME keeps no rules, so every request reaches you.');
+    expect(words()).not.toContain('this session is in no project');
+    expect(container.querySelectorAll('button')).toHaveLength(0);
+    expect(sentFrames(socket).filter((frame) => frame.type.startsWith('approval-policy'))).toEqual(
+      [],
+    );
+  });
+
   it('takes a rule out by the id the hub minted, naming the project and nothing else', async () => {
     const socket = await connect();
     await mount(PROJECT);

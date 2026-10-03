@@ -106,6 +106,16 @@ describe('the rows the APPROVALS block draws', () => {
     expect(rows).toEqual([{ kind: 'unfiled', words: expect.any(String) }]);
   });
 
+  it('says HOME keeps no rules, rather than that the session is in no project', () => {
+    // HOME is a project, so "in no project" would be false of it; it is the
+    // one project the hub keeps no policy for, and that is what is said.
+    const rows = policyRows({ kind: 'home' }, policy(record('Bash', 'command: pnpm test')));
+    expect(rows).toEqual([
+      { kind: 'home', words: 'No policy: HOME keeps no rules, so every request reaches you.' },
+    ]);
+    expect(policyRows({ kind: 'home' }, null)).toEqual(rows);
+  });
+
   it('says nothing about the policy until the tree has said where the session is', () => {
     // The dangerous half of the same rule: "this session is in no project"
     // reads as "there is no policy", and a person who reads that stops looking.
@@ -181,16 +191,28 @@ describe('the project a session is filed under', () => {
     });
   });
 
-  it('names HOME for a session discovery left there', () => {
+  it('says HOME for a session discovery left there, and for one in a folder inside it', () => {
     // The captured arrangement still has one session where discovery put it,
-    // directly in HOME. HOME is a project, so a rule about it lives there.
+    // directly in HOME, and one in a folder inside HOME. HOME is a project, so
+    // neither is "in no project" -- but it is the one project the hub keeps no
+    // rules for, which is why it is its own answer rather than a project
+    // somebody could be offered a rule in.
     const inHome = sessionRefSchema.parse({
       storeId: 'store-agentplex',
       sessionId: 'session-spike-wasm',
     });
-    expect(projectForSession(arranged, inHome)).toEqual({
+    expect(projectForSession(arranged, inHome)).toEqual({ kind: 'home' });
+    expect(projectForSession(arranged, FILED)).toEqual({ kind: 'home' });
+  });
+
+  it('tells HOME by its id, not its name', () => {
+    // The captured project, renamed HOME by a person: an ordinary project.
+    const renamed = filedUnder(withProject, 'hub-5').map((node) =>
+      node.id === 'hub-5' ? { ...node, name: 'HOME' } : node,
+    );
+    expect(projectForSession(renamed, FILED)).toEqual({
       kind: 'project',
-      id: 'home',
+      id: 'hub-5',
       label: 'HOME',
     });
   });
@@ -207,13 +229,16 @@ describe('the project a session is filed under', () => {
   });
 
   it('names the project above the folder the session sits in', () => {
-    // The captured arrangement: the session inside a folder inside HOME.
-    // Containment runs up through the folder to the project that holds it, and
-    // HOME is a project like any other for that walk.
-    expect(projectForSession(arranged, FILED)).toEqual({
+    // The captured arrangement, with its folder moved out of HOME into the
+    // captured project: the session inside a folder inside that project.
+    // Containment runs up through the folder to the project that holds it.
+    const inProjectFolder = arranged.map((node) =>
+      node.id === 'hub-7' ? { ...node, parentId: nodeIdSchema.parse('hub-5') } : node,
+    );
+    expect(projectForSession(inProjectFolder, FILED)).toEqual({
       kind: 'project',
-      id: 'home',
-      label: 'HOME',
+      id: 'hub-5',
+      label: 'agentplex (main checkout)',
     });
   });
 

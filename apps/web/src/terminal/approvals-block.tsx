@@ -58,8 +58,8 @@ const RULE_MAX_HEIGHT = 96;
 
 export interface ApprovalsBlockProps {
   /**
-   * Where the tree has this session filed: a project, no project, or not yet
-   * known. It arrives as a prop rather than being looked up here because it is
+   * Where the tree has this session filed: a project, HOME (which keeps no
+   * rules, so no policy is read for it), no project, or not yet known. It arrives as a prop rather than being looked up here because it is
    * a fact about the tree and not about this block, and the pane already holds
    * the tree for the header beside it.
    */

@@ -75,11 +75,12 @@ export interface ApprovalControlsProps {
    * third control at all.
    *
    * A rule lives in one project's policy, so a surface that cannot name a
-   * project has nothing to offer: `unfiled` is a session with nowhere to keep
-   * one and `unplaced` is a surface that does not know -- the card in a list,
-   * which is handed no tree -- and both draw Allow and Deny and nothing else. A
-   * button that could only fail, or that named the wrong project, is worse than
-   * no button.
+   * project that keeps one has nothing to offer: `unfiled` is a session with
+   * nowhere to keep one, `home` is a session in HOME, which the hub keeps no
+   * rules for, and `unplaced` is a surface that does not know -- the card in a
+   * list, which is handed no tree -- and all three draw Allow and Deny and
+   * nothing else. A button that could only fail, or that named the wrong
+   * project, is worse than no button.
    */
   readonly project: SessionProject;
   /**
