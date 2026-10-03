@@ -25,6 +25,12 @@ import { parseWorkspace, serializeWorkspace } from './workspace.js';
 const SESSION = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-1' });
 const OTHER = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-2' });
 const DOC = nodeIdSchema.parse('hub-5');
+/** What every start in these tests asked for; the layout store never reads it. */
+const ASKED = {
+  storeId: storeIdSchema.parse('store-work'),
+  provider: 'claude',
+  project: null,
+} as const;
 
 /**
  * The hub as the layout store sees it: an answer that can arrive, and a place
@@ -76,13 +82,23 @@ function fakeHub() {
     },
     /** The hub answers a start, the way it answers a resume: with the session. */
     started(view: StartedView): void {
-      const entry = starts.get(view.replyTo) ?? { started: null, refusal: null, named: null };
+      const entry = starts.get(view.replyTo) ?? {
+        asked: ASKED,
+        started: null,
+        refusal: null,
+        named: null,
+      };
       starts = new Map([...starts, [view.replyTo, { ...entry, started: view }]]);
       notify();
     },
     /** The hub tells the client that started a spawn which session it became. */
     named(startId: FrameId, session: SessionRef): void {
-      const entry = starts.get(startId) ?? { started: null, refusal: null, named: null };
+      const entry = starts.get(startId) ?? {
+        asked: ASKED,
+        started: null,
+        refusal: null,
+        named: null,
+      };
       starts = new Map([...starts, [startId, { ...entry, named: session }]]);
       notify();
     },

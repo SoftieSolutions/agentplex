@@ -13,6 +13,7 @@ import type {
   Layout,
   MachineState,
   NodeId,
+  Provider,
   RefusalCode,
   ServerRegistrationId,
   SessionHolder,
@@ -189,6 +190,23 @@ export interface StartedView {
 }
 
 /**
+ * What a start asked for, as the command that carried it said it.
+ *
+ * Kept because a spawn has no session to be named by until the provider writes
+ * one, and a list that shows the start before then has nothing else to say
+ * what it is: these three fields are the whole of what the client knows. The
+ * prompt and the machine override are left behind -- the one is user content
+ * nobody reads back off a row, and the other is answered by `started.server`,
+ * which names the machine the hub actually picked.
+ */
+export interface StartAsked {
+  readonly storeId: StoreId;
+  readonly provider: Provider;
+  /** The project the start was filed under, or `null` for none. */
+  readonly project: NodeId | null;
+}
+
+/**
  * Everything the hub has said about one start this client asked for.
  *
  * Kept per start and keyed by the frame that carried it, like `answers`, and
@@ -203,6 +221,8 @@ export interface StartedView {
  * never both set: a start is answered once.
  */
 export interface StartView {
+  /** What the start asked for, filed when it was accepted and never changed. */
+  readonly asked: StartAsked;
   /** The hub's yes, naming the machine it placed the start on. */
   readonly started: StartedView | null;
   /** The hub's no, in its own words. */

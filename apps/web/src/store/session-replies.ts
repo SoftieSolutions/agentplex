@@ -146,7 +146,12 @@ export function createSessionReplies({ update }: SessionRepliesDependencies): Se
      */
     asked(command: HubCommand, id: FrameId): void {
       if (command.type !== 'session-start') return;
-      starts.set(id, { started: null, refusal: null, named: null });
+      const asked = {
+        storeId: command.storeId,
+        provider: command.provider,
+        project: command.project,
+      };
+      starts.set(id, { asked, started: null, refusal: null, named: null });
       evictOldestStarts();
       update({ starts: new Map(starts) });
     },

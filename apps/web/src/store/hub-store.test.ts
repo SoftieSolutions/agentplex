@@ -71,6 +71,9 @@ const START: HubCommand = {
   project: null,
 };
 
+/** What a start of START says it asked for, as the store files it. */
+const START_ASKED = { storeId: STORE_ID, provider: 'claude', project: null } as const;
+
 const STOP: HubCommand = {
   type: 'session-stop',
   storeId: SESSION.storeId,
@@ -1730,7 +1733,12 @@ describe('terminal frames from the hub', () => {
     // pane reading its entry back as missing would go back to saying it was
     // asking about a session that is running.
     expect(starts.has(answered.id)).toBe(false);
-    expect(starts.get(waiting.id)).toEqual({ started: null, refusal: null, named: null });
+    expect(starts.get(waiting.id)).toEqual({
+      asked: START_ASKED,
+      started: null,
+      refusal: null,
+      named: null,
+    });
 
     // The exemption yields to the bound, which is the half that is not a
     // preference: with nothing answered left to drop, the oldest goes anyway,
@@ -1765,6 +1773,7 @@ describe('terminal frames from the hub', () => {
       message: 'no server the hub is paired with has that store mounted',
     });
     expect(snapshot.starts.get(succeeding.id)).toEqual({
+      asked: START_ASKED,
       started: {
         replyTo: succeeding.id,
         storeId: 'store-agentplex',
@@ -1809,6 +1818,17 @@ describe('a start the hub named', () => {
     expect(sent.id).toBe(2);
     return { h, socket, id: sent.id };
   }
+
+  it('files what the start asked for the moment it is accepted, and keeps it past the yes', async () => {
+    const { h, socket, id } = await spawned();
+    // A sidebar row for a start that has no session yet has nothing else to
+    // name it by: the provider, the store and the project are only in the ask.
+    expect(h.store.getSnapshot().starts.get(id)?.asked).toEqual(START_ASKED);
+
+    socket.deliver(hubFrames.sessionStarted);
+
+    expect(h.store.getSnapshot().starts.get(id)?.asked).toEqual(START_ASKED);
+  });
 
   it('files the session against the start, beside the yes it already had', async () => {
     const { h, socket, id } = await spawned();
