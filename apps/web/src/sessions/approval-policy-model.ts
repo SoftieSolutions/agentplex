@@ -132,11 +132,11 @@ export const EXACT_MATCH_WORDS =
 /**
  * The rows for one session's project, from what the store holds.
  *
- * Four absences, four sentences, which is the whole of why `project` is a
- * union rather than a nullable id. HOME is one of them: it is a project, so
- * "in no project" would be false of a session there, and it is the one
- * project the hub keeps no rules for -- an approval rule references a project
- * row, and HOME, having no directory, has none. A tree that has not arrived is not a session
+ * Four absences, four sentences, which is the whole of why `project` is a union
+ * rather than a nullable id. HOME is one of them: it is a project, so "in no
+ * project" would be false of a session there, and it is the one project the hub
+ * keeps no rules for -- an approval rule references a project row, and HOME,
+ * having no directory, has none. A tree that has not arrived is not a session
  * filed nowhere, and saying "this session is in no project" while the tree is
  * in flight is this block's one chance to be wrong in the direction that costs
  * something: a person told there is no policy stops looking for one. `policy`
@@ -204,10 +204,11 @@ export function policyRows(
  * directly or through folders inside it: in a project, so not `unfiled`, whose
  * sentence says "in no project", and still with nowhere for a rule to live,
  * because the hub refuses a rule for HOME. HOME is told by its id and never by
- * its name, so a project a person named "HOME" is an ordinary `project`. `unplaced` is the tree not having arrived, or not
- * holding this session: two absences that look the same from here and that are
- * both "this client cannot say yet", which is a different sentence from "there
- * is no project" and must stay one.
+ * its name, so a project a person named "HOME" is an ordinary `project`.
+ * `unplaced` is the tree not having arrived, or not holding this session: two
+ * absences that look the same from here and that are both "this client cannot
+ * say yet", which is a different sentence from "there is no project" and must
+ * stay one.
  *
  * The label falls back to the node's id for a project the hub named nothing,
  * the way the pane's header falls back to the session id. A project a person

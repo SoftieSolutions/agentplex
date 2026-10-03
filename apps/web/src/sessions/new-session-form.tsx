@@ -29,10 +29,10 @@ interface PendingStart {
 /**
  * The new-session form, in the mockup's dialog language (turn 7): a store, a
  * provider, a project (HOME unless another is picked), an optional machine
- * override, an optional first prompt. Every rule -- which controls exist, what the frame carries,
- * what to do with the hub's answer -- comes from new-session-model.ts; this
- * component owns only what the user has typed and the id of the start it is
- * waiting on.
+ * override, an optional first prompt. Every rule -- which controls exist, what
+ * the frame carries, what to do with the hub's answer -- comes from
+ * new-session-model.ts; this component owns only what the user has typed and
+ * the id of the start it is waiting on.
  *
  * The mockup's New popover lists five node kinds and the chrome draws it now
  * (AGX-124): its Session row is what opens this form in the wide shell, and
