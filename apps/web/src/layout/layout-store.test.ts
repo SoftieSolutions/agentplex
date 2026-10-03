@@ -12,6 +12,7 @@ import { terminalKey } from '../store/terminals.js';
 import type { StartedView, StartView } from '../store/views.js';
 import { createFakeTimers } from '../store/timers.js';
 import { createLayoutStore, type LayoutHub } from './layout-store.js';
+import { panes } from './operations.js';
 import {
   DEFAULT_TREE,
   docPane,
@@ -604,5 +605,50 @@ describe('a pending pane', () => {
 
     const tree = h.store.getSnapshot().tree;
     expect(tree.kind === 'split' && tree.first).toEqual(pendingPane(7));
+  });
+
+  it('shows the session a start already became, and never opens a second pane on it', () => {
+    const h = harness();
+    h.answer(serializePaneLayout(DEFAULT_TREE));
+    h.store.showPendingSession(7);
+    h.named(7, SESSION);
+    // Focus elsewhere, the way it is after a split: a pending pane opened here
+    // would rebind at once to the session the first pane already shows.
+    h.store.split('row');
+    expect(h.store.getSnapshot().focus).toEqual(['second']);
+
+    // Coming back to the start's address, twice.
+    h.store.showPendingSession(7);
+    h.store.showPendingSession(7);
+
+    const showing = panes(h.store.getSnapshot().tree).filter(
+      ({ leaf }) => leaf.content.type !== 'empty',
+    );
+    expect(showing).toEqual([{ path: ['first'], leaf: sessionPane(SESSION) }]);
+    expect(h.store.getSnapshot().focus).toEqual(['first']);
+  });
+
+  it('shows a start named before the stored layout arrived as its session', () => {
+    const h = harness();
+    h.named(7, SESSION);
+    h.store.showPendingSession(7);
+
+    h.answer(
+      serializePaneLayout({
+        kind: 'split',
+        direction: 'row',
+        ratio: 0.5,
+        first: { kind: 'pane', content: { type: 'empty' } },
+        second: sessionPane(SESSION),
+      }),
+    );
+
+    // The pane already showing it is focused; the empty one stays empty.
+    const tree = h.store.getSnapshot().tree;
+    expect(tree.kind === 'split' && tree.first).toEqual({
+      kind: 'pane',
+      content: { type: 'empty' },
+    });
+    expect(h.store.getSnapshot().focus).toEqual(['second']);
   });
 });

@@ -14,6 +14,7 @@ import { hubFrames } from '../store/hub-frames.fixture.js';
 import type { HubCommand } from '../store/commands.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createLayoutStore, type LayoutStore } from '../layout/layout-store.js';
+import { panes } from '../layout/operations.js';
 import { startHash } from '../terminal/start-route.js';
 import { createFakeTimers } from '../store/timers.js';
 import { installFlowMocks } from '../graphs/flow-test-setup.js';
@@ -708,6 +709,35 @@ describe('the shell', () => {
     });
 
     expect(container.querySelector('main')?.textContent).toContain('starting on mbp-robert');
+  });
+
+  it('shows the session a named start became when its address is visited again', async () => {
+    const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
+    const socket = await mount(Date.now, layoutStore);
+    const sent = store.sendCommand(START);
+    if (!sent.accepted) throw new Error(sent.reason);
+
+    await follow(startHash(sent.id));
+    await act(() => {
+      socket.deliver(hubFrames.paneLayoutEmpty);
+      socket.deliver(addressedTo(hubFrames.sessionStarted, sent.id));
+      socket.deliver(addressedTo(hubFrames.sessionNamed, sent.id));
+    });
+    const named = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-spawned' });
+    // Focus elsewhere, as a split leaves it: a pane opened on the start here
+    // would rebind at once to the session the first pane already shows.
+    await act(() => layoutStore.split('row'));
+
+    // Away to the list and back, twice: the remount shows the address again.
+    for (let visit = 0; visit < 2; visit += 1) {
+      await follow('#/');
+      await follow(startHash(sent.id));
+    }
+
+    const showing = panes(layoutStore.getSnapshot().tree)
+      .map(({ leaf }) => leaf.content)
+      .filter((content) => content.type !== 'empty');
+    expect(showing).toEqual([{ type: 'session', session: named }]);
   });
 
   it('keeps the sidebar when the address names a graph, and draws the graph in the content region', async () => {
