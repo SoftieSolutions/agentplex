@@ -33,7 +33,7 @@ export interface ResumeMemory {
   readonly start: FrameId | null;
   /**
    * Whether a state that arrived after the hub answered that start still
-   * showed nothing running the session.
+   * showed nothing in agentplex holding the session.
    *
    * A server reports a hold only for a live terminal, so a resume that exits
    * before its machine reports again is never seen held, and a pane waiting
@@ -104,8 +104,13 @@ export function rememberCommand(
 }
 
 /**
- * What a state says about each remembered start: held answers it, and nothing
- * running it after the hub said it started means it lapsed.
+ * What a state says about each remembered start: held answers it, and unheld
+ * after the hub said it started means it lapsed.
+ *
+ * Unheld and not "no process": a row on a shared store, or one whose machine
+ * could not read its registry, says `unknown` whatever runs it, and one an
+ * outside process runs says `running`. Neither is this start's hold, which is
+ * the one thing that answers it, so neither keeps a pane waiting for one.
  *
  * `replies` are the answers already received, so an answer among them came
  * before this state did.
@@ -123,10 +128,7 @@ export function rememberState(
       if (start === null) continue;
       if (row.holder !== null) {
         next = withMemory(next, ref, () => NO_RESUME_MEMORY_RAN);
-      } else if (
-        row.descriptor.process === 'none' &&
-        replies.get(start)?.type === 'session-started'
-      ) {
+      } else if (replies.get(start)?.type === 'session-started') {
         next = withMemory(next, ref, (memory) => ({ ...memory, lapsed: true }));
       }
     }

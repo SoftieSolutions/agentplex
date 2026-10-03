@@ -99,6 +99,27 @@ describe('resume memory', () => {
     expect(resumeMemoryOf(again, SPIKE).lapsed).toBe(false);
   });
 
+  it('lapses an answered start on a row that cannot tell whether anything runs it', () => {
+    // A shared store's row says `unknown`, not `none`: a resume that exits
+    // before its hold is reported still leaves the row unheld, and a pane
+    // waiting for the holder would wait for ever.
+    const shared = sessionRefSchema.parse({
+      storeId: 'store-shared',
+      sessionId: 'session-shared-notes',
+    });
+    const asked = rememberCommand(NONE, startOf(shared), FIRST);
+    const replies = rememberAnswer(NO_REPLIES, replyFrom(hubFrames.sessionStartedShared, FIRST));
+    const lapsed = rememberState(asked, stateFrom(hubFrames.machineStateResumable), replies);
+    expect(resumeMemoryOf(lapsed, shared)).toMatchObject({ start: FIRST, lapsed: true });
+  });
+
+  it('lapses an answered start on a row something outside agentplex runs', () => {
+    const asked = rememberCommand(NONE, startOf(OTHER), FIRST);
+    const replies = rememberAnswer(NO_REPLIES, replyFrom(hubFrames.sessionStartedResumed, FIRST));
+    const lapsed = rememberState(asked, stateFrom(hubFrames.machineStateResumable), replies);
+    expect(resumeMemoryOf(lapsed, OTHER)).toMatchObject({ start: FIRST, lapsed: true });
+  });
+
   it('records a run once, and hands back the same memories after', () => {
     const ran = rememberRan(NONE, SPIKE);
     expect(resumeMemoryOf(ran, SPIKE).ran).toBe(true);
