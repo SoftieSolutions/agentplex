@@ -171,6 +171,19 @@ export interface RetakeSessionRequest {
   readonly provider: Provider;
 }
 
+/**
+ * A process a retake sent SIGHUP: the one the adapter verified, and when, by
+ * this server's clock, the signal went.
+ *
+ * The moment is kept because a pid reissued to somebody else belongs to a
+ * process started after it, and that is the only thing that tells a reissue
+ * from the same process dated later by a clock that stepped forward.
+ */
+interface SignalledProcess {
+  readonly process: LiveProcess;
+  readonly signalledAt: number;
+}
+
 /** How often a retake asks whether the process it signalled has gone. */
 export const RETAKE_POLL_MS = 250;
 
@@ -374,7 +387,8 @@ export function createSessionController(
 
   /**
    * The process each retake signalled and has not yet seen end, by store and
-   * session: the pid, with the start date the adapter verified for it.
+   * session: the pid, with the start date the adapter verified for it and the
+   * moment it was signalled.
    *
    * A retake that gives up at its bound leaves a process this server signalled
    * still holding the pid, and Claude Code dropped its registry entry when the
@@ -383,15 +397,15 @@ export function createSessionController(
    * asked again at every start and retake of the session, because nothing
    * else on this machine still knows the process is there.
    */
-  const outstanding = new Map<StoreId, Map<SessionId, LiveProcess>>();
+  const outstanding = new Map<StoreId, Map<SessionId, SignalledProcess>>();
 
-  const signalledFor = (session: SessionRef): LiveProcess | undefined =>
+  const signalledFor = (session: SessionRef): SignalledProcess | undefined =>
     outstanding.get(session.storeId)?.get(session.sessionId);
 
-  function rememberSignalled(session: SessionRef, process: LiveProcess): void {
-    const inStore = outstanding.get(session.storeId) ?? new Map<SessionId, LiveProcess>();
+  function rememberSignalled(session: SessionRef, signalled: SignalledProcess): void {
+    const inStore = outstanding.get(session.storeId) ?? new Map<SessionId, SignalledProcess>();
     outstanding.set(session.storeId, inStore);
-    inStore.set(session.sessionId, process);
+    inStore.set(session.sessionId, signalled);
   }
 
   function forgetSignalled(session: SessionRef): void {
@@ -970,18 +984,19 @@ export function createSessionController(
     if (!target.ok) return refused(target.problem);
     if (ownPid(target.process.pid)) return alreadyHeld(session);
 
+    const signalled: SignalledProcess = { process: target.process, signalledAt: clock.now() };
     const hung = signaller.signal(target.process.pid, 'SIGHUP');
     if (!hung.ok) {
       return refused(`this server could not end the process running that session: ${hung.problem}`);
     }
-    rememberSignalled(session, target.process);
+    rememberSignalled(session, signalled);
     logger.info('session retake signalled', {
       ...session,
       pid: target.process.pid,
       signal: 'SIGHUP',
     });
 
-    const ended = await untilEnded(session, target.process);
+    const ended = await untilEnded(session, signalled);
     if (ended !== null) return refused(ended);
     forgetSignalled(session);
 
@@ -996,10 +1011,10 @@ export function createSessionController(
    * removes its entry while it handles SIGHUP and then runs its SessionEnd
    * hooks and flushes its transcript, so an entry that has gone is a process
    * that may still be writing. The process has gone when its pid is dead, or
-   * when the pid now dates later than the process the adapter verified --
-   * the kernel issued it again, which it does only once the process that held
-   * it has exited. A date earlier than that is the clock, not the kernel, and
-   * is waited out like a pid that could not be dated.
+   * when the pid now dates to a process started after the signal -- the
+   * kernel issued it again, which it does only once the process that held it
+   * has exited. Any other date that is not the process's own is the clock,
+   * not the kernel, and is waited out like a pid that could not be dated.
    *
    * Polled every `RETAKE_POLL_MS` and counted in polls rather than read off
    * the clock: a timer fires no earlier than it was set for, so the count is a
@@ -1008,8 +1023,11 @@ export function createSessionController(
    * process that was signalled, for the reason the SIGHUP waited on a
    * verification.
    */
-  async function untilEnded(session: SessionRef, signalled: LiveProcess): Promise<string | null> {
-    const { pid } = signalled;
+  async function untilEnded(
+    session: SessionRef,
+    signalled: SignalledProcess,
+  ): Promise<string | null> {
+    const { pid } = signalled.process;
     let waited = 0;
     let killed = false;
     for (;;) {
@@ -1041,36 +1059,42 @@ export function createSessionController(
    * `true` when no retake left one.
    */
   async function signalledHasEnded(session: SessionRef): Promise<boolean> {
-    const process = signalledFor(session);
-    if (process === undefined) return true;
-    if ((await stillRunning(process)) !== 'gone') return false;
+    const signalled = signalledFor(session);
+    if (signalled === undefined) return true;
+    if ((await stillRunning(signalled)) !== 'gone') return false;
     // Only the record that was asked about: a retake may have signalled the
     // session again while the probe answered.
-    if (signalledFor(session) === process) forgetSignalled(session);
+    if (signalledFor(session) === signalled) forgetSignalled(session);
     return true;
   }
 
   /**
    * Whether the pid a retake signalled still holds the process it signalled.
    *
-   * `gone` is a dead pid, or one that dates later than the process verified:
-   * a reissued pid, which the kernel hands out only once the holder has
-   * exited, and only ever to a process started after it. The tolerance is the
-   * registry's own, here because two readings of one process's start are not
-   * promised to agree to the millisecond, and reading the same process as a
-   * different one would resume beside it.
+   * `gone` is a dead pid, or a reissued one: a pid the kernel handed out
+   * again only once the holder exited, and so only ever to a process started
+   * after the signal. A date has to be later than the process verified and no
+   * earlier than the signal to say that. The tolerance is the registry's own,
+   * here because two readings of one process's start are not promised to agree
+   * to the millisecond, and reading the same process as a different one would
+   * resume beside it.
    * `unknown` is a live pid this machine could not date this time, or one
-   * that dates earlier than the process verified. No reissue explains an
-   * earlier date; a clock stepped back under the probe does -- the Linux one
-   * re-reads boot time on every call -- and that is the same process read
-   * wrong. Neither is counted ended, and neither is killed.
+   * whose date no reissue explains: earlier than the process verified, or
+   * between that and the signal. A clock stepped under the probe does explain
+   * them -- the Linux one re-reads boot time on every call -- and that is the
+   * same process read wrong. Neither is counted ended, and neither is killed.
    */
-  async function stillRunning(signalled: LiveProcess): Promise<'same' | 'gone' | 'unknown'> {
-    if (!(await processes.isAlive(signalled.pid))) return 'gone';
-    const startedAt = await processes.startedAt(signalled.pid);
+  async function stillRunning({
+    process,
+    signalledAt,
+  }: SignalledProcess): Promise<'same' | 'gone' | 'unknown'> {
+    if (!(await processes.isAlive(process.pid))) return 'gone';
+    const startedAt = await processes.startedAt(process.pid);
     if (startedAt === null) return 'unknown';
-    if (startedAt > signalled.startedAt + PID_RECYCLE_TOLERANCE_MS) return 'gone';
-    if (startedAt < signalled.startedAt - PID_RECYCLE_TOLERANCE_MS) return 'unknown';
+    if (startedAt > process.startedAt + PID_RECYCLE_TOLERANCE_MS) {
+      return startedAt >= signalledAt - PID_RECYCLE_TOLERANCE_MS ? 'gone' : 'unknown';
+    }
+    if (startedAt < process.startedAt - PID_RECYCLE_TOLERANCE_MS) return 'unknown';
     return 'same';
   }
 
