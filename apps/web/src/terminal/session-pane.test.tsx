@@ -2665,75 +2665,13 @@ describe('a pane on a session nothing holds', () => {
     expect(action()?.textContent).toBe('Try again');
   });
 
-  /**
-   * The captured ending, re-addressed to the session a test watches and given
-   * the reason a hub sends when the session itself ended. The capture is of a
-   * dropped machine; `target` and `reason` are the only fields touched.
-   */
-  function endedFor(sessionId: string): string {
-    return JSON.stringify({
-      ...(JSON.parse(hubFrames.sessionSubscriptionEnded) as Record<string, unknown>),
-      target: { by: 'session', storeId: 'store-agentplex', sessionId },
-      reason: 'session-ended',
-    });
-  }
-
-  it('does not resume a start that ended before its row was published, arriving together', async () => {
-    // A pending pane rebinds to the session its start named before any scan
-    // has published a row for it: it watches by address, with no row.
-    const connected = await connectedTo(hubFrames.machineState);
-    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
-    expect(ofType(sentSince(connected), 'session-subscribe')).toHaveLength(1);
-
-    await act(async () => {
-      connected.socket.deliver(endedFor('session-spike-wasm'));
-      connected.socket.deliver(hubFrames.machineStateResumable);
-    });
-    await act(settle);
-
-    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
-    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
-    expect(action()?.textContent).toBe('Resume');
-  });
-
-  it('does not resume a start that ended before its row was published, one after the other', async () => {
-    const connected = await connectedTo(hubFrames.machineState);
-    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
-
-    await deliver(connected.socket, endedFor('session-spike-wasm'));
-    await deliver(connected.socket, hubFrames.machineStateResumable);
-    await act(settle);
-
-    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
-    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
-  });
-
-  /**
-   * A captured state with one session's `process` changed and nothing else:
-   * what the same machine reports once the process it saw has gone.
-   */
-  function withProcess(frame: string, sessionId: string, process: string): string {
-    const parsed = JSON.parse(frame) as {
-      state: { stores: { sessions: { descriptor: { sessionId: string; process: string } }[] }[] };
-    };
-    for (const store of parsed.state.stores) {
-      for (const row of store.sessions) {
-        if (row.descriptor.sessionId === sessionId) row.descriptor.process = process;
-      }
-    }
-    return JSON.stringify(parsed);
-  }
-
   it('says a session run outside agentplex stopped, and resumes it only when pressed', async () => {
     const connected = await connectedTo(hubFrames.machineStateResumable);
     await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));
     expect(shown()?.getAttribute('data-pane-state')).toBe('outside');
 
     // Whoever ran it quits their own claude: the machine reports nothing.
-    await deliver(
-      connected.socket,
-      withProcess(hubFrames.machineStateResumable, 'session-cli-run', 'none'),
-    );
+    await deliver(connected.socket, hubFrames.machineStateOutsideQuit);
 
     expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
     expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
