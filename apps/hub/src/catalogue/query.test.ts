@@ -1110,6 +1110,42 @@ describe('HOME', () => {
     expect(roots(descending.items)).toEqual([HOME_PROJECT_ID, 'zulu', 'alpha']);
   });
 
+  // The open set decides how much of each project is drawn; it does not decide
+  // where a project sits. Both rules meet at the root, and HOME still leads it.
+  for (const direction of ['asc', 'desc'] as const) {
+    it(`leads every project closed, sorted by name ${direction}`, async () => {
+      const answered = await over(rows, readings).page({
+        view: 'tree',
+        openProjects: [],
+        sort: { key: 'name', direction },
+      });
+
+      expect(idsOf(answered.items)).toEqual(
+        direction === 'asc'
+          ? [HOME_PROJECT_ID, 'alpha', 'zulu']
+          : [HOME_PROJECT_ID, 'zulu', 'alpha'],
+      );
+      expect(answered.total).toBe(3);
+    });
+  }
+
+  it('draws its contents right behind it when HOME is the one open', async () => {
+    const answered = await over(rows, readings).page({
+      view: 'tree',
+      openProjects: [HOME_PROJECT_ID],
+      sort: { key: 'name', direction: 'desc' },
+    });
+
+    expect(idsOf(answered.items)).toEqual([
+      HOME_PROJECT_ID,
+      'loose',
+      'drafts',
+      'drafted',
+      'zulu',
+      'alpha',
+    ]);
+  });
+
   it("puts HOME's heading first in a list grouped by project, and the rest by label", async () => {
     const answered = await over(rows, readings).page({ groupBy: 'project' });
     const headings = [...new Set(answered.items.map((item) => item.group?.key ?? null))];
