@@ -1469,6 +1469,30 @@ describe('a retake of a session a claude outside agentplex is running', () => {
     expect(ptys.opened).toEqual([]);
   });
 
+  it('neither ends nor kills a pid that now dates later but before the signal, a clock step forward', async () => {
+    // A reissued pid belongs to a process started after the SIGHUP. A date
+    // later than the process verified but earlier than the signal is the
+    // clock having stepped forward under the probe: the same process, still
+    // writing, and resuming beside it would be a second writer.
+    const { sessions, signaller, ptys, timers } = await outsideClaude(
+      { status: 'idle' },
+      {
+        onSignal: (pid, _signal, { probe }) => {
+          probe.exit(pid);
+          probe.start(pid, OUTSIDE_STARTED_AT + 60_000);
+        },
+      },
+    );
+
+    const pending = retake(sessions);
+    await settle();
+    await poll(timers, RETAKE_BOUND_MS / RETAKE_POLL_MS);
+
+    expect(refusal(await pending)).toContain('could not tell whether');
+    expect(signaller.sent).toEqual([{ pid: OUTSIDE_PID, signal: 'SIGHUP' }]);
+    expect(ptys.opened).toEqual([]);
+  });
+
   it('neither ends nor kills a pid it can no longer date, and refuses at the bound', async () => {
     // Alive and undatable is a process this server cannot tell from a later
     // one. Counting it ended would risk two writers; a SIGKILL might land on
