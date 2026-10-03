@@ -440,6 +440,12 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         terminals.retryByStart(frame.replyTo);
         return;
       }
+      // News for the start, not an answer to it: `session-started` already
+      // settled the frame, so nothing is remembered or settled here.
+      case 'session-named': {
+        sessions.named(frame);
+        return;
+      }
       // Answers and nothing more: the screen that sent the frame reads its own
       // out of `answers`, and what it draws next comes from the state. None of
       // them asks for the tree again. The hub broadcasts `catalogue-changed`

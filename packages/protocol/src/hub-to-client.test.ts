@@ -201,6 +201,12 @@ describe('client and hub round trips', () => {
       server: serverRegistrationIdSchema.parse('registration-1'),
     },
     {
+      type: 'session-named',
+      replyTo: 4,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+    },
+    {
       type: 'session-stopped',
       replyTo: 6,
       storeId: storeIdSchema.parse('store-work'),
@@ -683,6 +689,28 @@ describe('the transcript frames', () => {
         olderExist: false,
       }).ok,
     ).toBe(false);
+  });
+});
+
+describe('the start the report named', () => {
+  const named = {
+    type: 'session-named',
+    replyTo: 4,
+    storeId: 'store-work',
+    sessionId: 'session-1',
+  } as const;
+
+  it('names the start it belongs to, the store and the id the provider minted', () => {
+    expect(parseHubFrame(named).ok).toBe(true);
+  });
+
+  it.each(['replyTo', 'storeId', 'sessionId'] as const)('refuses a naming without %s', (key) => {
+    const { [key]: _dropped, ...rest } = named;
+    expect(parseHubFrame(rest).ok).toBe(false);
+  });
+
+  it('refuses a naming whose id is null: there is nothing to name until the report has one', () => {
+    expect(parseHubFrame({ ...named, sessionId: null }).ok).toBe(false);
   });
 });
 

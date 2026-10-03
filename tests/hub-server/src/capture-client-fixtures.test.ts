@@ -314,6 +314,7 @@ function labelFor(text: string): string {
     ['layout', 'layout'],
     ['pane-layout-saved', 'paneLayoutSaved'],
     ['session-started', 'sessionStarted'],
+    ['session-named', 'sessionNamed'],
     ['session-stopped', 'sessionStopped'],
     ['session-paused', 'sessionPaused'],
     ['session-resumed', 'sessionResumed'],
@@ -3368,6 +3369,10 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
 
     spawned?.emit('named now\r\n');
     await quiet(spawning);
+    // The scan that named the spawn also told the client that started it, as
+    // its own start (id 2): the frame a pending pane rebinds off with no
+    // terminal open on it.
+    const sessionNamed = firstFrame(spawning, 'sessionNamed');
 
     // And the machine goes away without saying so. The rows it reported stay,
     // labelled, so this is a refusal naming a machine rather than a session
@@ -3596,6 +3601,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('sessionSubscribedPending', sessionSubscribedPending);
     captured.set('terminalOutputPending', terminalOutputPending);
     captured.set('terminalOutputNamed', terminalOutputNamed);
+    captured.set('sessionNamed', sessionNamed);
     captured.set('machineStateApproval', machineStateApproval);
     captured.set('approvalDecided', approvalDecided);
     captured.set('welcomeWithPush', welcomeWithPush);

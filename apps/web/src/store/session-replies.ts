@@ -55,6 +55,8 @@ export interface SessionReplies {
   started(frame: Frame<'session-started'>): void;
   /** The hub's no to a frame; filed against the start it answers, if it answers one. */
   refused(frame: Frame<'refusal'>): void;
+  /** The session a spawn became; filed against the start it names, beside its answer. */
+  named(frame: Frame<'session-named'>): void;
   /** The hub's answer to a transcript read. */
   transcript(frame: Frame<'session-transcript-read'>): void;
   /** Nothing is looking any more: forgets the transcripts. */
@@ -97,7 +99,7 @@ export function createSessionReplies({ update }: SessionRepliesDependencies): Se
   function evictOldestStarts(): void {
     while (starts.size > MAX_REMEMBERED_STARTS) {
       const settled = [...starts].find(
-        ([, view]) => view.started !== null || view.refusal !== null,
+        ([, view]) => view.started !== null || view.refusal !== null || view.named !== null,
       );
       const [oldest] = settled ?? [...starts][0] ?? [];
       if (oldest === undefined) return;
@@ -120,10 +122,16 @@ export function createSessionReplies({ update }: SessionRepliesDependencies): Se
     }
   }
 
-  /** Files an answer against the start it answers, and publishes it. */
-  function noteStartAnswer(replyTo: FrameId, answer: StartView): void {
-    if (!starts.has(replyTo)) return;
-    starts.set(replyTo, answer);
+  /**
+   * Files what the hub said against the start it is about, and publishes it.
+   *
+   * A patch over the entry rather than a replacement, because a naming and the
+   * yes it follows can arrive in either order and neither may erase the other.
+   */
+  function noteStartAnswer(replyTo: FrameId, patch: Partial<StartView>): void {
+    const entry = starts.get(replyTo);
+    if (entry === undefined) return;
+    starts.set(replyTo, { ...entry, ...patch });
     update({ starts: new Map(starts) });
   }
 
@@ -138,7 +146,7 @@ export function createSessionReplies({ update }: SessionRepliesDependencies): Se
      */
     asked(command: HubCommand, id: FrameId): void {
       if (command.type !== 'session-start') return;
-      starts.set(id, { started: null, refusal: null });
+      starts.set(id, { started: null, refusal: null, named: null });
       evictOldestStarts();
       update({ starts: new Map(starts) });
     },
@@ -150,7 +158,7 @@ export function createSessionReplies({ update }: SessionRepliesDependencies): Se
         sessionId: frame.sessionId,
         server: frame.server,
       };
-      noteStartAnswer(frame.replyTo, { started, refusal: null });
+      noteStartAnswer(frame.replyTo, { started });
     },
 
     refused(frame: Frame<'refusal'>): void {
@@ -160,7 +168,13 @@ export function createSessionReplies({ update }: SessionRepliesDependencies): Se
         message: frame.message,
         holder: frame.holder,
       };
-      noteStartAnswer(frame.replyTo, { started: null, refusal });
+      noteStartAnswer(frame.replyTo, { refusal });
+    },
+
+    named(frame: Frame<'session-named'>): void {
+      noteStartAnswer(frame.replyTo, {
+        named: { storeId: frame.storeId, sessionId: frame.sessionId },
+      });
     },
 
     transcript(frame: Frame<'session-transcript-read'>): void {
