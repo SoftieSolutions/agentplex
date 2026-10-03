@@ -3,6 +3,7 @@ import {
   type FrameId,
   type Layout,
   type MachineState,
+  type NodeId,
   type ServerRegistrationId,
 } from '@agentplex/protocol';
 import { followUp, type Answers } from '../store/answers.js';
@@ -118,7 +119,7 @@ export function createFollowUp(pending: FrameId, answers: Answers): CreateFollow
 
 /** One project, as a picker offers it. */
 export interface ProjectChoice {
-  readonly id: string;
+  readonly id: NodeId;
   readonly label: string;
 }
 

@@ -1,4 +1,4 @@
-import { HOME_PROJECT_ID, nodeIdSchema, readinessRefusal } from '@agentplex/protocol';
+import { HOME_PROJECT_ID, readinessRefusal } from '@agentplex/protocol';
 import type {
   FrameId,
   MachineState,
@@ -276,8 +276,7 @@ export function parsePrompt(text: string): string | null {
  * than to a project somebody removed.
  */
 export function resolveProject(projects: readonly ProjectChoice[], choice: string | null): NodeId {
-  const offered = choice !== null && projects.some((project) => project.id === choice);
-  return offered ? (nodeIdSchema.safeParse(choice).data ?? HOME_PROJECT_ID) : HOME_PROJECT_ID;
+  return projects.find((project) => project.id === choice)?.id ?? HOME_PROJECT_ID;
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   storeIdSchema,
   type MachineState,
 } from '@agentplex/protocol';
+import { projectChoices } from '../projects/new-project-model.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
@@ -247,10 +248,12 @@ describe('the chosen provider', () => {
 });
 
 describe('the project a start goes to', () => {
-  const projects = [
-    { id: 'home', label: 'HOME' },
-    { id: 'hub-5', label: 'agentplex (main checkout)' },
-  ];
+  /** What the picker offers off the captured tree: HOME, then the one project. */
+  const projects = (() => {
+    const parsed = parseTextFrame(parseHubFrame, hubFrames.layoutWithProject);
+    if (!parsed.ok || parsed.value.type !== 'layout') throw new Error('not a layout frame');
+    return projectChoices(parsed.value.nodes, { includeHome: true });
+  })();
 
   it('is HOME until somebody picks another', () => {
     // A session with no other project ends up in HOME anyway, so HOME is the

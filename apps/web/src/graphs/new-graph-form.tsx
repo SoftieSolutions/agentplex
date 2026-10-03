@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore, type JSX } from 'react';
-import { nodeIdSchema, type NodeId } from '@agentplex/protocol';
+import type { NodeId } from '@agentplex/protocol';
 import { projectChoices } from '../projects/new-project-model.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
@@ -63,13 +63,10 @@ export function NewGraphForm({
   const projects = projectChoices(layout, { includeHome: false });
   // The choice survives in state in case its option returns, but only a
   // project the current tree lists is used; one project needs no choosing.
-  const offered = projectChoice !== null && projects.some((choice) => choice.id === projectChoice);
   const chosen: NodeId | null =
     projects.length === 1
-      ? (nodeIdSchema.safeParse(projects[0]?.id).data ?? null)
-      : offered
-        ? (nodeIdSchema.safeParse(projectChoice).data ?? null)
-        : null;
+      ? (projects[0]?.id ?? null)
+      : (projects.find((choice) => choice.id === projectChoice)?.id ?? null);
 
   const blocked = graphCreateBlockedReason(snapshot.phase, name, chosen);
 

@@ -1,5 +1,5 @@
 import type { Layout, NodeId } from '@agentplex/protocol';
-import { PROJECT_KIND } from '../projects/project-kind.js';
+import { projectChoices } from '../projects/new-project-model.js';
 import { DOC_KIND } from '../tree/node-kinds.js';
 
 /**
@@ -49,14 +49,19 @@ export interface ProjectDocs {
  * document whose parent is no project in this layout is skipped too -- it is a
  * node this client cannot place, and placing it somewhere invented would be
  * the listing paying for one row it could not read.
+ *
+ * HOME is left out, and every document under it with it. HOME has no
+ * directory, so the hub keeps no project row for it and refuses every document
+ * act there; a HOME row here would carry a New doc action that could only be
+ * refused. The documents migration 0020 moved into HOME are not lost by this:
+ * the Projects tree still draws them where they are.
  */
 export function projectDocuments(layout: Layout | null): readonly ProjectDocs[] {
-  if (layout === null) return [];
   const projects = new Map<NodeId, { label: string; docs: DocRow[] }>();
-  for (const node of layout) {
-    if (node.kind !== PROJECT_KIND || node.name === null) continue;
-    projects.set(node.id, { label: node.name, docs: [] });
+  for (const choice of projectChoices(layout, { includeHome: false })) {
+    projects.set(choice.id, { label: choice.label, docs: [] });
   }
+  if (layout === null) return [];
   for (const node of layout) {
     if (node.kind !== DOC_KIND || node.name === null || node.parentId === null) continue;
     projects.get(node.parentId)?.docs.push({ nodeId: node.id, name: node.name });
