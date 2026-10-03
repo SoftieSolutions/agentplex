@@ -19,6 +19,7 @@ import {
 import {
   CATALOGUE_PAGE_LIMIT,
   catalogueNarrowingCount,
+  closedProjects,
   countLabel,
   DEFAULT_SHAPE,
   filterNote,
@@ -100,8 +101,15 @@ function pages(
 }
 
 describe('the query a shape asks', () => {
+  it('names the projects that are open, or asks for the tree whole', () => {
+    const open = [id('home'), id('hub-4')];
+    expect(queryFor(DEFAULT_SHAPE, null, open).openProjects).toEqual(open);
+    expect(queryFor(DEFAULT_SHAPE, null, []).openProjects).toEqual([]);
+    expect(queryFor(DEFAULT_SHAPE, 'opaque', null).openProjects).toBeNull();
+  });
+
   it('carries the limit from the named constant and the cursor it was given', () => {
-    expect(queryFor(DEFAULT_SHAPE, null)).toEqual({
+    expect(queryFor(DEFAULT_SHAPE, null, null)).toEqual({
       view: 'tree',
       groupBy: 'none',
       sort: { key: 'name', direction: 'asc' },
@@ -110,7 +118,7 @@ describe('the query a shape asks', () => {
       limit: CATALOGUE_PAGE_LIMIT,
       openProjects: null,
     });
-    expect(queryFor(DEFAULT_SHAPE, 'opaque').cursor).toBe('opaque');
+    expect(queryFor(DEFAULT_SHAPE, 'opaque', null).cursor).toBe('opaque');
   });
 
   it('maps the view, grouping and sort controls straight onto the frame', () => {
@@ -119,7 +127,7 @@ describe('the query a shape asks', () => {
       'updatedAt',
       'desc',
     );
-    expect(queryFor(shape, null)).toMatchObject({
+    expect(queryFor(shape, null, null)).toMatchObject({
       view: 'list',
       groupBy: 'server',
       sort: { key: 'updatedAt', direction: 'desc' },
@@ -294,21 +302,30 @@ describe('the rows a tree draws', () => {
   const items = [project, folder, session];
 
   it('draws everything when nothing is collapsed, at the depth the hub said', () => {
-    const rows = rowsFor(items, { view: 'tree', collapsed: new Set() });
+    const rows = rowsFor(items, {
+      view: 'tree',
+      collapsed: new Set(),
+      expanded: new Set([id('p')]),
+    });
     expect(rows.map((row) => row.kind === 'item' && row.depth)).toEqual([0, 1, 2]);
     expect(rows.every((row) => row.kind === 'item' && !row.collapsed)).toBe(true);
   });
 
   it('hides what a closed container holds, however deep', () => {
-    const rows = rowsFor(items, { view: 'tree', collapsed: new Set([id('p')]) });
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.kind === 'item' && rows[0].collapsed).toBe(true);
+    const rows = rowsFor(items, {
+      view: 'tree',
+      collapsed: new Set([id('f')]),
+      expanded: new Set([id('p')]),
+    });
+    expect(rows.map((row) => row.kind === 'item' && row.item.id)).toEqual([id('p'), id('f')]);
+    expect(rows[1]?.kind === 'item' && rows[1].collapsed).toBe(true);
   });
 
   it('offers a disclosure on a container even when nothing under it has loaded', () => {
     const rows = rowsFor([item({ id: id('f'), kind: FOLDER_KIND })], {
       view: 'tree',
       collapsed: new Set(),
+      expanded: new Set(),
     });
     expect(rows[0]?.kind === 'item' && rows[0].expandable).toBe(true);
   });
@@ -316,7 +333,11 @@ describe('the rows a tree draws', () => {
   it('draws a row whose parent is not on the page, rather than guessing it is hidden', () => {
     // A page that resumed inside a subtree holds children whose parents were on
     // the page before; the client cannot say an ancestor it never saw is closed.
-    const rows = rowsFor([session], { view: 'tree', collapsed: new Set([id('f')]) });
+    const rows = rowsFor([session], {
+      view: 'tree',
+      collapsed: new Set([id('f')]),
+      expanded: new Set(),
+    });
     expect(rows).toHaveLength(1);
   });
 
@@ -326,8 +347,109 @@ describe('the rows a tree draws', () => {
       group: { key: 'registration-1', label: 'mbp-robert', unfiled: false },
     }));
     expect(
-      rowsFor(grouped, { view: 'tree', collapsed: new Set() }).every((row) => row.kind === 'item'),
+      rowsFor(grouped, { view: 'tree', collapsed: new Set(), expanded: new Set([id('p')]) }).every(
+        (row) => row.kind === 'item',
+      ),
     ).toBe(true);
+  });
+});
+
+/**
+ * The top of the Projects tab: projects only, each closed until opened.
+ *
+ * The hub decides what the root holds (`openProjects` on the query); what is
+ * decided here is the disclosure a project row draws, which the list of open
+ * projects says and the list of closed containers does not.
+ */
+describe('the projects at the top of the tree', () => {
+  const home = item({ id: id('home'), kind: PROJECT_KIND, displayName: 'Home', depth: 0 });
+  const project = item({ id: id('p'), kind: PROJECT_KIND, displayName: 'agentplex', depth: 0 });
+  const folder = item({ id: id('f'), kind: FOLDER_KIND, parentId: id('p'), depth: 1 });
+  const doc = item({ id: id('d'), kind: DOC_KIND, parentId: id('f'), depth: 2 });
+  const session = item({
+    id: id('s'),
+    parentId: id('p'),
+    depth: 1,
+    anchor: anchorOf('session-1'),
+  });
+
+  function drawn(rows: ReturnType<typeof rowsFor>): string[] {
+    return rows.map((row) =>
+      row.kind === 'item' ? `${row.item.id}${row.collapsed ? '>' : row.expandable ? 'v' : ''}` : '',
+    );
+  }
+
+  it('draws a project nobody opened as a closed row, with a disclosure to open it', () => {
+    const rows = rowsFor([home, project], {
+      view: 'tree',
+      collapsed: new Set(),
+      expanded: new Set(),
+    });
+    expect(drawn(rows)).toEqual(['home>', 'p>']);
+  });
+
+  it('draws an opened project open over what the hub sent under it', () => {
+    const rows = rowsFor([home, project, folder, doc, session], {
+      view: 'tree',
+      collapsed: new Set(),
+      expanded: new Set([id('p')]),
+    });
+    expect(drawn(rows)).toEqual(['home>', 'pv', 'fv', 'd', 's']);
+  });
+
+  it('closes folders inside an open project as it always has', () => {
+    const rows = rowsFor([project, folder, doc, session], {
+      view: 'tree',
+      collapsed: new Set([id('f')]),
+      expanded: new Set([id('p')]),
+    });
+    expect(drawn(rows)).toEqual(['pv', 'f>', 's']);
+  });
+
+  it('reads a project by the open list alone, never by the closed one', () => {
+    // A project id left in the closed list by the build before this one says
+    // nothing about the project now: opening is the act that is written down.
+    const rows = rowsFor([project, folder, doc], {
+      view: 'tree',
+      collapsed: new Set([id('p')]),
+      expanded: new Set([id('p')]),
+    });
+    expect(drawn(rows)).toEqual(['pv', 'fv', 'd']);
+  });
+
+  it('hides what a project still holds on the page for the moment after it closed', () => {
+    const rows = rowsFor([project, folder, doc, session, home], {
+      view: 'tree',
+      collapsed: new Set(),
+      expanded: new Set(),
+    });
+    expect(drawn(rows)).toEqual(['p>', 'home>']);
+  });
+
+  it('names the projects it drew closed, and no folder', () => {
+    const rows = rowsFor([home, project, folder, doc], {
+      view: 'tree',
+      collapsed: new Set([id('f')]),
+      expanded: new Set([id('p')]),
+    });
+    expect([...closedProjects(rows)]).toEqual([id('home')]);
+    const filtered = rowsFor([home, project], {
+      view: 'tree',
+      collapsed: new Set(),
+      expanded: new Set(),
+      filtering: true,
+    });
+    expect(closedProjects(filtered).size).toBe(0);
+  });
+
+  it('applies no open rule while a filter is on, and offers no disclosure', () => {
+    const rows = rowsFor([project, folder, doc, session], {
+      view: 'tree',
+      collapsed: new Set([id('f')]),
+      expanded: new Set(),
+      filtering: true,
+    });
+    expect(drawn(rows)).toEqual(['p', 'f', 'd', 's']);
   });
 });
 
@@ -408,6 +530,7 @@ describe('filtering the tree', () => {
     const rows = rowsFor(items, {
       view: 'tree',
       collapsed: new Set([id('p'), id('f')]),
+      expanded: new Set(),
       filtering: true,
     });
     expect(rows.map((row) => row.kind === 'item' && row.item.displayName)).toEqual([
@@ -462,7 +585,7 @@ describe('the rows a list draws', () => {
         item({ id: id('b'), group: mbp }),
         item({ id: id('c'), group: nowhere }),
       ],
-      { view: 'list', collapsed: new Set() },
+      { view: 'list', collapsed: new Set(), expanded: new Set() },
     );
     expect(
       rows.map((row) => (row.kind === 'group' ? row.group.label : `item:${row.item.id}`)),
@@ -474,6 +597,7 @@ describe('the rows a list draws', () => {
     const rows = rowsFor([item({ id: id('a') }), item({ id: id('b') })], {
       view: 'list',
       collapsed: new Set(),
+      expanded: new Set(),
     });
     expect(rows.every((row) => row.kind === 'item')).toBe(true);
   });
@@ -486,15 +610,25 @@ describe('counting what a container holds', () => {
   const two = item({ id: id('s2'), parentId: id('p'), anchor: anchorOf('session-2') });
 
   it('counts sessions at every depth under a container', () => {
-    const counts = sessionCounts(pages([project, folder, one, two]));
+    const counts = sessionCounts(pages([project, folder, one, two]), new Set());
     expect(counts.get(id('p'))).toBe(2);
     expect(counts.get(id('f'))).toBe(1);
   });
 
   it('counts nothing at all while pages remain', () => {
     // A number that climbs as somebody pages was never counting anything.
-    const counts = sessionCounts(pages([project, folder, one], { nextCursor: 'more' }));
+    const counts = sessionCounts(pages([project, folder, one], { nextCursor: 'more' }), new Set());
     expect(counts.size).toBe(0);
+  });
+
+  it('gives no count for a closed project, whatever the pages still hold under it', () => {
+    // The hub sends a closed project as one row, so what is under it is not
+    // in the answer, and a count over nothing would say it holds nothing. The
+    // pages can still hold its contents for a moment after it closed -- the
+    // answer that drops them is on its way -- and that is no count either.
+    const counts = sessionCounts(pages([project, folder, one, two]), new Set([id('p')]));
+    expect(counts.has(id('p'))).toBe(false);
+    expect(counts.get(id('f'))).toBe(1);
   });
 });
 
@@ -579,13 +713,13 @@ describe('the kinds a leaf may be', () => {
 
   it('draws a graph as a leaf, since a graph holds nothing to expand into', () => {
     const graph = item({ id: id('g'), kind: GRAPH_KIND });
-    const rows = rowsFor([graph], { view: 'tree', collapsed: new Set() });
+    const rows = rowsFor([graph], { view: 'tree', collapsed: new Set(), expanded: new Set() });
     expect(rows[0]?.kind === 'item' && rows[0].expandable).toBe(false);
   });
 
   it('draws a doc as a leaf, since a document holds nothing to expand into', () => {
     const doc = item({ id: id('d'), kind: DOC_KIND });
-    const rows = rowsFor([doc], { view: 'tree', collapsed: new Set() });
+    const rows = rowsFor([doc], { view: 'tree', collapsed: new Set(), expanded: new Set() });
     expect(rows[0]?.kind === 'item' && rows[0].expandable).toBe(false);
   });
 });

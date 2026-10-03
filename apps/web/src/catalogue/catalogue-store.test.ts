@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseHubFrame, parseTextFrame, type CatalogueQuery } from '@agentplex/protocol';
+import {
+  nodeIdSchema,
+  parseHubFrame,
+  parseTextFrame,
+  type CatalogueQuery,
+} from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createFakeTimers } from '../store/timers.js';
 import {
@@ -114,7 +119,9 @@ describe('asking the first page', () => {
       filter: {},
       cursor: null,
       limit: CATALOGUE_PAGE_LIMIT,
-      openProjects: null,
+      // Every project closed until somebody opens one: the Projects tab's
+      // default, and the question asked before the layout has said otherwise.
+      openProjects: [],
     });
     expect(h.store.getSnapshot().loading).toBe(true);
   });
@@ -236,6 +243,82 @@ describe('a control that moves', () => {
     h.asked[2]?.resolve(LIST);
     await settled();
     expect(h.store.getSnapshot().pages.items).toHaveLength(LIST.items.length);
+  });
+});
+
+/**
+ * Which projects are open, the one part of the question that is not a control.
+ *
+ * It moves the way a control does -- from the top, and an answer to the old
+ * set is dropped -- because the hub draws a different tree for each set, and
+ * a page of one appended to a page of the other would interleave two trees.
+ */
+describe('the projects that are open', () => {
+  const HOME = nodeIdSchema.parse('home');
+  const PROJECT = nodeIdSchema.parse('hub-4');
+
+  it('re-asks the first page with the new set and drops an answer to the old one', async () => {
+    const h = harness();
+    h.asked[0]?.resolve(FIRST);
+    await settled();
+    h.store.loadMore();
+
+    h.store.openProjects([HOME, PROJECT]);
+    expect(h.store.getSnapshot().open).toEqual([HOME, PROJECT]);
+    expect(h.asked[2]?.query).toMatchObject({ cursor: null, openProjects: [HOME, PROJECT] });
+
+    // The load-more answers late, to a tree with nothing open.
+    h.asked[1]?.resolve(REST);
+    await settled();
+    expect(h.store.getSnapshot().pages.items).toHaveLength(FIRST.items.length);
+
+    h.asked[2]?.resolve(REST);
+    await settled();
+    expect(h.store.getSnapshot().pages.items).toHaveLength(REST.items.length);
+  });
+
+  it('asks nothing for the same projects in another order', () => {
+    const h = harness();
+    h.store.openProjects([HOME, PROJECT]);
+    expect(h.asked).toHaveLength(2);
+
+    h.store.openProjects([PROJECT, HOME]);
+    h.store.openProjects([PROJECT, HOME, PROJECT]);
+    expect(h.asked).toHaveLength(2);
+    // The empty list is every project closed, which is where the store began.
+    const fresh = harness();
+    fresh.store.openProjects([]);
+    expect(fresh.asked).toHaveLength(1);
+  });
+
+  it('sends the tree whole while filtering, and tells it apart from nothing open', () => {
+    const h = harness();
+    h.store.openProjects(null);
+    expect(h.asked[1]?.query.openProjects).toBeNull();
+
+    h.store.openProjects([]);
+    expect(h.asked[2]?.query.openProjects).toEqual([]);
+  });
+
+  it('cancels a typed question waiting to be asked, and asks once with both', () => {
+    const h = harness();
+    h.store.reshape(withFilter(DEFAULT_SHAPE, { field: 'search', value: 'auth' }), 'settled');
+    h.store.openProjects([HOME]);
+    expect(h.asked[1]?.query).toMatchObject({ filter: { search: 'auth' }, openProjects: [HOME] });
+
+    h.timers.fireAll();
+    expect(h.asked).toHaveLength(2);
+  });
+
+  it('only records the set while nothing is looking, and the first ask carries it', () => {
+    const h = fakeHub();
+    const store = createCatalogueStore({ hub: h.hub, timers: createFakeTimers() });
+    store.openProjects([HOME]);
+    expect(h.asked).toHaveLength(0);
+
+    store.subscribe(() => {});
+    expect(h.asked).toHaveLength(1);
+    expect(h.asked[0]?.query.openProjects).toEqual([HOME]);
   });
 });
 

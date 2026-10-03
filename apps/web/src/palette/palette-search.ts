@@ -117,7 +117,9 @@ const PALETTE_SHAPE: CatalogueShape = {
  * not ride along.
  */
 export function paletteQuery(text: string): CatalogueQuery {
-  return queryFor(withFilter(PALETTE_SHAPE, { field: 'search', value: text }), null);
+  // The tree whole: the palette asks the list view, which has no projects to
+  // draw open or closed, and `null` is the question it always asked.
+  return queryFor(withFilter(PALETTE_SHAPE, { field: 'search', value: text }), null, null);
 }
 
 /** The slice of the hub store this needs; `HubStore` satisfies it. */

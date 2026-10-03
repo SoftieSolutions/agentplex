@@ -3,6 +3,8 @@ import {
   nodeIdSchema,
   parseHubFrame,
   parseTextFrame,
+  sessionRefSchema,
+  type CatalogueItem,
   type Layout,
   type MachineState,
   type NodeId,
@@ -17,6 +19,7 @@ import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
+import { DOC_KIND, FOLDER_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import {
@@ -28,7 +31,7 @@ import {
   type CatalogueShape,
 } from './catalogue-model.js';
 import { CataloguePanel } from './catalogue-panel.js';
-import { fakeCatalogueStore } from './fake-catalogue-store.js';
+import { fakeCatalogueStore, type FakeCatalogueStore } from './fake-catalogue-store.js';
 
 /**
  * The filter box over the tree, and the line under the tree that says what it
@@ -114,11 +117,14 @@ function stateFrom(text: string): MachineState {
 
 /** What the layout store was asked to write, for a test to read back. */
 interface RecordingLayout extends LayoutStore {
+  /** Every container the panel asked to close or open, by `toggleCollapsed`. */
   readonly toggled: readonly NodeId[];
+  /** Every project the panel asked to open or close, by `toggleExpanded`. */
+  readonly opened: readonly NodeId[];
 }
 
 /**
- * A layout store that records what it is asked to write and writes nothing.
+ * A layout store that records what it is asked to write and saves nothing.
  *
  * The seam the panel already offers, rather than the real store over a fake
  * socket: what matters here is whether the panel asks for an arrangement
@@ -126,18 +132,41 @@ interface RecordingLayout extends LayoutStore {
  * hub round trip and a rule about not writing before the first answer has
  * arrived -- all of which have their own suite, and any of which could hide
  * an ask that this panel should never have made.
+ *
+ * It does hold what it was asked and tell its subscriber, as the real one
+ * does the moment a toggle lands: what the panel asks the hub next is drawn
+ * from this snapshot, so a fake that never moved could not show it.
  */
-function recordingLayout(collapsed: readonly NodeId[]): RecordingLayout {
+function recordingLayout(
+  collapsed: readonly NodeId[],
+  expanded: readonly NodeId[] = [],
+): RecordingLayout {
   const toggled: NodeId[] = [];
-  const snapshot: LayoutSnapshot = {
+  const opened: NodeId[] = [];
+  const listeners = new Set<() => void>();
+  let snapshot: LayoutSnapshot = {
     loaded: true,
     tree: DEFAULT_TREE,
     focus: [],
     collapsed,
+    expanded,
   };
+  function flip(list: readonly NodeId[], nodeId: NodeId): readonly NodeId[] {
+    return list.includes(nodeId) ? list.filter((id) => id !== nodeId) : [...list, nodeId];
+  }
+  function update(changes: Partial<LayoutSnapshot>): void {
+    snapshot = { ...snapshot, ...changes };
+    for (const listener of [...listeners]) listener();
+  }
   return {
     toggled,
-    subscribe: () => () => {},
+    opened,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     getSnapshot: () => snapshot,
     split: () => {},
     close: () => {},
@@ -149,6 +178,11 @@ function recordingLayout(collapsed: readonly NodeId[]): RecordingLayout {
     focusPane: () => {},
     toggleCollapsed: (nodeId: NodeId) => {
       toggled.push(nodeId);
+      update({ collapsed: flip(snapshot.collapsed, nodeId) });
+    },
+    toggleExpanded: (nodeId: NodeId) => {
+      opened.push(nodeId);
+      update({ expanded: flip(snapshot.expanded, nodeId) });
     },
   };
 }
@@ -164,6 +198,8 @@ describe('the catalogue panel', () => {
   let root: Root | null = null;
   let store: HubStore;
   let arrangement: RecordingLayout;
+  /** The catalogue store the last mount drew from. */
+  let catalogue: FakeCatalogueStore;
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -218,6 +254,7 @@ describe('the catalogue panel', () => {
     fleet: Fleet = NO_FLEET,
     drawn: Drawn = {},
   ): Promise<void> {
+    catalogue = fakeCatalogueStore(pages, drawn.shape);
     await act(async () => {
       root = createRoot(container);
       root.render(
@@ -227,7 +264,7 @@ describe('the catalogue panel', () => {
             state={fleet.state}
             layout={fleet.layout}
             scheme="dark"
-            catalogue={fakeCatalogueStore(pages, drawn.shape)}
+            catalogue={catalogue}
             layoutStore={arrangement}
             // Spread rather than passed: absent is what says the panel owns
             // the box, and `exactOptionalPropertyTypes` keeps the two apart.
@@ -340,12 +377,11 @@ describe('the catalogue panel', () => {
   });
 
   it('arranges nothing while a filter is on, and offers nothing that would', async () => {
-    arrangement = recordingLayout([nodeIdSchema.parse('hub-5')]);
     await mount(heldPages(hubFrames.catalogueTreePage));
 
-    // Unfiltered, the disclosures are real: the closed project hides its
-    // document, and a click on one is a change to the arrangement that goes to
-    // the hub and to every other client looking at this tree.
+    // Unfiltered, the disclosures are real: the project nobody opened hides
+    // its document, and a click on one is a change to the arrangement that
+    // goes to the hub and to every other client looking at this tree.
     expect(words()).not.toContain('plan.md');
     const chevron = disclosures()[0];
     if (chevron === undefined) throw new Error('the tree offers no disclosure');
@@ -475,5 +511,179 @@ describe('the catalogue panel', () => {
     await mount(heldPages(hubFrames.cataloguePage), NO_FLEET, { shape: AS_LIST });
 
     expect(filterBox().value).toBe('');
+  });
+
+  /**
+   * The Projects tab's top: projects only, each closed until opened.
+   *
+   * Mostly hand-shaped pages, unlike the suites above: the captured tree was
+   * asked for whole (`openProjects: null`) and in two pages, so neither page
+   * alone holds a project with what is under it. One test joins the two
+   * captured pages to show the root as the hub really sends it: HOME first,
+   * then the other projects, nothing else. The rest pin what the panel asks
+   * for and how it draws a project row, not what the hub sends -- the hub's
+   * own suite holds that.
+   */
+  describe('the projects at the top', () => {
+    const node = (text: string): NodeId => nodeIdSchema.parse(text);
+    const HOME = node('home');
+    const AGENTPLEX = node('hub-4');
+
+    function treeItem(fields: Partial<CatalogueItem> & { id: NodeId }): CatalogueItem {
+      return {
+        parentId: null,
+        kind: SESSION_KIND,
+        position: 0,
+        name: null,
+        named: true,
+        anchor: null,
+        depth: 0,
+        displayName: fields.id,
+        nameSource: 'node',
+        session: null,
+        directory: null,
+        server: null,
+        group: null,
+        matched: null,
+        ...fields,
+      };
+    }
+
+    const home = treeItem({ id: HOME, kind: PROJECT_KIND, displayName: 'Home' });
+    const agentplex = treeItem({ id: AGENTPLEX, kind: PROJECT_KIND, displayName: 'agentplex' });
+    const folder = treeItem({
+      id: node('hub-5'),
+      kind: FOLDER_KIND,
+      parentId: AGENTPLEX,
+      depth: 1,
+      displayName: 'this week',
+    });
+    const doc = treeItem({
+      id: node('hub-6'),
+      kind: DOC_KIND,
+      parentId: node('hub-5'),
+      depth: 2,
+      displayName: 'plan.md',
+    });
+    const session = treeItem({
+      id: node('hub-7'),
+      parentId: AGENTPLEX,
+      depth: 1,
+      displayName: 'fix-auth-refresh',
+      anchor: sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-1' }),
+    });
+
+    /**
+     * Every project with what is under one still held: the moment between
+     * closing it and the hub's answer that leaves its contents out. The
+     * panel draws the closed project as one row over it all the same.
+     */
+    const HELD: CataloguePages = pageAdopted(
+      NO_PAGES,
+      { items: [home, agentplex, folder, doc, session], nextCursor: null, total: 5, version: 1 },
+      'replace',
+    );
+
+    function chevron(label: string): HTMLElement {
+      const found = container.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+      if (found === null) throw new Error(`no disclosure labelled ${label}`);
+      return found;
+    }
+
+    /** The text of the row a disclosure sits on: the glyph, the name, any count. */
+    function rowText(label: string): string {
+      return chevron(label).parentElement?.textContent ?? '';
+    }
+
+    it('asks with nothing open and draws one row per project and nothing under them', async () => {
+      await mount(HELD);
+
+      expect(catalogue.opened.at(-1)).toEqual([]);
+      expect(words()).toContain('Home');
+      expect(words()).toContain('agentplex');
+      expect(words()).not.toContain('this week');
+      expect(words()).not.toContain('plan.md');
+      expect(words()).not.toContain('fix-auth-refresh');
+      expect(disclosures().map((button) => button.getAttribute('aria-label'))).toEqual([
+        'Expand Home',
+        'Expand agentplex',
+      ]);
+    });
+
+    it('draws the captured root as HOME first, then the other projects, and nothing else', async () => {
+      const first = parseTextFrame(parseHubFrame, hubFrames.catalogueTreePagePartial);
+      const rest = parseTextFrame(parseHubFrame, hubFrames.catalogueTreePage);
+      if (!first.ok || first.value.type !== 'catalogue-page') throw new Error('no first page');
+      if (!rest.ok || rest.value.type !== 'catalogue-page') throw new Error('no last page');
+      const whole = pageAdopted(
+        pageAdopted(NO_PAGES, first.value, 'replace'),
+        rest.value,
+        'append',
+      );
+
+      await mount(whole);
+
+      expect(catalogue.opened.at(-1)).toEqual([]);
+      expect(disclosures().map((button) => button.getAttribute('aria-label'))).toEqual([
+        'Expand HOME',
+        'Expand agentplex (main checkout)',
+      ]);
+      for (const nested of ['later', 'this week', 'spike-wasm', 'fix-auth-refresh', 'plan.md']) {
+        expect(words()).not.toContain(nested);
+      }
+    });
+
+    it('opens a project by the open list, and asks for it by id', async () => {
+      await mount(HELD);
+
+      await click(chevron('Expand agentplex'));
+
+      expect(arrangement.opened).toEqual([AGENTPLEX]);
+      expect(arrangement.toggled).toEqual([]);
+      expect(catalogue.opened.at(-1)).toEqual([AGENTPLEX]);
+      expect(words()).toContain('this week');
+      expect(words()).toContain('plan.md');
+      expect(words()).toContain('fix-auth-refresh');
+
+      // A folder inside it closes the way a folder always has.
+      await click(chevron('Collapse this week'));
+      expect(arrangement.toggled).toEqual([node('hub-5')]);
+      expect(arrangement.opened).toEqual([AGENTPLEX]);
+      expect(words()).not.toContain('plan.md');
+    });
+
+    it('asks for the tree whole while the filter box holds letters', async () => {
+      arrangement = recordingLayout([], [HOME]);
+      await mount(HELD);
+      expect(catalogue.opened.at(-1)).toEqual([HOME]);
+
+      await filterBy('plan');
+      // Whole, so a hit inside a project nobody opened is in the answer.
+      expect(catalogue.opened.at(-1)).toBeNull();
+      expect(words()).toContain('plan.md');
+
+      await filterBy('');
+      expect(catalogue.opened.at(-1)).toEqual([HOME]);
+    });
+
+    it('asks with nothing open until the layout has answered', async () => {
+      arrangement = recordingLayout([], [HOME]);
+      // One snapshot object, as a store gives: a fresh one per read is a
+      // store that changed on every read, and React re-renders forever.
+      const unanswered = { ...arrangement.getSnapshot(), loaded: false };
+      arrangement = { ...arrangement, getSnapshot: () => unanswered };
+      await mount(HELD);
+
+      expect(catalogue.opened).not.toContainEqual([HOME]);
+      expect(catalogue.opened.at(-1)).toEqual([]);
+    });
+
+    it('gives a closed project no count, and an open one its count', async () => {
+      await mount(HELD);
+      expect(rowText('Expand agentplex')).not.toMatch(/\d/);
+
+      await click(chevron('Expand agentplex'));
+      expect(rowText('Collapse agentplex')).toMatch(/agentplex1/);
+    });
   });
 });
