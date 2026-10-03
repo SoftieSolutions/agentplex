@@ -1,4 +1,5 @@
 import {
+  HOME_PROJECT_ID,
   nodeIdSchema,
   serverRegistrationIdSchema,
   startIdSchema,
@@ -272,6 +273,23 @@ describe('start_session', () => {
       'server',
       'storeId',
     ]);
+  });
+
+  it('names HOME by its id, because list_projects never lists it', () => {
+    const tool = startSessionTool({ sessions: createFakeSessions({ outcome: started }) });
+
+    // HOME has no projects row, so list_projects -- which reads that table --
+    // cannot hand an agent its id, and a start in HOME is one the hub takes.
+    // The id is interpolated from the constant, so it cannot drift from it.
+    const description = tool.input.projectId?.description ?? '';
+    expect(description).toContain(`"${HOME_PROJECT_ID}"`);
+    expect(description).toContain('list_projects does not list it');
+    // Where an omitted projectId runs is said once, in the words it already
+    // had, and a start in HOME is pointed at that sentence rather than given
+    // a second account of it.
+    expect(description.split('the home directory of the account the server runs as')).toHaveLength(
+      2,
+    );
   });
 
   it('says it changes something, and that it destroys nothing', () => {

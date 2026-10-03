@@ -1,4 +1,9 @@
-import { providerSchema, type NodeId, type ServerRegistrationId } from '@agentplex/protocol';
+import {
+  HOME_PROJECT_ID,
+  providerSchema,
+  type NodeId,
+  type ServerRegistrationId,
+} from '@agentplex/protocol';
 import { z } from 'zod';
 import type { StartOutcome, StartSessionRequest } from '../sessions/sessions.js';
 import { parsedNodeId } from './node-args.js';
@@ -90,7 +95,9 @@ export function startSessionTool({ sessions }: { readonly sessions: SessionStart
         .string()
         .optional()
         .describe(
-          'A project node id from list_projects, to run the agent in that project. The hub works out where that is and the machine refuses it unless its operator allows work there. Omit it to run the agent in the home directory of the account the server runs as.',
+          'A project node id from list_projects, to run the agent in that project. The hub works out where that is and the machine refuses it unless its operator allows work there. ' +
+            `"${HOME_PROJECT_ID}" is also a project id: it names HOME, where every session without another project is filed, and list_projects does not list it. A start in HOME runs exactly as a start that omits projectId. ` +
+            'Omit it to run the agent in the home directory of the account the server runs as.',
         ),
     },
     output: {
