@@ -10,6 +10,7 @@ import {
   buildRemove,
   buildRename,
   buildStop,
+  menuOffers,
   moveTargets,
   parseNodeName,
   stopOffer,
@@ -31,6 +32,10 @@ import {
  * row: the sentence is about something running on another machine, and the one
  * action that clears it is a stop aimed at that machine, which is a thing to
  * put a button next to rather than a footnote.
+ *
+ * Each of the three is drawn only where the hub would accept it, as
+ * `menuOffers` reads the tree: a project has no move, and HOME, which the hub
+ * lets nobody edit, has no trigger at all rather than a menu of refusals.
  *
  * Nothing here re-reads the tree afterwards. The hub broadcasts that the
  * catalogue changed and the store asks for the layout again, which is how
@@ -55,13 +60,16 @@ export function NodeMenu({
   layout,
   anchor,
   scheme,
-}: NodeMenuProps): JSX.Element {
+}: NodeMenuProps): JSX.Element | null {
   const snapshot = useHubSnapshot(store);
   const [pending, setPending] = useState<CommandOutcome | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(name);
   /** The store's own "no", which is not the hub's and reads differently. */
   const [rejected, setRejected] = useState<string | null>(null);
+
+  const offers = menuOffers(layout, nodeId);
+  const targets = offers.move ? moveTargets(layout, nodeId) : [];
 
   const followUp: TreeFollowUp | null =
     pending === null || !pending.accepted ? null : treeFollowUp(pending.id, snapshot.answers);
@@ -86,6 +94,10 @@ export function NodeMenu({
     send(buildRename(nodeId, parsed));
   }
 
+  // After every hook, so that a node that gains or loses its offers between
+  // renders keeps the same hook order.
+  if (!offers.rename && !offers.move && !offers.remove) return null;
+
   return (
     <>
       <Menu position="bottom-end" withinPortal shadow="md" width={220}>
@@ -100,25 +112,35 @@ export function NodeMenu({
           </Button>
         </Menu.Target>
         <Menu.Dropdown>
-          <Menu.Item
-            onClick={() => {
-              setDraft(name);
-              setRenaming(true);
-            }}
-          >
-            Rename
-          </Menu.Item>
-          <Menu.Label>Move to</Menu.Label>
-          {moveTargets(layout, nodeId).map((target) => (
+          {offers.rename ? (
             <Menu.Item
-              key={target.parentId ?? 'root'}
-              onClick={() => send(buildMove(nodeId, target.parentId))}
+              onClick={() => {
+                setDraft(name);
+                setRenaming(true);
+              }}
             >
-              {target.label}
+              Rename
             </Menu.Item>
-          ))}
-          <Menu.Divider />
-          <Menu.Item onClick={() => send(buildRemove(nodeId))}>Remove from tree</Menu.Item>
+          ) : null}
+          {offers.move ? (
+            <>
+              <Menu.Label>Move to</Menu.Label>
+              {targets.map((target) => (
+                <Menu.Item
+                  key={target.parentId}
+                  onClick={() => send(buildMove(nodeId, target.parentId))}
+                >
+                  {target.label}
+                </Menu.Item>
+              ))}
+            </>
+          ) : null}
+          {offers.remove ? (
+            <>
+              {offers.rename || offers.move ? <Menu.Divider /> : null}
+              <Menu.Item onClick={() => send(buildRemove(nodeId))}>Remove from tree</Menu.Item>
+            </>
+          ) : null}
         </Menu.Dropdown>
       </Menu>
 
