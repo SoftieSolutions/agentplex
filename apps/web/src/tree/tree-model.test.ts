@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  HOME_PROJECT_ID,
+  HOME_PROJECT_NAME,
   parseHubFrame,
   parseTextFrame,
   sessionRefSchema,
@@ -14,6 +16,7 @@ import {
   buildMove,
   buildRemove,
   buildRename,
+  menuOffers,
   moveTargets,
   nodeForSession,
   parseNodeName,
@@ -47,31 +50,109 @@ function stateFrom(text: string): MachineState {
 const ARRANGED = layoutFrom(hubFrames.layoutArranged);
 const node = (id: string): NodeId => id as NodeId;
 
+interface MoveTargetShape {
+  readonly parentId: string;
+  readonly label: string;
+}
+
+/** Every folder and project the captured tree holds but `excluded`, in its order. */
+function containersOutside(
+  layout: Layout,
+  excluded: readonly string[],
+): readonly MoveTargetShape[] {
+  return layout
+    .filter((candidate) => candidate.kind === 'folder' || candidate.kind === 'project')
+    .filter((candidate) => !excluded.includes(candidate.id))
+    .map((candidate) => ({ parentId: candidate.id, label: candidate.name ?? candidate.id }));
+}
+
+function kindOf(layout: Layout, id: string): string | undefined {
+  return layout.find((candidate) => candidate.id === id)?.kind;
+}
+
 describe('where a node may be put', () => {
-  it('offers the root and every container the hub sent', () => {
-    expect(moveTargets(ARRANGED, node('hub-2'))).toEqual([
-      { parentId: null, label: 'Top level' },
-      { parentId: 'home', label: 'HOME' },
-      { parentId: 'hub-7', label: 'this week' },
-      { parentId: 'hub-5', label: 'agentplex (main checkout)' },
-    ]);
+  // The captured tree, read rather than assumed: HOME first at the root, a
+  // folder inside it holding a session, a session straight under HOME, and a
+  // second project. Every count below is taken from it.
+  it('holds the captured shapes these cases are about', () => {
+    expect(kindOf(ARRANGED, HOME_PROJECT_ID)).toBe('project');
+    expect(kindOf(ARRANGED, 'hub-5')).toBe('project');
+    expect(kindOf(ARRANGED, 'hub-7')).toBe('folder');
+    expect(kindOf(ARRANGED, 'hub-2')).toBe('session');
+    expect(ARRANGED.find((candidate) => candidate.id === 'hub-2')?.parentId).toBe('hub-7');
   });
 
-  it('leaves out the node itself and everything under it', () => {
-    // `home` holds `hub-7`, the folder. Neither is somewhere HOME's subtree can
-    // go, and the hub would refuse both -- but a menu offering a click that can
-    // only be refused is a menu wasting one. HOME is asked about here only
-    // because it is the captured container with a container under it; which
-    // targets the menu keeps for each kind, HOME's none among them, is
-    // AGX-385's.
-    expect(moveTargets(ARRANGED, node('home'))).toEqual([
-      { parentId: null, label: 'Top level' },
-      { parentId: 'hub-5', label: 'agentplex (main checkout)' },
-    ]);
+  it('offers a session every project and folder, HOME by its name, and never the root', () => {
+    const targets = moveTargets(ARRANGED, node('hub-2'));
+
+    expect(targets).toEqual(containersOutside(ARRANGED, []));
+    expect(targets).toContainEqual({ parentId: HOME_PROJECT_ID, label: HOME_PROJECT_NAME });
+    expect(targets.some((target) => target.parentId === null)).toBe(false);
   });
 
-  it('offers the root alone before any tree has been answered', () => {
-    expect(moveTargets(null, node('hub-2'))).toEqual([{ parentId: null, label: 'Top level' }]);
+  it('offers a folder every container outside its own subtree, and never the root', () => {
+    const targets = moveTargets(ARRANGED, node('hub-7'));
+
+    // The folder holds a session and no container, so only the folder itself
+    // drops out of the list.
+    expect(targets).toEqual(containersOutside(ARRANGED, ['hub-7']));
+    expect(targets).toContainEqual({ parentId: HOME_PROJECT_ID, label: HOME_PROJECT_NAME });
+    expect(targets.some((target) => target.parentId === null)).toBe(false);
+  });
+
+  it('offers a project nowhere, HOME included', () => {
+    // A project sits at the top level and never inside another node, and the
+    // top level is not offered either: the hub refuses every other place.
+    expect(moveTargets(ARRANGED, node('hub-5'))).toEqual([]);
+    expect(moveTargets(ARRANGED, HOME_PROJECT_ID)).toEqual([]);
+  });
+
+  it('offers nothing before any tree has been answered', () => {
+    expect(moveTargets(null, node('hub-2'))).toEqual([]);
+    expect(moveTargets(null, node('hub-5'))).toEqual([]);
+    expect(moveTargets(null, HOME_PROJECT_ID)).toEqual([]);
+  });
+});
+
+describe('what the menu offers', () => {
+  it('offers HOME nothing, because the hub refuses every edit of it', () => {
+    expect(menuOffers(ARRANGED, HOME_PROJECT_ID)).toEqual({
+      rename: false,
+      move: false,
+      remove: false,
+    });
+    // By id, not by what the tree calls it: a layout not yet answered still
+    // knows which node HOME is.
+    expect(menuOffers(null, HOME_PROJECT_ID)).toEqual({
+      rename: false,
+      move: false,
+      remove: false,
+    });
+  });
+
+  it('offers another project a rename and a removal, and no move', () => {
+    expect(menuOffers(ARRANGED, node('hub-5'))).toEqual({
+      rename: true,
+      move: false,
+      remove: true,
+    });
+  });
+
+  it('offers a session and a folder all three', () => {
+    for (const id of ['hub-2', 'hub-7']) {
+      expect(menuOffers(ARRANGED, node(id))).toEqual({ rename: true, move: true, remove: true });
+    }
+  });
+
+  it('offers no move while there is nowhere known to move to', () => {
+    expect(menuOffers(null, node('hub-2'))).toEqual({ rename: true, move: false, remove: true });
+  });
+
+  it('identifies HOME by its id, never by its name', () => {
+    const renamedElsewhere = ARRANGED.map((candidate) =>
+      candidate.id === 'hub-5' ? { ...candidate, name: HOME_PROJECT_NAME } : candidate,
+    );
+    expect(menuOffers(renamedElsewhere, node('hub-5')).rename).toBe(true);
   });
 });
 

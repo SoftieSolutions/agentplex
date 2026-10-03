@@ -1,4 +1,5 @@
 import {
+  HOME_PROJECT_ID,
   sessionRefKey,
   type FrameId,
   type Layout,
@@ -28,35 +29,72 @@ import { FOLDER_KIND, PROJECT_KIND } from './node-kinds.js';
  * offering moves that can only be refused; one that guessed narrower would
  * hide a folder somebody made. Both are worse than asking for the two kinds
  * this build can name.
+ *
+ * The placement rules are another matter, because they are published: the
+ * protocol names HOME, and the hub states that the top level holds projects
+ * only, that a project sits under nothing, and that HOME is never renamed,
+ * moved or removed. Those are mirrored here so that the menu offers exactly
+ * what the hub accepts. The top level is never offered, for any kind: nothing
+ * but a project may go there, and a project is there already, so the only
+ * move left to one is a reorder along the top -- which a menu that sends "the
+ * end of the siblings" cannot honestly express.
  */
 
-/** One place a node may be put: the root, a folder, or a project. */
+/** One place a node may be put: a folder or a project, never the root. */
 export interface MoveTarget {
-  /** `null` is the root, which is not a node and has no id. */
-  readonly parentId: NodeId | null;
+  readonly parentId: NodeId;
   readonly label: string;
 }
 
 /**
  * Where this node may go, in the order the hub sent the tree.
  *
+ * A project goes nowhere: the hub keeps it at the top level, and the top level
+ * is not offered. Anything else goes into a folder or a project.
+ *
  * Its own subtree is left out, and that is not a duplicate of the hub's cycle
  * refusal: the hub refuses because the state has no reading, and this leaves
  * them out because offering a person a move that can only be refused is an
  * option that wastes a click. Both stay -- a client one frame behind the tree
  * can still ask for one, and then the refusal is the honest answer.
+ *
+ * Before any layout has been answered there is nothing to offer, which is the
+ * direction that does not over-claim: a menu without its targets has no move.
  */
 export function moveTargets(layout: Layout | null, nodeId: NodeId): readonly MoveTarget[] {
-  const targets: MoveTarget[] = [{ parentId: null, label: 'Top level' }];
-  if (layout === null) return targets;
+  if (layout === null) return [];
+  const moving = layout.find((candidate) => candidate.id === nodeId);
+  if (moving?.kind === PROJECT_KIND) return [];
 
   const inside = subtreeOf(layout, nodeId);
+  const targets: MoveTarget[] = [];
   for (const node of layout) {
     if (node.kind !== FOLDER_KIND && node.kind !== PROJECT_KIND) continue;
     if (inside.has(node.id)) continue;
     targets.push({ parentId: node.id, label: node.name ?? node.id });
   }
   return targets;
+}
+
+/** Which of the menu's three sections one node is offered. */
+export interface MenuOffers {
+  readonly rename: boolean;
+  readonly move: boolean;
+  readonly remove: boolean;
+}
+
+/**
+ * What the node menu may offer this node, as the hub would answer it.
+ *
+ * HOME is known by its id, never by its name: the id is the protocol's, and a
+ * name is something a person typed. A node this tree does not hold yet is
+ * still offered a rename and a removal, because neither depends on where it
+ * is, and the hub is the one that answers whether it exists; a move is offered
+ * only when there is somewhere to send it.
+ */
+export function menuOffers(layout: Layout | null, nodeId: NodeId): MenuOffers {
+  if (nodeId === HOME_PROJECT_ID) return { rename: false, move: false, remove: false };
+  return { rename: true, move: moveTargets(layout, nodeId).length > 0, remove: true };
 }
 
 /** A node and everything under it, which is what a move may not land inside. */
@@ -143,7 +181,7 @@ export function buildRename(nodeId: NodeId, name: string): HubCommand {
   return { type: 'node-rename', nodeId, name: name.trim() };
 }
 
-export function buildMove(nodeId: NodeId, parentId: NodeId | null): HubCommand {
+export function buildMove(nodeId: NodeId, parentId: NodeId): HubCommand {
   // Last among its new siblings, which is where a menu can honestly say a
   // thing goes: the menu offers a container and not an index, and inventing
   // one would be claiming the person chose it.
