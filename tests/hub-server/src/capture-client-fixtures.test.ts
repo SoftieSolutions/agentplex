@@ -3399,6 +3399,36 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     spawned?.emit('named now\r\n');
     await quiet(spawning);
 
+    // And the spawn exits on its own once it has been named: the agent quit
+    // at its first prompt. Nothing ends the watch -- the hub sends an ending
+    // only for a terminal it finds gone on a redial -- so what a pane rebound
+    // to that session learns is this state, with nothing holding the row.
+    // A machine reports a store after anything it does there, so another
+    // start is the scan, as it was for the naming above.
+    spawned?.close({ exitCode: 0, signal: null });
+    spawning.send({
+      type: 'session-start',
+      id: 6,
+      storeId: LIVE_STORE.storeId,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    await until(
+      () =>
+        terminalHub.hub.state
+          .snapshot()
+          .stores.some((view) =>
+            view.sessions.some(
+              (row) => row.descriptor.sessionId === SPAWNED_SESSION && row.holder === null,
+            ),
+          ),
+      'the exited spawn to be reported with nothing holding it',
+    );
+    const machineStateSpawnExited = await captureState(terminalHub.hub);
+
     // And the machine goes away without saying so. The rows it reported stay,
     // labelled, so this is a refusal naming a machine rather than a session
     // that cannot be found -- which is the difference between a pane that says
@@ -3551,7 +3581,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // state after that press is captured the same way.
     const resumableStore = storeIdSchema.parse('store-agentplex');
     const resumableShared = storeIdSchema.parse('store-shared');
-    const resumableReport = (held: boolean): StoreReport => ({
+    // `cliRunning` is whether somebody's own claude, outside agentplex, still
+    // runs cli-run: the one capture that changes it is that claude quitting.
+    const resumableReport = (held: boolean, cliRunning = true): StoreReport => ({
       storeId: resumableStore,
       sessions: [
         descriptor(
@@ -3567,7 +3599,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
           'store-agentplex',
           'session-cli-run',
           'claude',
-          'working',
+          cliRunning ? 'working' : 'idle',
           START - 2 * MINUTE,
           '/Users/robert/code/agentplex',
           'cli-run',
@@ -3700,6 +3732,32 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     const sessionStartedShared = lastFrame(resumer, 'sessionStarted');
     const machineStateSharedResumed = await captureState(resumableHub.hub);
+
+    // Whoever ran cli-run in their own terminal quits it, and the resumed
+    // spike-wasm is stopped from a page. The stop is what makes the machine
+    // report the store again; the quit is what its scan then finds -- a
+    // session run outside agentplex that nothing runs any more.
+    resumableController.setReport(resumableReport(false, false));
+    resumer.send({
+      type: 'session-stop',
+      id: 4,
+      storeId: 'store-agentplex',
+      sessionId: 'session-spike-wasm',
+    });
+    await until(
+      () =>
+        resumableHub.hub.state
+          .snapshot()
+          .stores.some((view) =>
+            view.sessions.some(
+              (row) =>
+                row.descriptor.sessionId === 'session-cli-run' &&
+                row.descriptor.process === 'none',
+            ),
+          ) && !sessionHeld('session-spike-wasm')(),
+      () => `the stop to be reported with cli-run quit: ${resumer.received.join('\n')}`,
+    );
+    const machineStateOutsideQuit = await captureState(resumableHub.hub);
     await resumableHub.cleanup();
 
     const captured = new Map<string, string>();
@@ -3803,6 +3861,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('machineStateResumed', machineStateResumed);
     captured.set('sessionStartedShared', sessionStartedShared);
     captured.set('machineStateSharedResumed', machineStateSharedResumed);
+    captured.set('machineStateSpawnExited', machineStateSpawnExited);
+    captured.set('machineStateOutsideQuit', machineStateOutsideQuit);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)
