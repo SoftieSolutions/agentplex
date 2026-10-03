@@ -165,6 +165,29 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
     sessionId: sessionIdSchema,
   }),
   /**
+   * Take over a session a provider process outside agentplex is running on
+   * this machine: end that process, then resume the session here.
+   *
+   * It names a session and never a process. The server finds the process in
+   * the provider's own registry, verifies it is the one the registry meant at
+   * the moment it signals, and ends it only while the session sits at its
+   * prompt or at a question -- never mid-turn. A pid on this frame would be the
+   * hub naming a process on a machine it cannot see, stale the moment it was
+   * read; there is no field for one and the parser drops any that arrives.
+   *
+   * `provider` for the reason `session-transcript` carries it: the hub reads it
+   * off the row it holds, and it selects the adapter that knows where that
+   * provider registers its processes. It answers as a start does,
+   * `session-started` with the same session id, or a refusal in words.
+   */
+  z.object({
+    type: z.literal('session-retake'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    provider: providerSchema,
+  }),
+  /**
    * Read one session's transcript out of the store it lives in, as activities.
    *
    * Addressed by `{ storeId, sessionId }` like a stop, and for the same reason:

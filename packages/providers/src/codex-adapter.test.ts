@@ -610,6 +610,15 @@ describe('createCodexAdapter', () => {
   });
 });
 
+describe('createCodexAdapter.liveProcess', () => {
+  it('names no process, even for a session it lists: codex keeps no registry to verify one from', async () => {
+    const adapter = adapterOver({ files: { [PENDING_PATH]: PENDING_TOOL_CALL } });
+    const session = sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: PENDING_ID });
+
+    expect(await adapter.liveProcess(STORE, session)).toBeNull();
+  });
+});
+
 describe('createCodexAdapter.transcript', () => {
   const session = sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: PENDING_ID });
 

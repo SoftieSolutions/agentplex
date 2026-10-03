@@ -26,6 +26,7 @@ import { createLogger, type DialResult, type SocketDialer } from '@agentplex/nod
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
+  createFakeProcessProbe,
   createFakeProviderAdapter,
   createFakeProviderFiles,
   createFakeStoreFiles,
@@ -73,6 +74,7 @@ import { createGraphs } from '../../../apps/hub/src/graphs/graphs.js';
 import { createAgentExecutor } from '../../../apps/hub/src/graph-runs/agent-executor.js';
 import { createHumanExecutor } from '../../../apps/hub/src/graph-runs/human-executor.js';
 import { createGraphRuns } from '../../../apps/hub/src/graph-runs/graph-runs.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * A run, from a client's frame to a process on another machine and back to
@@ -186,6 +188,9 @@ function serveMachine(machine: Machine): DialResult {
     terminals: machine.terminals,
     machineLoad: createFakeMachineLoadReader(),
     sessions: createSessionController({
+      signaller: createFakeProcessSignaller(),
+      processes: createFakeProcessProbe(),
+      timers: createFakeTimers(),
       stores,
       providers: createProviderRegistry([adapter]),
       terminals: machine.terminals,

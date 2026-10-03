@@ -19,6 +19,7 @@ import { createPtySupervisor } from '@agentplex/pty';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createProviderRegistry } from '@agentplex/providers';
 import {
+  createFakeProcessProbe,
   createFakeProviderAdapter,
   createFakeProviderFiles,
   createFakeStoreFiles,
@@ -54,6 +55,7 @@ import {
 } from '../../../apps/hub/src/fleet-state/fleet-state.js';
 import { toMachineState } from '../../../apps/hub/src/fleet-state/machine-state.js';
 import { createSessions, type Sessions } from '../../../apps/hub/src/sessions/sessions.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * A server going down on purpose, and what the hub does about it.
@@ -181,6 +183,9 @@ function serveMachine(machine: Machine): DialResult {
     terminals: machine.terminals,
     machineLoad: createFakeMachineLoadReader(),
     sessions: createSessionController({
+      signaller: createFakeProcessSignaller(),
+      processes: createFakeProcessProbe(),
+      timers: createFakeTimers(),
       stores,
       providers: createProviderRegistry([createFakeProviderAdapter({ provider: 'claude', files })]),
       terminals: machine.terminals,

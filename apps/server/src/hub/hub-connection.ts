@@ -499,6 +499,23 @@ export function serveHubConnection(
         return;
       }
 
+      case 'session-retake': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        // Not awaited, and for longer than a start: a retake may wait out a
+        // process's grace before it resumes anything, and every later frame on
+        // this socket must not wait behind it. The frame names a session and a
+        // provider; the pid it ends is the controller's to find and verify.
+        void runRetake(frame.id, {
+          storeId: frame.storeId,
+          sessionId: frame.sessionId,
+          provider: frame.provider,
+        });
+        return;
+      }
+
       case 'session-stop': {
         if (state !== 'established') {
           handshakeFirst();
@@ -914,6 +931,54 @@ export function serveHubConnection(
     // hub that drops before the provider writes a session id redials and is
     // told again which terminal its start produced.
     if (outcome.ok) streams.noteStart(startId, outcome.terminalId);
+
+    await reportStore(request.storeId);
+    if (state !== 'established') return;
+
+    if (!outcome.ok) {
+      send({
+        type: 'session-refused',
+        replyTo,
+        code: outcome.code,
+        message: outcome.problem,
+        hold: outcome.hold,
+      });
+      return;
+    }
+
+    send({
+      type: 'session-started',
+      replyTo,
+      storeId: outcome.storeId,
+      sessionId: outcome.sessionId,
+    });
+  }
+
+  /**
+   * Retakes a session and answers the hub that asked, as a start answers:
+   * the store report first, so the hub has read the session held here before
+   * it reads `session-started`, or a refusal in the controller's words.
+   *
+   * No start tag. A retake resumes a session that already has its id, so
+   * there is no window in which the hub needs a terminal named before the
+   * provider names the session.
+   */
+  async function runRetake(
+    replyTo: FrameId,
+    request: {
+      readonly storeId: StoreId;
+      readonly sessionId: SessionId;
+      readonly provider: Provider;
+    },
+  ): Promise<void> {
+    let outcome;
+    try {
+      outcome = await sessions.retake(request);
+    } catch (error) {
+      logger.error('could not retake a session', { problem: String(error) });
+      answerFailure(replyTo, 'this server could not retake that session');
+      return;
+    }
 
     await reportStore(request.storeId);
     if (state !== 'established') return;

@@ -27,10 +27,11 @@ import { serveServerEnd } from './server-end.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
+  createFakeProcessProbe,
   createFakeProviderAdapter,
-  readyProvider,
   createFakeProviderFiles,
   createFakeStoreFiles,
+  readyProvider,
 } from '@agentplex/providers/testing';
 import { createProviderRegistry, type ProviderFiles } from '@agentplex/providers';
 import { createSessionController } from '../../../apps/server/src/sessions/session-control.js';
@@ -68,6 +69,7 @@ import { createFakeCatalogue } from '../../../apps/hub/src/catalogue/fake-catalo
 import { createFakeDocs } from '../../../apps/hub/src/docs/fake-docs.js';
 import { createFakeGraphs } from '../../../apps/hub/src/graphs/fake-graphs.js';
 import { createFakeGraphRuns } from '../../../apps/hub/src/graph-runs/fake-graph-runs.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * A terminal, from a pty on one machine to the clients watching it, and back.
@@ -212,6 +214,9 @@ function serveMachine(machine: Machine): DialResult {
     terminals: machine.terminals,
     machineLoad: createFakeMachineLoadReader(),
     sessions: createSessionController({
+      signaller: createFakeProcessSignaller(),
+      processes: createFakeProcessProbe(),
+      timers: createFakeTimers(),
       stores,
       providers: createProviderRegistry([adapter]),
       terminals: machine.terminals,
