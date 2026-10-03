@@ -13,15 +13,15 @@ import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { SidebarSessions } from './sidebar-sessions.js';
 
 /**
- * The sidebar's rows, on a captured fleet that carries both cases: the
- * universe store's sessions sit in a project the hub's tree named, and the
- * agentplex store's sit in none.
+ * The sidebar's rows, on a captured fleet that carries two projects: the
+ * universe store's sessions sit in a project a person made and moved them
+ * into, and the agentplex store's sit in HOME, where discovery filed them.
  *
  * What is asserted is the second line and only the second line. The order, the
  * narrowing and the names are `session-list-model`'s, pinned by its own suite;
  * what belongs here is that this row reads the place off the item instead of
- * assembling one, and that a session in no project still gets a line a person
- * can read rather than a dot with a blank in front of it.
+ * assembling one, and that a session never starts its line with a dot and a
+ * blank in front of it.
  *
  * And, since AGX-255, that these rows answer the filter row now drawn above
  * them. That row's badge counts what the narrowings hid, so an index under it
@@ -139,9 +139,9 @@ describe('a sidebar session row', () => {
     expect(placeLine('docs-sweep')).toBe('universe · gpu-box-01');
   });
 
-  it('keeps the store on a session the tree places in no project', () => {
+  it('names HOME on a session discovery filed in no other project', () => {
     draw();
-    expect(placeLine('fix-auth-refresh')).toBe('store-agentplex · mbp-robert');
+    expect(placeLine('fix-auth-refresh')).toBe('HOME · mbp-robert');
   });
 
   it('draws no separator with nothing in front of it', () => {

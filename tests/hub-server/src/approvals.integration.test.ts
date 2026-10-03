@@ -596,7 +596,7 @@ describe('a standing policy, over a hub and a server', () => {
       throw new Error(`the project was refused: ${JSON.stringify(created)}`);
     }
 
-    // The session's node is discovered at the root and moved by the user, so
+    // The session's node is discovered in HOME and moved by the user, so
     // this is the move a user makes rather than a row written behind the tree.
     const tree = await client.ask({ type: 'layout-request' });
     if (tree.type !== 'layout') throw new Error('the tree was refused');
@@ -758,9 +758,10 @@ describe('a standing policy, over a hub and a server', () => {
     expect(curling?.writes).toEqual([]);
   });
 
-  it('asks about a session filed under no project at all', async () => {
-    // The session's node sits at the root, so nobody has said anything about
-    // the work it is part of. That is the answer rather than a gap.
+  it('asks about a session left in HOME, outside the project the rule is in', async () => {
+    // The session's node sits in HOME, where discovery put it, so nobody has
+    // said anything about the work it is part of. That is the answer rather
+    // than a gap.
     const { client } = await start();
     const created = await client.ask({
       type: 'project-create',

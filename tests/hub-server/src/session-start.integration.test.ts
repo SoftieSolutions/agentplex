@@ -6,6 +6,7 @@ import {
   parseServerToHubFrame,
   parseTextFrame,
   CLIENT_PROTOCOL_VERSION,
+  HOME_PROJECT_ID,
   serverIdSchema,
   sessionIdSchema,
   startIdSchema,
@@ -127,8 +128,8 @@ const BROWSE_ROOTS = ['/volumes/work'] as const;
  * A checkout under the root, which is what a project is.
  *
  * Under `/volumes/work` and not equal to it, so that the two sessions already
- * in the store -- which ran at the volume's own path -- stay at the root when
- * this project is made. A project that swallowed them would make the placement
+ * in the store -- which ran at the volume's own path -- stay in HOME when this
+ * project is made. A project that swallowed them would make the placement
  * assertion below true for the wrong reason.
  */
 const PROJECT_DIRECTORY = '/volumes/work/agentplex';
@@ -1019,9 +1020,9 @@ describe('a client-initiated session start', () => {
     await untilFiledUnder('session-fresh', made.nodeId);
 
     // The sessions that were already in the store ran at the volume's own path
-    // and stay where they were put. Discovery writes placement once, at
-    // creation, and these were created before anybody made a project.
-    expect((await nodeFor('session-quiet'))?.parentId).toBeNull();
+    // and stay in HOME, where they were put. Discovery writes placement once,
+    // at creation, and these were created before anybody made a project.
+    expect((await nodeFor('session-quiet'))?.parentId).toBe(HOME_PROJECT_ID);
   });
 
   it('refuses a start in a project no machine will open, naming the directory', async () => {
@@ -1088,6 +1089,80 @@ describe('a client-initiated session start', () => {
     expect(launches(machine('workshop'))).toEqual([]);
     // Nothing was even asked: a resume's directory is its transcript's, so
     // there was no version of this the machine could have been sent.
+    expect(instructionsTo('workshop').filter((frame) => frame.type === 'session-start')).toEqual(
+      [],
+    );
+  });
+
+  /**
+   * HOME is a project with no directory: it is where a session goes that has
+   * no other project, so a start in it is a start in no project. The machine
+   * is sent exactly what a start naming no project sends it, and runs it where
+   * that one runs, which is the home directory of the account it runs under.
+   */
+  it('starts a session in HOME where a start in no project runs', async () => {
+    const client = await attach();
+
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('workshop'),
+      project: HOME_PROJECT_ID,
+    });
+    await client.say({
+      type: 'session-start',
+      id: 3,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('attic'),
+      project: null,
+    });
+
+    expect(client.reply(2).type).toBe('session-started');
+    expect(client.reply(3).type).toBe('session-started');
+
+    const inHome = instructionsTo('workshop').find((frame) => frame.type === 'session-start');
+    const inNone = instructionsTo('attic').find((frame) => frame.type === 'session-start');
+    expect(inHome).toMatchObject({ directory: null });
+    expect(inNone).toMatchObject({ directory: null });
+
+    const [homeSpawn] = machine('workshop').ptys.opened;
+    const [noneSpawn] = machine('attic').ptys.opened;
+    expect(homeSpawn).toBeDefined();
+    expect(homeSpawn?.cwd).toBe(noneSpawn?.cwd);
+  });
+
+  /**
+   * And a resume in HOME is a resume in a project, refused in the same words.
+   * Treating HOME as no project is about where a new session runs; a resume
+   * runs where its transcript says, so a start that named a project as well
+   * was still asking for two directories.
+   */
+  it('refuses a resume in HOME as it refuses one in any project', async () => {
+    const client = await attach();
+
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: sessionIdSchema.parse('session-quiet'),
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('workshop'),
+      project: HOME_PROJECT_ID,
+    });
+
+    const refused = client.reply(2);
+    expect(refused).toMatchObject({ type: 'refusal', code: 'refused', holder: null });
+    if (refused.type !== 'refusal') return;
+    expect(refused.message).toContain('a resume cannot be started in a project');
+    expect(launches(machine('workshop'))).toEqual([]);
     expect(instructionsTo('workshop').filter((frame) => frame.type === 'session-start')).toEqual(
       [],
     );

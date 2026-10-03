@@ -1230,8 +1230,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // rebuild: the hub reads it off its own tree. It is set up on this hub
     // rather than a second one because the screens the mockups draw name a
     // project wherever a session appears, and a fleet fixture whose every row
-    // was unfiled would leave the session list tested against a field that is
-    // null in every state the web has.
+    // was left in HOME would leave the session list tested against one project
+    // in every state the web has.
     //
     // Filed by moving the nodes rather than by matching a directory:
     // discovery places a session exactly once, when it first sees it, so a
@@ -1285,13 +1285,16 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       'the sessions to be filed under it',
     );
     // The hub's reading of its own tree is behind two promises nothing awaits,
-    // so what is waited for is the row rather than the reply to the move.
+    // so what is waited for is the row rather than the reply to the move. The
+    // project by id, because every row already names one: discovery filed
+    // these in HOME before they were moved.
+    const universeId = universe.value.nodeId;
     await until(
       () =>
         populated.hub.state
           .snapshot()
           .stores.filter((view) => view.storeId === 'store-universe')
-          .every((view) => view.sessions.every((row) => row.project !== null)),
+          .every((view) => view.sessions.every((row) => row.project?.nodeId === universeId)),
       () => `the project to reach the rows: ${JSON.stringify(populated.hub.state.snapshot())}`,
     );
 

@@ -2037,7 +2037,9 @@ describe('projects and the tree', () => {
 
     const layout = h.store.getSnapshot().layout ?? [];
     // HOME, which migration 0020 seeds at the root's position 0, and then the
-    // project the capture made.
+    // project the capture made, right after it: the sessions the fleet
+    // reported are in HOME, so the root holds the two projects and nothing
+    // else.
     expect(layout.filter((node) => node.kind === 'project')).toEqual([
       {
         id: 'home',
@@ -2052,7 +2054,7 @@ describe('projects and the tree', () => {
         id: 'hub-5',
         parentId: null,
         kind: 'project',
-        position: 3,
+        position: 1,
         name: 'agentplex (main checkout)',
         named: true,
         anchor: null,
@@ -2215,9 +2217,10 @@ describe('the catalogue query', () => {
     // a parent and its first child -- which is what lets the client indent off
     // the depth on the row instead of walking a parent chain it may not hold.
     // The captured folder sits in HOME, so its session is two below the top.
-    const child = rest.items.findIndex((item) => item.kind === 'session');
-    const folder = child - 1;
-    expect(child).toBeGreaterThan(0);
+    // Found by the folder, because HOME holds a session of its own as well.
+    const folder = rest.items.findIndex((item) => item.kind === 'folder');
+    const child = folder + 1;
+    expect(folder).toBeGreaterThanOrEqual(0);
     expect(rest.items[folder]?.kind).toBe('folder');
     expect(rest.items[child]?.parentId).toBe(rest.items[folder]?.id);
     expect(rest.items[folder]?.depth).toBe(1);

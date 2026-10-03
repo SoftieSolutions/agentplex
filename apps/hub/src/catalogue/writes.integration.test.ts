@@ -160,15 +160,19 @@ describe('the node tree', () => {
       { ref: ref('s2'), title: 'two', cwd: null },
       { ref: ref('s3'), title: 'three', cwd: null },
     ]);
-    const folder = await createFolder(db(), ids, clock, { parentId: null, name: 'folder' });
+    const folder = await createFolder(db(), ids, clock, {
+      parentId: HOME_PROJECT_ID,
+      name: 'folder',
+    });
     const middle = await findNodeForSession(db(), ref('s2'));
     if (middle === null) throw new Error('the node for s2 is missing');
 
     await moveNode(db(), middle.id, { parentId: folder.id });
 
-    // HOME at 0, the two sessions left behind, and the folder: no gap where s2 was.
-    const roots = (await listNodes(db())).filter((node) => node.parentId === null);
-    expect(roots.map((node) => node.position).sort()).toEqual([0, 1, 2, 3]);
+    // Discovery filed all three in HOME, and the folder followed them there.
+    // The two sessions left behind and the folder: no gap where s2 was.
+    const home = (await listNodes(db())).filter((node) => node.parentId === HOME_PROJECT_ID);
+    expect(home.map((node) => node.position).sort()).toEqual([0, 1, 2]);
   });
 
   it('answers null when asked to move a node that is not there', async () => {

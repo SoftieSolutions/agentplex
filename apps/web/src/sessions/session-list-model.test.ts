@@ -122,10 +122,10 @@ describe('flattening', () => {
     expect(docs.projectId).toBe('hub-8');
   });
 
-  it('carries no project for a session the tree places in none', () => {
+  it('carries HOME for a session discovery filed in no other project', () => {
     const fixAuth = item(populated, 'fix-auth-refresh');
-    expect(fixAuth.project).toBeNull();
-    expect(fixAuth.projectId).toBeNull();
+    expect(fixAuth.project).toBe('HOME');
+    expect(fixAuth.projectId).toBe('home');
   });
 
   /**
@@ -198,8 +198,17 @@ describe('the place line', () => {
     expect(placeLabel(item(populated, 'docs-sweep'))).toBe('universe · gpu-box-01');
   });
 
+  it('names HOME like any other project', () => {
+    expect(placeLabel(item(populated, 'fix-auth-refresh'))).toBe('HOME · mbp-robert');
+  });
+
   it('keeps the store it named before when the session is in no project', () => {
-    expect(placeLabel(item(populated, 'fix-auth-refresh'))).toBe('store-agentplex · mbp-robert');
+    // Discovery files every session it places, so a captured row always names
+    // a project; a row the tree holds no node for -- one somebody removed --
+    // still arrives with none. One field varied off a captured item, into that
+    // shape.
+    const removed = { ...item(populated, 'fix-auth-refresh'), project: null, projectId: null };
+    expect(placeLabel(removed)).toBe('store-agentplex · mbp-robert');
   });
 });
 
@@ -465,7 +474,9 @@ describe("search, the table's one filter", () => {
   });
 
   it('matches nothing on a project name when the session is in no project', () => {
-    expect(matchesSearch(item(populated, 'fix-auth-refresh'), 'cathedral')).toBe(false);
+    const removed = { ...item(populated, 'fix-auth-refresh'), project: null, projectId: null };
+    expect(matchesSearch(removed, 'cathedral')).toBe(false);
+    expect(matchesSearch(removed, 'HOME')).toBe(false);
   });
 
   it('treats whitespace as no filter', () => {
@@ -654,18 +665,14 @@ describe('the popover the filter row opens', () => {
   });
 
   it('offers the projects the tree places sessions in, in a stable order', () => {
-    // The captured fleet puts one store's sessions in `universe` and the
-    // other's in no project, so the two-option rule needs a second name: one
-    // field varied off captured items, into the shape the hub sends for a
-    // session the tree does place.
-    const placed = listSessions(populated).map((row) =>
-      row.project === null ? { ...row, project: 'agentplex' } : row,
-    );
-    expect(projectOptions(placed)).toEqual(['agentplex', 'universe']);
+    // The captured fleet puts one store's sessions in `universe` and leaves
+    // the other's in HOME, where discovery filed them.
+    expect(projectOptions(listSessions(populated))).toEqual(['HOME', 'universe']);
   });
 
   it('offers no project section when the tree places sessions in one project or none', () => {
-    expect(projectOptions(listSessions(populated))).toEqual([]);
+    expect(projectOptions(listSessions(single))).toEqual([]);
+    expect(projectOptions(listSessions(empty))).toEqual([]);
   });
 
   it('counts the status pills under the other narrowings, the clock included', () => {

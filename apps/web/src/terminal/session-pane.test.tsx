@@ -1386,11 +1386,11 @@ describe('the header above a session', () => {
     expect(crumbText()).not.toContain('null');
   });
 
-  it('falls back to the store when the tree places the session nowhere', async () => {
+  it('names HOME when discovery filed the session in no other project', async () => {
     await mountHeaderOn('store-agentplex', 'session-fix-auth');
 
     expect(crumbs()).toEqual([
-      { text: 'store-agentplex', role: 'muted' },
+      { text: 'HOME', role: 'muted' },
       { text: 'fix-auth-refresh', role: 'emphatic' },
     ]);
   });
