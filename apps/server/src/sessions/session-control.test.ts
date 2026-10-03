@@ -1196,6 +1196,17 @@ describe('a retake of a session a claude outside agentplex is running', () => {
     return sessions.retake({ storeId: WORK, sessionId: session(SESSION), provider });
   }
 
+  /** A start of the same session, which resumes it here. */
+  function resume(sessions: SessionController) {
+    return sessions.start({
+      storeId: WORK,
+      sessionId: session(SESSION),
+      provider: 'claude',
+      prompt: null,
+      directory: null,
+    });
+  }
+
   /** Lets every promise that can move, move, as the event loop would between two timers. */
   async function settle(): Promise<void> {
     for (let turn = 0; turn < 10; turn += 1) {
@@ -1629,16 +1640,6 @@ describe('a retake of a session a claude outside agentplex is running', () => {
     // The signalled claude has dropped its entry and its pid may already be
     // dead while it flushes, so a scan in that window sees nothing running the
     // session. Only this server knows a takeover is in flight.
-    function resume(sessions: SessionController) {
-      return sessions.start({
-        storeId: WORK,
-        sessionId: session(SESSION),
-        provider: 'claude',
-        prompt: null,
-        directory: null,
-      });
-    }
-
     it('refuses a start of that session, and launches nothing', async () => {
       const { sessions, ptys, timers } = await outsideClaude({ status: 'idle' });
 
@@ -1700,6 +1701,104 @@ describe('a retake of a session a claude outside agentplex is running', () => {
 
       expect(await resume(sessions)).toMatchObject({ ok: true, sessionId: SESSION });
       expect(ptys.opened).toHaveLength(1);
+    });
+  });
+
+  describe('after a retake gave up on a process it signalled', () => {
+    // Claude Code drops its registry entry while it handles SIGHUP, so once a
+    // retake gives up the scan finds nothing running the session: no entry,
+    // no pid. Only this server knows which process it signalled, and that it
+    // may still be writing the transcript.
+    const STILL_SIGNALLED = 'the process agentplex signalled for that session has not exited yet';
+
+    /** A claude that drops its entry on the first signal and outlives every one. */
+    async function unkillable(): Promise<Machine> {
+      const outside = await outsideClaude(
+        { status: 'idle' },
+        {
+          onSignal: (_pid, _signal, { transcripts }) => {
+            delete transcripts[ENTRY];
+          },
+        },
+      );
+      const pending = retake(outside.sessions);
+      await settle();
+      await poll(outside.timers, RETAKE_BOUND_MS / RETAKE_POLL_MS);
+      expect(refusal(await pending)).toContain('did not end');
+      return outside;
+    }
+
+    it('refuses a start while that pid still holds the process, and launches nothing', async () => {
+      const { sessions, ptys } = await unkillable();
+
+      const started = await resume(sessions);
+
+      expect(started).toMatchObject({ ok: false, code: 'refused', hold: null });
+      expect(refusal(started)).toContain(STILL_SIGNALLED);
+      expect(ptys.opened).toEqual([]);
+    });
+
+    it('refuses a second retake while that pid still holds the process, and signals nothing more', async () => {
+      const { sessions, signaller, ptys } = await unkillable();
+
+      expect(refusal(await retake(sessions))).toContain(STILL_SIGNALLED);
+      expect(signaller.sent.map((sent) => sent.signal)).toEqual(['SIGHUP', 'SIGKILL']);
+      expect(ptys.opened).toEqual([]);
+    });
+
+    it('refuses a start while the pid is alive and can no longer be dated', async () => {
+      const { sessions, probe, ptys } = await unkillable();
+      probe.exit(OUTSIDE_PID);
+      probe.start(OUTSIDE_PID, null);
+
+      expect(refusal(await resume(sessions))).toContain(STILL_SIGNALLED);
+      expect(ptys.opened).toEqual([]);
+    });
+
+    it('lets a start through once that pid is dead', async () => {
+      const { sessions, probe, ptys } = await unkillable();
+      expect((await resume(sessions)).ok).toBe(false);
+
+      probe.exit(OUTSIDE_PID);
+
+      expect(await resume(sessions)).toMatchObject({ ok: true, sessionId: SESSION });
+      expect(ptys.opened).toHaveLength(1);
+    });
+
+    it('lets a start through once that pid holds a process started after the signal', async () => {
+      const { sessions, probe, ptys } = await unkillable();
+      probe.exit(OUTSIDE_PID);
+      probe.start(OUTSIDE_PID, START + 1_000);
+
+      expect(await resume(sessions)).toMatchObject({ ok: true, sessionId: SESSION });
+      expect(ptys.opened).toHaveLength(1);
+    });
+
+    it('keeps nothing after a retake that saw the process end', async () => {
+      // The process ends, and the resume after it is refused because the
+      // session's files went with it. The pid is then issued to a process this
+      // machine cannot date, which a kept record would refuse on.
+      const transcript = await readProviderFixture('claude-completed-turn.jsonl');
+      const outside = await outsideClaude(
+        { status: 'idle' },
+        {
+          onSignal: (pid, _signal, { probe, transcripts }) => {
+            delete transcripts[ENTRY];
+            delete transcripts[TRANSCRIPT];
+            probe.exit(pid);
+          },
+        },
+      );
+      const pending = retake(outside.sessions);
+      await settle();
+      await poll(outside.timers);
+      expect(refusal(await pending)).toContain('was stopped, but it could not be started here');
+
+      outside.transcripts[TRANSCRIPT] = transcript;
+      outside.probe.start(OUTSIDE_PID, null);
+
+      expect(await resume(outside.sessions)).toMatchObject({ ok: true, sessionId: SESSION });
+      expect(outside.ptys.opened).toHaveLength(1);
     });
   });
 
