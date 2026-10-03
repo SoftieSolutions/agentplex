@@ -521,7 +521,8 @@ export const sessionRowSchema = z.object({
    */
   mutedAt: momentSchema,
   /**
-   * The project this session is in, or `null` when it is in none.
+   * The project this session is in, or `null` when the tree does not place
+   * it.
    *
    * Here and not on the descriptor, which is the decision this field turns on.
    * A descriptor is exactly what one server sent, and a server watches a store
@@ -532,9 +533,14 @@ export const sessionRowSchema = z.object({
    * reads, so it belongs beside the other two things on this row that no server
    * reported.
    *
-   * Nullable and never absent, for the reason the attention fields are: `null`
-   * says the tree places this session in no project, which is a fact, and the
-   * screens that name a project fall back to the storeId they named before.
+   * Nullable and never absent, for the reason the attention fields are. A
+   * session the tree places always has a project: the root holds projects
+   * only, and discovery files a session that belongs to no other project in
+   * HOME (`HOME_PROJECT_ID`), so HOME is a value here like any project. `null`
+   * is therefore never "in no project". It says the tree does not hold this
+   * session -- not filed yet, because no pass over its store has placed it, or
+   * removed from the tree -- and the screens that name a project fall back to
+   * the storeId they named before.
    */
   project: sessionProjectSchema.nullable(),
   /**

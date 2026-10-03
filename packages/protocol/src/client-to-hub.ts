@@ -132,7 +132,8 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     server: serverRegistrationIdSchema.nullable(),
     /**
      * The project to start in, or `null` for the home directory of the account
-     * the server runs as.
+     * the server runs as. `HOME_PROJECT_ID` starts there too: HOME is a project
+     * with no directory, so a start in it carries none, as `null` does.
      *
      * A node id and not a directory, which is the difference between this and
      * `directory-list` above. A project is a row this hub owns: the client
@@ -143,9 +144,15 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
      * the rule exists to keep shut -- so the field that crosses is an id, and
      * the only party that turns one into a path is the party holding the rows.
      *
-     * `null` is what a start has always been: the server resolves the store's
-     * own directory and spawns there. Both remain, because a session that
-     * belongs to no project is the ordinary case and not a degraded one.
+     * `null` and HOME both reach the server with no directory, and the server
+     * spawns in the home directory of the account it runs as. Both remain,
+     * because a session that belongs to no other project is the ordinary case
+     * and not a degraded one, and both end in HOME: discovery files a session
+     * with no other project there.
+     *
+     * A resume that names a project, HOME included, is refused: a session
+     * resumes in the directory its own transcript recorded, so a project on a
+     * resume would be a second directory nobody may choose.
      */
     project: nodeIdSchema.nullable(),
   }),
