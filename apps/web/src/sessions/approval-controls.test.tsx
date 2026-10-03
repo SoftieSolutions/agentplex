@@ -705,6 +705,30 @@ describe('always allowing the request in front of you', () => {
     expect(container.querySelectorAll('button')).toHaveLength(2);
   });
 
+  it('offers nothing to a session in HOME, which keeps no rules', async () => {
+    const socket = await fleet();
+    const item = asking();
+    const { approval } = item;
+    if (approval === null) throw new Error('the captured state holds no open request');
+
+    await mount(item, { kind: 'home' });
+
+    // Allow and Deny, and no third control: the hub refuses a rule for HOME,
+    // and a button that could only be refused is worse than no button.
+    expect(container.querySelectorAll('button')).toHaveLength(2);
+    expect(sentences()).not.toContain(TOO_LONG_TO_REMEMBER_WORDS);
+    expect(sentFrames(socket).filter((frame) => frame.type.startsWith('approval-policy'))).toEqual(
+      [],
+    );
+
+    // Nor the sentence about a request too long to remember: that is a reason
+    // a rule cannot be made in a project that could hold one, and HOME cannot
+    // hold one whatever the request says.
+    await mount({ ...item, approval: { ...approval, truncated: true } }, { kind: 'home' });
+    expect(container.querySelectorAll('button')).toHaveLength(2);
+    expect(sentences()).not.toContain(TOO_LONG_TO_REMEMBER_WORDS);
+  });
+
   it('offers nothing while the tree has not said where the session is', async () => {
     await fleet();
 

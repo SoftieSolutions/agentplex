@@ -1,4 +1,4 @@
-import { readinessRefusal } from '@agentplex/protocol';
+import { HOME_PROJECT_ID, readinessRefusal } from '@agentplex/protocol';
 import type {
   FrameId,
   MachineState,
@@ -10,6 +10,7 @@ import type {
   SessionRef,
   StoreId,
 } from '@agentplex/protocol';
+import type { ProjectChoice } from '../projects/new-project-model.js';
 import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 import type { ConnectionPhase } from '../store/views.js';
@@ -36,13 +37,18 @@ import { serverLabel } from './session-list-model.js';
  * is the whole of that, and `serverOverrideChoices` is the same rule read the
  * other way, so the two selects constrain each other.
  *
- * The project picker follows the same rule from the other end: it is drawn when
- * there is at least one project, because "in a project" and "in the home
- * directory of the account the server runs as" are two different starts and a
- * form with no way to say which would only ever make the second. It narrows neither of the other two controls, and that
- * is not an omission: nothing on the wire ties a project to a machine. A
- * project is a node with a directory, and whether that directory sits under a
- * root is answered by the machine that has the disk, at the moment it is asked.
+ * The project picker follows the same rule: it is drawn as a choice when the
+ * tree holds two projects or more, and named in words when it holds only HOME.
+ * There is no empty choice. A session started in no project ends up in HOME
+ * anyway, and a start in HOME runs where one in no project runs -- the home
+ * directory of the account the server runs as -- so "No project" was HOME
+ * under a second name, and a form offering both would be asking a question
+ * whose two answers are one. HOME is the answer a form left alone gives
+ * (`resolveProject`). The picker narrows neither of the other two controls,
+ * and that is not an omission: nothing on the wire ties a project to a
+ * machine. A project is a node with a directory, and whether that directory
+ * sits under a root is answered by the machine that has the disk, at the
+ * moment it is asked.
  */
 
 /** Every store a session could start in, in the order the hub sent them. */
@@ -258,6 +264,22 @@ export function parsePrompt(text: string): string | null {
 }
 
 /**
+ * The project a start goes to: the one picked while the tree lists it, and
+ * HOME otherwise.
+ *
+ * Never `null`, which is the point of it. Every hub's tree holds HOME, and a
+ * start in it runs where a start in no project would, so a form that sent
+ * `null` would be sending HOME's meaning under another spelling -- and HOME is
+ * the one this client can name. The fallback holds before a tree has arrived
+ * too: HOME is a well-known id rather than a node this client has to have
+ * read, and a pick the tree has stopped listing goes where no pick goes rather
+ * than to a project somebody removed.
+ */
+export function resolveProject(projects: readonly ProjectChoice[], choice: string | null): NodeId {
+  return projects.find((project) => project.id === choice)?.id ?? HOME_PROJECT_ID;
+}
+
+/**
  * The session-start command, exactly the fields the frame defines.
  *
  * `sessionId` is `null` because this flow only ever starts new sessions, and a
@@ -275,7 +297,7 @@ export function buildStart(
   provider: Provider,
   server: ServerRegistrationId | null,
   promptText: string,
-  project: NodeId | null = null,
+  project: NodeId,
 ): HubCommand {
   return {
     type: 'session-start',
@@ -286,7 +308,8 @@ export function buildStart(
     server,
     // A node id and never a path. Which directory that project is, is the hub's
     // to answer out of its own rows -- a client that could send the path would
-    // be a client choosing a cwd on somebody else's machine.
+    // be a client choosing a cwd on somebody else's machine. Never `null` from
+    // this form: HOME is what a start in no project is (`resolveProject`).
     project,
   };
 }

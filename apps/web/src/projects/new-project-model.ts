@@ -1,4 +1,11 @@
-import type { FrameId, Layout, MachineState, ServerRegistrationId } from '@agentplex/protocol';
+import {
+  HOME_PROJECT_ID,
+  type FrameId,
+  type Layout,
+  type MachineState,
+  type NodeId,
+  type ServerRegistrationId,
+} from '@agentplex/protocol';
 import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 import { PROJECT_KIND } from './project-kind.js';
@@ -112,8 +119,13 @@ export function createFollowUp(pending: FrameId, answers: Answers): CreateFollow
 
 /** One project, as a picker offers it. */
 export interface ProjectChoice {
-  readonly id: string;
+  readonly id: NodeId;
   readonly label: string;
+}
+
+/** Whether a picker offers HOME, which every caller has to answer for itself. */
+export interface ProjectChoiceOptions {
+  readonly includeHome: boolean;
 }
 
 /**
@@ -127,12 +139,25 @@ export interface ProjectChoice {
  * An unnamed project cannot happen -- the hub refuses a blank name -- so a node
  * with no name is skipped rather than shown as a blank row: a picker option a
  * person cannot read is one they cannot choose on purpose.
+ *
+ * HOME is a project node with no directory, so the hub takes it for some acts
+ * and refuses it for others: a session starts in it, and a graph, a document or
+ * an approval rule cannot live in it. `includeHome` is required rather than
+ * defaulted so that each picker states which of those it is, and a picker that
+ * offered HOME where the hub refuses it would be offering a choice that can
+ * only be refused. HOME is told by its id and never by its name: a project a
+ * person named "HOME" is an ordinary project. When it is offered it comes
+ * first, because the hub sends it first.
  */
-export function projectChoices(layout: Layout | null): readonly ProjectChoice[] {
+export function projectChoices(
+  layout: Layout | null,
+  { includeHome }: ProjectChoiceOptions,
+): readonly ProjectChoice[] {
   if (layout === null) return [];
   const choices: ProjectChoice[] = [];
   for (const node of layout) {
     if (node.kind !== PROJECT_KIND || node.name === null) continue;
+    if (!includeHome && node.id === HOME_PROJECT_ID) continue;
     choices.push({ id: node.id, label: node.name });
   }
   return choices;

@@ -1,6 +1,6 @@
 import { useEffect, useState, type JSX } from 'react';
-import { nodeIdSchema, storeIdSchema, serverRegistrationIdSchema } from '@agentplex/protocol';
-import type { FrameId, NodeId, SessionRef, StoreId } from '@agentplex/protocol';
+import { storeIdSchema, serverRegistrationIdSchema } from '@agentplex/protocol';
+import type { FrameId, SessionRef, StoreId } from '@agentplex/protocol';
 import { projectChoices } from '../projects/new-project-model.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
@@ -11,6 +11,7 @@ import {
   buildStart,
   deliveryWords,
   providerOffer,
+  resolveProject,
   resolveProvider,
   serverOverrideChoices,
   startFollowUp,
@@ -27,11 +28,11 @@ interface PendingStart {
 
 /**
  * The new-session form, in the mockup's dialog language (turn 7): a store, a
- * provider, an optional project, an optional machine override, an optional
- * first prompt. Every rule -- which controls exist, what the frame carries,
- * what to do with the hub's answer -- comes from new-session-model.ts; this
- * component owns only what the user has typed and the id of the start it is
- * waiting on.
+ * provider, a project (HOME unless another is picked), an optional machine
+ * override, an optional first prompt. Every rule -- which controls exist, what
+ * the frame carries, what to do with the hub's answer -- comes from
+ * new-session-model.ts; this component owns only what the user has typed and
+ * the id of the start it is waiting on.
  *
  * The mockup's New popover lists five node kinds and the chrome draws it now
  * (AGX-124): its Session row is what opens this form in the wide shell, and
@@ -49,10 +50,12 @@ interface PendingStart {
  * comes out of the offer, the chosen machine can start it, so the narrowing
  * never drops the machine that produced it.
  *
- * The project control is drawn only once there is a project to pick, and it
- * narrows nothing: nothing on the wire ties a project to a machine. What
- * picking one changes is the frame, which carries the project's id, and the hub
- * resolves the directory out of its own rows.
+ * The project control is drawn as a choice once the tree holds a project
+ * besides HOME, and it narrows nothing: nothing on the wire ties a project to a
+ * machine. What picking one changes is the frame, which carries the project's
+ * id, and the hub resolves the directory out of its own rows. It opens on HOME
+ * and has no empty choice: a start in no project ends up in HOME and runs where
+ * a start in HOME does, so the two were one answer under two names.
  */
 export interface NewSessionFormProps {
   readonly store: HubStore;
@@ -121,11 +124,10 @@ export function NewSessionForm({
   const chosenStore: StoreId | null =
     stores.length === 1 ? (stores[0] ?? null) : offered ? storeIdSchema.parse(storeChoice) : null;
 
-  const projects = projectChoices(layout);
-  const chosenProject: NodeId | null =
-    projectChoice !== null && projects.some((choice) => choice.id === projectChoice)
-      ? nodeIdSchema.parse(projectChoice)
-      : null;
+  // HOME included: the hub starts a session in it, in the home directory of the
+  // account the server runs as, which is where a start in no project ran.
+  const projects = projectChoices(layout, { includeHome: true });
+  const chosenProject = resolveProject(projects, projectChoice);
 
   // Resolved against the unnarrowed candidates, before the provider it will
   // then be narrowed by: see this file's header for why that order is what
@@ -262,21 +264,25 @@ export function NewSessionForm({
           </Text>
         ))}
 
-        {projects.length === 0 ? null : (
-          // Drawn from the first project onwards, because "in this project" and
-          // "in the server account's home directory" are two different starts.
-          // Clearable, and empty is the second of them rather than a missing
-          // answer.
+        {projects.length >= 2 ? (
+          // A choice once the tree holds a project besides HOME. Not
+          // clearable and with no placeholder, because there is no empty
+          // answer: HOME is the start in no project, and it is the one the
+          // form opens on.
           <Select
             label="Project"
             aria-label="Project"
-            placeholder="No project"
             data={projects.map((choice) => ({ value: choice.id, label: choice.label }))}
             value={chosenProject}
             onChange={setProjectChoice}
-            clearable
+            allowDeselect={false}
           />
-        )}
+        ) : projects.length === 1 ? (
+          // One project is not a choice: it is named in words instead.
+          <Text fz={13} c="dimmed">
+            project: {projects[0]?.label}
+          </Text>
+        ) : null}
 
         {overrides.length === 0 ? null : (
           // Drawn only when more than one connected machine could run the

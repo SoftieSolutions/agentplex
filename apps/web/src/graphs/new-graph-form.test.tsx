@@ -9,6 +9,7 @@ import {
   parseHubFrame,
   parseTextFrame,
   type ClientFrame,
+  type HubFrame,
 } from '@agentplex/protocol';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
@@ -23,8 +24,9 @@ import { NewGraphForm } from './new-graph-form.js';
 /**
  * The New graph form: a name and a project, a create on the wire, and the
  * graph route entered when the hub names the node. The tree with a project
- * in it is the one a real hub sent, so the project picker's one option is a
- * row the hub actually lists.
+ * in it is the one a real hub sent, HOME included, so the project picker's
+ * one option is a row the hub actually lists and HOME is the node it leaves
+ * out.
  */
 
 declare global {
@@ -55,22 +57,39 @@ function installResizeObserver(): void {
   };
 }
 
-/**
- * The captured tree with a project in it, less HOME.
- *
- * Every hub's tree holds HOME since migration 0020, and the hub takes no
- * graph under it (HOME has no directory, so no `projects` row). Whether this
- * picker offers HOME at all is AGX-389's to decide; what these cases are about
- * is one project and one create, so they are given the tree with the one
- * project the capture made, every other node exactly as the hub sent it.
- */
-function layoutWithOneProject(): string {
+function capturedLayout(): Extract<HubFrame, { type: 'layout' }> {
   const parsed = parseTextFrame(parseHubFrame, hubFrames.layoutWithProject);
   if (!parsed.ok || parsed.value.type !== 'layout') {
     throw new Error('the fixture is not a layout frame');
   }
-  const nodes = parsed.value.nodes.filter((node) => node.id !== HOME_PROJECT_ID);
-  return JSON.stringify({ ...parsed.value, nodes });
+  return parsed.value;
+}
+
+/**
+ * The captured tree with HOME and nothing else: every node outside HOME taken
+ * away, the rest exactly as the hub sent them. Every hub's tree holds HOME
+ * since migration 0020, so this is what a hub with no project of its own
+ * sends.
+ */
+function layoutWithOnlyHome(): string {
+  const frame = capturedLayout();
+  const nodes = frame.nodes.filter(
+    (node) => node.id === HOME_PROJECT_ID || node.parentId === HOME_PROJECT_ID,
+  );
+  return JSON.stringify({ ...frame, nodes });
+}
+
+/**
+ * The captured tree with a second project beside the one the capture made: a
+ * copy of the captured project node under its own id and name, so every field
+ * but those is what the hub sent.
+ */
+function layoutWithTwoProjects(): string {
+  const frame = capturedLayout();
+  const captured = frame.nodes.find((node) => node.id === 'hub-5');
+  if (captured === undefined) throw new Error('the capture made no project');
+  const second = { ...captured, id: nodeIdSchema.parse('hub-90'), position: 2, name: 'scratch' };
+  return JSON.stringify({ ...frame, nodes: [...frame.nodes, second] });
 }
 
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -124,7 +143,11 @@ describe('NewGraphForm', () => {
     );
   }
 
-  async function mount(): Promise<FakeSocket> {
+  /**
+   * The form open on a hub that sent `layout`: by default the captured tree,
+   * which holds HOME and the one project the capture made.
+   */
+  async function mount(layout: string = hubFrames.layoutWithProject): Promise<FakeSocket> {
     await act(async () => {
       root = createRoot(container);
       root.render(
@@ -147,7 +170,7 @@ describe('NewGraphForm', () => {
     await act(() => {
       socket.open();
       socket.deliver(hubFrames.welcome);
-      socket.deliver(layoutWithOneProject());
+      socket.deliver(layout);
     });
     return socket;
   }
@@ -176,6 +199,8 @@ describe('NewGraphForm', () => {
   }
 
   it('names the one project in words rather than as a choice, and blocks until a name is typed', async () => {
+    // HOME is in the tree and is not counted: the hub takes no graph under it,
+    // so the one project there is to choose is the one the capture made.
     await mount();
 
     expect(document.body.textContent).toContain('in agentplex (main checkout)');
@@ -247,30 +272,34 @@ describe('NewGraphForm', () => {
   });
 
   it('says there is nowhere to put a graph while the tree has no project', async () => {
-    await act(async () => {
-      root = createRoot(container);
-      root.render(
-        withProvider(
-          <NewGraphForm
-            store={store}
-            opened
-            onClose={() => {}}
-            scheme="dark"
-            navigate={() => {}}
-          />,
-        ),
-      );
-    });
-    await act(settle);
-    const socket = sockets.sockets[0];
-    if (socket === undefined) throw new Error('the form dialled nothing');
-    await act(() => {
-      socket.open();
-      socket.deliver(hubFrames.welcome);
-      socket.deliver(hubFrames.layout);
-    });
+    await mount(hubFrames.layout);
 
     expect(document.body.textContent).toContain('no project');
     expect(createButton().disabled).toBe(true);
+  });
+
+  it('says the same while HOME is the only project, because the hub takes no graph there', async () => {
+    await mount(layoutWithOnlyHome());
+    await type('release-pipeline');
+
+    expect(document.body.textContent).toContain(
+      'the tree has no project yet, and a graph belongs to one',
+    );
+    expect(document.body.textContent).not.toContain('in HOME');
+    expect(createButton().disabled).toBe(true);
+  });
+
+  it('offers the projects a graph can live in, and HOME is not one of them', async () => {
+    await mount(layoutWithTwoProjects());
+
+    const input = document.body.querySelector<HTMLInputElement>('input[aria-label="Project"]');
+    if (input === null) throw new Error('the form drew no project chooser');
+    await act(() => {
+      input.click();
+    });
+    const options = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')].map(
+      (option) => option.textContent,
+    );
+    expect(options).toEqual(['agentplex (main checkout)', 'scratch']);
   });
 });

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { nodeIdSchema, parseHubFrame, parseTextFrame, type Layout } from '@agentplex/protocol';
+import {
+  HOME_PROJECT_ID,
+  nodeIdSchema,
+  parseHubFrame,
+  parseTextFrame,
+  type Layout,
+} from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { documentName, projectDocuments } from './doc-rows.js';
 
@@ -26,10 +32,7 @@ const empty = layoutFrom(hubFrames.layout);
 
 describe('the documents under a project', () => {
   it('groups the tree by project, keeping the hub order', () => {
-    // HOME first, because the hub sends it first: migration 0020 seeds it at
-    // the root's position 0.
     expect(projectDocuments(withProject)).toEqual([
-      { projectId: 'home', label: 'HOME', docs: [] },
       {
         projectId: 'hub-5',
         label: 'agentplex (main checkout)',
@@ -43,7 +46,6 @@ describe('the documents under a project', () => {
     // nothing yet is exactly the row somebody needs to find.
     const noDocs = withProject.filter((node) => node.kind !== 'doc');
     expect(projectDocuments(noDocs)).toEqual([
-      { projectId: 'home', label: 'HOME', docs: [] },
       { projectId: 'hub-5', label: 'agentplex (main checkout)', docs: [] },
     ]);
   });
@@ -51,6 +53,31 @@ describe('the documents under a project', () => {
   it('has nothing to say about a tree with no projects, or no tree at all', () => {
     expect(projectDocuments(empty)).toEqual([]);
     expect(projectDocuments(null)).toEqual([]);
+  });
+
+  it('leaves HOME out, with any document under it, and keeps a project merely named HOME', () => {
+    // The hub refuses a document act in HOME -- it has no directory, so no
+    // project row -- and a New doc action on a HOME row could only be refused.
+    // The documents migration 0020 moved into HOME stay in the Projects tree.
+    // The captured project and document are copied under other ids: one more
+    // document, filed in HOME, and one more project, named HOME by a person
+    // and told apart from HOME by its id.
+    const captured = withProject.find((node) => node.id === 'hub-5');
+    const doc = withProject.find((node) => node.id === 'hub-6');
+    if (captured === undefined || doc === undefined) throw new Error('the capture changed');
+    const tree: Layout = [
+      ...withProject,
+      { ...doc, id: nodeIdSchema.parse('hub-91'), parentId: HOME_PROJECT_ID, name: 'notes.md' },
+      { ...captured, id: nodeIdSchema.parse('hub-90'), position: 2, name: 'HOME' },
+    ];
+    expect(projectDocuments(tree)).toEqual([
+      {
+        projectId: 'hub-5',
+        label: 'agentplex (main checkout)',
+        docs: [{ nodeId: 'hub-6', name: 'plan.md' }],
+      },
+      { projectId: 'hub-90', label: 'HOME', docs: [] },
+    ]);
   });
 
   it('skips a document whose parent is no project this client can place', () => {
@@ -61,7 +88,6 @@ describe('the documents under a project', () => {
       node.kind === 'doc' ? { ...node, parentId: nodeIdSchema.parse('hub-404') } : node,
     );
     expect(projectDocuments(orphaned)).toEqual([
-      { projectId: 'home', label: 'HOME', docs: [] },
       { projectId: 'hub-5', label: 'agentplex (main checkout)', docs: [] },
     ]);
   });

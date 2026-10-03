@@ -1,4 +1,5 @@
 import {
+  HOME_PROJECT_ID,
   parseApprovalPolicyRule,
   type ApprovalPolicyRuleId,
   type FrameId,
@@ -22,10 +23,10 @@ import type { ApprovalPolicyView } from '../store/views.js';
  *
  * The policy is per project and never per session, which is the human decision
  * this whole feature carries. So every function here takes a project node id,
- * and a session filed under no project has no policy to show -- `policyRows`
- * says so in words rather than drawing an empty list, because an empty list
- * reads as "nothing has been decided" and the truth is "there is nowhere for a
- * decision to live".
+ * and a session filed under no project, or under HOME, has no policy to show --
+ * `policyRows` says so in words rather than drawing an empty list, because an
+ * empty list reads as "nothing has been decided" and the truth is "there is
+ * nowhere for a decision to live".
  */
 
 /** Asks for one project's rules. The panel that opens sends this once. */
@@ -89,10 +90,12 @@ export type PolicyRow =
     }
   | { readonly kind: 'asks'; readonly words: string }
   | { readonly kind: 'unfiled'; readonly words: string }
+  | { readonly kind: 'home'; readonly words: string }
   | { readonly kind: 'unread'; readonly words: string };
 
 const ASKS = 'Everything else asks you first.';
 const UNFILED = 'No policy: this session is in no project, so every request reaches you.';
+const HOME = 'No policy: HOME keeps no rules, so every request reaches you.';
 const UNREAD = "This project's policy has not arrived yet.";
 const UNPLACED = 'Where this session is filed has not arrived yet.';
 
@@ -129,8 +132,11 @@ export const EXACT_MATCH_WORDS =
 /**
  * The rows for one session's project, from what the store holds.
  *
- * Three absences, three sentences, which is the whole of why `project` is a
- * union rather than a nullable id. A tree that has not arrived is not a session
+ * Four absences, four sentences, which is the whole of why `project` is a union
+ * rather than a nullable id. HOME is one of them: it is a project, so "in no
+ * project" would be false of a session there, and it is the one project the hub
+ * keeps no rules for -- an approval rule references a project row, and HOME,
+ * having no directory, has none. A tree that has not arrived is not a session
  * filed nowhere, and saying "this session is in no project" while the tree is
  * in flight is this block's one chance to be wrong in the direction that costs
  * something: a person told there is no policy stops looking for one. `policy`
@@ -154,8 +160,16 @@ export function policyRows(
   project: SessionProject,
   policy: ApprovalPolicyView | null,
 ): readonly PolicyRow[] {
-  if (project.kind === 'unplaced') return [{ kind: 'unread', words: UNPLACED }];
-  if (project.kind === 'unfiled') return [{ kind: 'unfiled', words: UNFILED }];
+  switch (project.kind) {
+    case 'unplaced':
+      return [{ kind: 'unread', words: UNPLACED }];
+    case 'unfiled':
+      return [{ kind: 'unfiled', words: UNFILED }];
+    case 'home':
+      return [{ kind: 'home', words: HOME }];
+    case 'project':
+      break;
+  }
   if (policy === null) return [{ kind: 'unread', words: UNREAD }];
 
   const rows: PolicyRow[] = [];
@@ -186,10 +200,15 @@ export function policyRows(
  *
  * `unfiled` is a session this client can place and that is in no project --
  * filed at the root, or filed only under folders -- and there is nowhere for a
- * rule about it to live. `unplaced` is the tree not having arrived, or not
- * holding this session: two absences that look the same from here and that are
- * both "this client cannot say yet", which is a different sentence from "there
- * is no project" and must stay one.
+ * rule about it to live. `home` is a session whose nearest project is HOME,
+ * directly or through folders inside it: in a project, so not `unfiled`, whose
+ * sentence says "in no project", and still with nowhere for a rule to live,
+ * because the hub refuses a rule for HOME. HOME is told by its id and never by
+ * its name, so a project a person named "HOME" is an ordinary `project`.
+ * `unplaced` is the tree not having arrived, or not holding this session: two
+ * absences that look the same from here and that are both "this client cannot
+ * say yet", which is a different sentence from "there is no project" and must
+ * stay one.
  *
  * The label falls back to the node's id for a project the hub named nothing,
  * the way the pane's header falls back to the session id. A project a person
@@ -199,11 +218,13 @@ export function policyRows(
  */
 export type SessionProject =
   | { readonly kind: 'project'; readonly id: NodeId; readonly label: string }
+  | { readonly kind: 'home' }
   | { readonly kind: 'unfiled' }
   | { readonly kind: 'unplaced' };
 
 const UNPLACED_PROJECT: SessionProject = { kind: 'unplaced' };
 const UNFILED_PROJECT: SessionProject = { kind: 'unfiled' };
+const HOME_PROJECT: SessionProject = { kind: 'home' };
 
 export function projectForSession(layout: Layout | null, ref: SessionRef): SessionProject {
   if (layout === null) return UNPLACED_PROJECT;
@@ -220,6 +241,7 @@ export function projectForSession(layout: Layout | null, ref: SessionRef): Sessi
   let above = node.parentId === null ? undefined : byId.get(node.parentId);
   while (above !== undefined) {
     if (above.kind === PROJECT_KIND) {
+      if (above.id === HOME_PROJECT_ID) return HOME_PROJECT;
       return { kind: 'project', id: above.id, label: above.name ?? above.id };
     }
     // A tree the hub writes cannot contain a cycle -- `moveNode` refuses one --
