@@ -516,12 +516,13 @@ describe('the catalogue panel', () => {
   /**
    * The Projects tab's top: projects only, each closed until opened.
    *
-   * Hand-shaped pages, unlike the suites above: the captured tree was asked
-   * for whole (`openProjects: null`) and before every catalogue had a Home
-   * project, so its root holds a folder and a session, which a tab that names
-   * its open projects is never sent. What is pinned here is what the panel
-   * asks for and how it draws a project row, not what the hub sends -- the
-   * hub's own suite holds that.
+   * Mostly hand-shaped pages, unlike the suites above: the captured tree was
+   * asked for whole (`openProjects: null`) and in two pages, so neither page
+   * alone holds a project with what is under it. One test joins the two
+   * captured pages to show the root as the hub really sends it: HOME first,
+   * then the other projects, nothing else. The rest pin what the panel asks
+   * for and how it draws a project row, not what the hub sends -- the hub's
+   * own suite holds that.
    */
   describe('the projects at the top', () => {
     const node = (text: string): NodeId => nodeIdSchema.parse(text);
@@ -607,6 +608,29 @@ describe('the catalogue panel', () => {
         'Expand Home',
         'Expand agentplex',
       ]);
+    });
+
+    it('draws the captured root as HOME first, then the other projects, and nothing else', async () => {
+      const first = parseTextFrame(parseHubFrame, hubFrames.catalogueTreePagePartial);
+      const rest = parseTextFrame(parseHubFrame, hubFrames.catalogueTreePage);
+      if (!first.ok || first.value.type !== 'catalogue-page') throw new Error('no first page');
+      if (!rest.ok || rest.value.type !== 'catalogue-page') throw new Error('no last page');
+      const whole = pageAdopted(
+        pageAdopted(NO_PAGES, first.value, 'replace'),
+        rest.value,
+        'append',
+      );
+
+      await mount(whole);
+
+      expect(catalogue.opened.at(-1)).toEqual([]);
+      expect(disclosures().map((button) => button.getAttribute('aria-label'))).toEqual([
+        'Expand HOME',
+        'Expand agentplex (main checkout)',
+      ]);
+      for (const nested of ['later', 'this week', 'spike-wasm', 'fix-auth-refresh', 'plan.md']) {
+        expect(words()).not.toContain(nested);
+      }
     });
 
     it('opens a project by the open list, and asks for it by id', async () => {
