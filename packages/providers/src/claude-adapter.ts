@@ -193,7 +193,7 @@ export function createClaudeAdapter({
         probe,
       );
       if (registry.live.has(request.session.sessionId)) {
-        return { ok: true, transcript: { activities: [], olderExist: false } };
+        return { ok: true, transcript: { activities: [], olderExist: false, turnsExist: false } };
       }
       return { ok: false, problem: 'this store holds no claude transcript for that session' };
     },

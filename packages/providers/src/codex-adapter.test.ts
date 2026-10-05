@@ -634,6 +634,7 @@ describe('createCodexAdapter.transcript', () => {
       transcript: {
         activities: [{ kind: 'command', text: "printf 'hello' > probe.txt", exitStatus: 1 }],
         olderExist: false,
+        turnsExist: true,
       },
     });
   });
@@ -666,7 +667,10 @@ describe('createCodexAdapter.transcript', () => {
 
     const read = await adapter.transcript({ store: STORE, session, limit: 0 });
 
-    expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: true } });
+    expect(read).toEqual({
+      ok: true,
+      transcript: { activities: [], olderExist: true, turnsExist: true },
+    });
   });
 
   it('does not answer with a rollout whose name merely contains the id', async () => {

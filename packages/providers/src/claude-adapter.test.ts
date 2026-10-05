@@ -20,6 +20,7 @@ function fixture(name: string): string {
 const COMPLETED_TURN = fixture('claude-completed-turn.jsonl');
 const PENDING_TOOL_USE = fixture('claude-pending-tool-use.jsonl');
 const NO_TURNS = fixture('claude-no-turns.jsonl');
+const TEXT_ONLY_TURN = fixture('claude-text-only-turn.jsonl');
 const REGISTRY_ENTRY = fixture('claude-session-registry.json');
 
 const STORE = storeDescriptorSchema.parse({ storeId: 'store-a', path: '/volumes/claude' });
@@ -1006,7 +1007,35 @@ describe('createClaudeAdapter.transcript', () => {
 
     expect(read).toEqual({
       ok: true,
-      transcript: { activities: [{ kind: 'command', text: 'Bash' }], olderExist: false },
+      transcript: {
+        activities: [{ kind: 'command', text: 'Bash' }],
+        olderExist: false,
+        turnsExist: true,
+      },
+    });
+  });
+
+  it('says a transcript that only talked holds a turn, though it lists no activity', async () => {
+    const adapter = adapterOver({
+      files: { [`${PROJECT}/${SESSION_ID}.jsonl`]: TEXT_ONLY_TURN },
+    });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 1 });
+
+    expect(read).toEqual({
+      ok: true,
+      transcript: { activities: [], olderExist: false, turnsExist: true },
+    });
+  });
+
+  it('says a transcript file with no turn in it holds none', async () => {
+    const adapter = adapterOver({ files: { [`${PROJECT}/${SESSION_ID}.jsonl`]: NO_TURNS } });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 1 });
+
+    expect(read).toEqual({
+      ok: true,
+      transcript: { activities: [], olderExist: false, turnsExist: false },
     });
   });
 
@@ -1067,7 +1096,10 @@ describe('createClaudeAdapter.transcript', () => {
 
     const read = await adapter.transcript({ store: STORE, session, limit: 0 });
 
-    expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: true } });
+    expect(read).toEqual({
+      ok: true,
+      transcript: { activities: [], olderExist: true, turnsExist: true },
+    });
   });
 
   describe('for a live claude that has not typed yet', () => {
@@ -1081,7 +1113,11 @@ describe('createClaudeAdapter.transcript', () => {
 
       const read = await adapter.transcript({ store: STORE, session, limit: 10 });
 
-      expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: false } });
+      // Nothing has been said, so there is no turn for anything to continue.
+      expect(read).toEqual({
+        ok: true,
+        transcript: { activities: [], olderExist: false, turnsExist: false },
+      });
     });
 
     it('still refuses a session neither a transcript nor a verified entry names', async () => {

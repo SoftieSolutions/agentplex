@@ -429,6 +429,9 @@ async function readSessionTranscript(
     transcript: {
       activities: limit <= 0 ? [] : all.slice(-limit),
       olderExist: all.length > limit,
+      // This provider has no file that is not a session: discovery lists every
+      // record that parses, so a record that parsed is a conversation.
+      turnsExist: true,
     },
   };
 }

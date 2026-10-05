@@ -416,6 +416,18 @@ export interface SessionTranscript {
    * presenting a tail as the whole.
    */
   readonly olderExist: boolean;
+  /**
+   * Whether the read found at least one turn of the session's conversation,
+   * counted the way the adapter's own parser counts one when discovery decides
+   * a file is a session.
+   *
+   * Separate from `activities` because an activity is a tool call and a turn
+   * need not make one: a session asked one question and answered in text has
+   * nothing to list and is still a conversation a resume can continue. Not a
+   * wire field: a screen draws the activities, and only a server deciding
+   * whether a session can be resumed asks this.
+   */
+  readonly turnsExist: boolean;
 }
 
 export interface DiscoveryProblem {

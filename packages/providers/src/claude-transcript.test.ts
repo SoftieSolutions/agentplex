@@ -26,6 +26,15 @@ function fixture(name: string): string {
 const COMPLETED_TURN = fixture('claude-completed-turn.jsonl');
 const PENDING_TOOL_USE = fixture('claude-pending-tool-use.jsonl');
 const NO_TURNS = fixture('claude-no-turns.jsonl');
+/**
+ * A Claude Code asked one thing that it answered in text, calling no tool.
+ * Captured at origin rather than cut from a working session: a `claude -p`
+ * (Claude Code 2.1.289) started in an agentplex worktree with a one-line
+ * prompt, cut and redacted as above. Its `attachment` lines -- the context
+ * Claude Code loads before the first request, tens of kilobytes this parser
+ * does not read -- are left out, as are its trailing bookkeeping lines.
+ */
+const TEXT_ONLY_TURN = fixture('claude-text-only-turn.jsonl');
 
 /** The last turn in `claude-completed-turn.jsonl`, as Claude Code dated it. */
 const LAST_TURN_AT = Date.parse('2026-09-03T02:03:10.027Z');
@@ -478,7 +487,11 @@ describe('claudeTranscriptActivities', () => {
     // only the last one.
     const read = claudeTranscriptActivities(COMPLETED_TURN, 10);
 
-    expect(read).toEqual({ activities: [{ kind: 'command', text: 'Bash' }], olderExist: false });
+    expect(read).toEqual({
+      activities: [{ kind: 'command', text: 'Bash' }],
+      olderExist: false,
+      turnsExist: true,
+    });
   });
 
   it('keeps the newest when there are more than the caller asked for', () => {
@@ -509,6 +522,7 @@ describe('claudeTranscriptActivities', () => {
         { kind: 'command', text: 'Read' },
       ],
       olderExist: true,
+      turnsExist: true,
     });
   });
 
@@ -548,23 +562,62 @@ describe('claudeTranscriptActivities', () => {
 
     const read = claudeTranscriptActivities(`${PENDING_TOOL_USE}${overlong}\n`, 10);
 
-    expect(read).toEqual({ activities: [{ kind: 'command', text: 'Bash' }], olderExist: false });
+    expect(read).toEqual({
+      activities: [{ kind: 'command', text: 'Bash' }],
+      olderExist: false,
+      turnsExist: true,
+    });
   });
 
-  it('answers nothing for a transcript whose turns called no tool', () => {
-    // Not a failure and not an empty file: a session that has only talked has
-    // nothing this parser can honestly report, because every text payload the
-    // capture holds is redacted.
+  it('answers nothing, and no turn, for a transcript with no turn in it', () => {
+    // Not a failure and not an empty file: a file Claude Code opened and
+    // nobody spoke into, which is not a conversation anything could resume.
     const read = claudeTranscriptActivities(NO_TURNS, 10);
 
-    expect(read).toEqual({ activities: [], olderExist: false });
+    expect(read).toEqual({ activities: [], olderExist: false, turnsExist: false });
+  });
+
+  it('answers no activity but a turn for a transcript that only talked', () => {
+    // An activity is a tool call, so a session asked one question and
+    // answered in text has nothing to list -- and is still a conversation.
+    // The two answers are separate because a retake acts on the second: the
+    // first would refuse to resume a session that has something to resume.
+    const read = claudeTranscriptActivities(TEXT_ONLY_TURN, 10);
+
+    expect(read).toEqual({ activities: [], olderExist: false, turnsExist: true });
+  });
+
+  it('counts a turn the way the session parser does, so the two never disagree', () => {
+    // Discovery lists a file as a session only when `parseClaudeTranscript`
+    // finds a turn in it. A transcript read that found a turn the parser
+    // would not, or missed one it would, would be two answers to one question.
+    for (const captured of [COMPLETED_TURN, PENDING_TOOL_USE, TEXT_ONLY_TURN, NO_TURNS]) {
+      expect(claudeTranscriptActivities(captured, 10).turnsExist).toBe(
+        parseClaudeTranscript(captured).ok,
+      );
+    }
+  });
+
+  it('finds no turn in a transcript whose only turns are a subagent’s', () => {
+    // A sidechain is the session's work and not its conversation; a file
+    // holding nothing else holds nothing a resume would continue.
+    const sidechain = JSON.parse(lastLineOf(PENDING_TOOL_USE, 'assistant')) as Record<
+      string,
+      unknown
+    >;
+    const read = claudeTranscriptActivities(
+      `${NO_TURNS}${JSON.stringify({ ...sidechain, isSidechain: true })}\n`,
+      10,
+    );
+
+    expect(read.turnsExist).toBe(false);
   });
 
   it('never puts the capture’s redaction marker into a transcript', () => {
     // The structural guard the card's line already has, applied to the whole
     // list: the only field read off a content block is `tool_use.name`, and
     // every payload the capture replaces is a field this parser does not read.
-    for (const captured of [COMPLETED_TURN, PENDING_TOOL_USE]) {
+    for (const captured of [COMPLETED_TURN, PENDING_TOOL_USE, TEXT_ONLY_TURN]) {
       const read = claudeTranscriptActivities(captured, 200);
 
       expect(JSON.stringify(read.activities).includes('REDACTED')).toBe(false);

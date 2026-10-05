@@ -950,13 +950,10 @@ export function createSessionController(
     }
 
     // Nothing is ended that cannot be resumed. A claude nobody has spoken to
-    // has a registry entry and no transcript, and `--resume` would find no
+    // has a registry entry and no turn, and `--resume` would find no
     // conversation; ending it would close somebody's terminal for nothing.
-    const transcript = await transcriptOf(store, adapter, session);
-    if (!transcript) {
-      return refused(
-        'this server finds no transcript to resume that session from, so it ends nothing',
-      );
+    if (!(await hasTurn(store, adapter, session))) {
+      return refused('that session has no turn to resume yet, so this server ends nothing');
     }
 
     // What the resume after the signal would refuse, refused before it: a
@@ -1139,16 +1136,19 @@ export function createSessionController(
    * Whether this session's transcript holds a turn, which is what a resume
    * continues. A readable answer is not enough: the adapter reads a live
    * claude with no file yet as an empty transcript, and a file with no turn
-   * in it reads the same.
+   * in it reads the same. Nor is an activity: that is a tool call, and a turn
+   * that answered in text made none. A read cut short of the file's start
+   * is let through: the turn it cannot see may sit in the part it did not
+   * read.
    */
-  async function transcriptOf(
+  async function hasTurn(
     store: StoreDescriptor,
     adapter: ProviderAdapter,
     session: SessionRef,
   ): Promise<boolean> {
     try {
       const read = await adapter.transcript({ store, session, limit: 1 });
-      return read.ok && (read.transcript.activities.length > 0 || read.transcript.olderExist);
+      return read.ok && (read.transcript.turnsExist || read.transcript.olderExist);
     } catch {
       return false;
     }

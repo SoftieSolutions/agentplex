@@ -1650,13 +1650,13 @@ describe('a retake of a session a claude outside agentplex is running', () => {
     expect(ptys.opened).toHaveLength(1);
   });
 
-  it('refuses a claude with no transcript to resume from, and signals nothing', async () => {
+  it('refuses a claude nobody has spoken to yet, and signals nothing', async () => {
     // A claude nobody has spoken to yet has a registry entry and no
     // transcript, and `--resume` has nothing to resume. Ending it would close
     // somebody's terminal for no session at all.
     const { sessions, signaller } = await outsideClaude({ status: 'idle' }, { transcript: false });
 
-    expect(refusal(await retake(sessions))).toContain('no transcript');
+    expect(refusal(await retake(sessions))).toContain('no turn to resume yet');
     expect(signaller.sent).toEqual([]);
   });
 
@@ -1671,8 +1671,31 @@ describe('a retake of a session a claude outside agentplex is running', () => {
       },
     );
 
-    expect(refusal(await retake(sessions))).toContain('no transcript');
+    expect(refusal(await retake(sessions))).toContain('no turn to resume yet');
     expect(signaller.sent).toEqual([]);
+  });
+
+  it('ends and resumes a claude whose only turn answered in text, calling no tool', async () => {
+    // A transcript lists tool calls, so this one lists nothing -- and the
+    // conversation is still there for `--resume` to continue. Somebody asked
+    // one question, read the answer and left it at its prompt.
+    const { sessions, signaller, ptys, timers } = await outsideClaude(
+      { status: 'idle' },
+      {
+        transcript: false,
+        files: { [TRANSCRIPT]: await readProviderFixture('claude-text-only-turn.jsonl') },
+      },
+    );
+
+    const pending = retake(sessions);
+    await settle();
+
+    expect(signaller.sent).toEqual([{ pid: OUTSIDE_PID, signal: 'SIGHUP' }]);
+
+    await poll(timers);
+
+    expect(await pending).toMatchObject({ ok: true, storeId: WORK, sessionId: SESSION });
+    expect(ptys.opened[0]?.args).toEqual(expect.arrayContaining(['--resume', SESSION]));
   });
 
   describe('while a retake waits for the process it signalled to go', () => {
