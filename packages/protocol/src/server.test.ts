@@ -188,6 +188,30 @@ describe('parseHubToServerFrame on the session instructions', () => {
       expect(parseHubToServerFrame({ type, id: 3, storeId: 'store-1' }).ok).toBe(false);
     }
   });
+
+  it('takes a retake addressed by session and provider, and drops a pid off it', () => {
+    // A retake ends a process this server did not start, so the one field that
+    // would make it dangerous is the one it cannot carry: the server finds the
+    // pid in the provider's own registry and verifies it at the moment it
+    // signals. A pid named by the hub would be a claim about a machine it
+    // cannot see, stale the moment it was read.
+    const retake = {
+      type: 'session-retake',
+      id: 8,
+      storeId: 'store-1',
+      sessionId: 'session-1',
+      provider: 'claude',
+    };
+    expect(parseHubToServerFrame(retake)).toEqual({ ok: true, value: retake });
+    const named = parseHubToServerFrame({ ...retake, pid: 4321, signal: 'SIGKILL' });
+    expect(named.ok).toBe(true);
+    if (!named.ok) return;
+    expect(named.value).not.toHaveProperty('pid');
+    expect(named.value).not.toHaveProperty('signal');
+    expect(parseHubToServerFrame({ ...retake, provider: 'nobody' }).ok).toBe(false);
+    const { sessionId: _sessionId, ...unaddressed } = retake;
+    expect(parseHubToServerFrame(unaddressed).ok).toBe(false);
+  });
 });
 
 describe('parseHubToServerFrame on the document frames', () => {
@@ -894,6 +918,13 @@ describe('hub and server round trips', () => {
       id: 31,
       storeId: storeIdSchema.parse('store-1'),
       sessionId: sessionIdSchema.parse('session-1'),
+    },
+    {
+      type: 'session-retake',
+      id: 32,
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      provider: 'claude',
     },
     {
       type: 'session-subscribe',

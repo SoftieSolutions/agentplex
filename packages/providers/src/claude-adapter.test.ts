@@ -9,7 +9,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { createFakeProcessProbe } from './fake-process-probe.js';
 import { CLAUDE_PROJECTS_DIRECTORY, createClaudeAdapter } from './claude-adapter.js';
-import { CLAUDE_SESSIONS_DIRECTORY } from './claude-registry.js';
+import { CLAUDE_REGISTRATION_WINDOW_MS, CLAUDE_SESSIONS_DIRECTORY } from './claude-registry.js';
 import { createFakeProviderFiles } from './fake-provider-files.js';
 
 /** Captured Claude Code output; see the note in `claude-transcript.test.ts`. */
@@ -20,6 +20,7 @@ function fixture(name: string): string {
 const COMPLETED_TURN = fixture('claude-completed-turn.jsonl');
 const PENDING_TOOL_USE = fixture('claude-pending-tool-use.jsonl');
 const NO_TURNS = fixture('claude-no-turns.jsonl');
+const TEXT_ONLY_TURN = fixture('claude-text-only-turn.jsonl');
 const REGISTRY_ENTRY = fixture('claude-session-registry.json');
 
 const STORE = storeDescriptorSchema.parse({ storeId: 'store-a', path: '/volumes/claude' });
@@ -656,6 +657,129 @@ describe('createClaudeAdapter.discover, a live claude that has not typed yet', (
   });
 });
 
+describe('createClaudeAdapter.liveProcess', () => {
+  // The question a retake asks before it signals anything: which process runs
+  // this session, and is it at a point where ending it loses no work. Every
+  // answer below is read at the moment it is asked, because a pid is stale the
+  // moment it is read and this one is about to be sent a signal.
+  const ENTRY = `${SESSIONS}/${PID}.json`;
+  const OTHER_SESSION_ID = '6a1f3b2c-1d4e-4f5a-8b6c-7d8e9f0a1b2c';
+  const SESSION = sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: SESSION_ID });
+  /** The captured entry's own `startedAt`. */
+  const REGISTERED_AT = 1_788_406_129_669;
+  const theSameProcess = { processes: { [PID]: PROCESS_STARTED_AT } };
+
+  function entryWith(overrides: Record<string, unknown>): string {
+    return JSON.stringify({ ...JSON.parse(REGISTRY_ENTRY), ...overrides });
+  }
+
+  function liveProcessOver(
+    files: Record<string, string>,
+    probe: Parameters<typeof createFakeProcessProbe>[0] = theSameProcess,
+    unreadable?: readonly string[],
+  ) {
+    const adapter = adapterOver({ files, ...(unreadable && { unreadable }) }, probe);
+    return adapter.liveProcess(STORE, SESSION);
+  }
+
+  it.each([
+    ['idle', 'idle'],
+    ['waiting', 'waiting'],
+    ['busy', 'working'],
+    // `shell` is a `!` command the human typed, running. Status reads it as
+    // not running, because Claude Code reduces it to idle; a retake must not,
+    // because ending the process ends that command.
+    ['shell', 'working'],
+  ])('names the verified process at registry status %s as %s', async (status, phase) => {
+    expect(await liveProcessOver({ [ENTRY]: entryWith({ status }) })).toEqual({
+      pid: PID,
+      phase,
+      startedAt: PROCESS_STARTED_AT,
+    });
+  });
+
+  it('names a process whose entry states no status as being in an unknown phase', async () => {
+    expect(await liveProcessOver({ [ENTRY]: entryWith({ status: undefined }) })).toEqual({
+      pid: PID,
+      phase: 'unknown',
+      startedAt: PROCESS_STARTED_AT,
+    });
+  });
+
+  it('names no process for an entry whose pid is dead', async () => {
+    expect(await liveProcessOver({ [ENTRY]: entryWith({ status: 'idle' }) }, {})).toBeNull();
+  });
+
+  it('names no process for a pid issued after the entry was written', async () => {
+    const recycled = { processes: { [PID]: REGISTERED_AT + 60_000 } };
+    expect(await liveProcessOver({ [ENTRY]: entryWith({ status: 'idle' }) }, recycled)).toBeNull();
+  });
+
+  it('names no process for a pid that was running well before the entry registered', async () => {
+    // A store shared by two machines carries the other machine's entries, and
+    // a local process that has held the same pid since earlier passes the
+    // check discovery makes, which bounds a start only from above. A signal
+    // needs the process to have started in the beat before it registered.
+    const files = { [ENTRY]: entryWith({ status: 'idle' }) };
+    const earlier = { processes: { [PID]: REGISTERED_AT - CLAUDE_REGISTRATION_WINDOW_MS - 1_000 } };
+
+    expect(await liveProcessOver(files, earlier)).toBeNull();
+    // Discovery's own reading is left alone: there a real claude that wrote its
+    // entry late reading as none would invite a resume onto a live transcript.
+    const [session] = (await adapterOver({ files }, earlier).discover(STORE)).sessions;
+    expect(session?.process).toBe('verified');
+  });
+
+  it('names a pid that started inside the window before its entry registered', async () => {
+    const inside = { processes: { [PID]: REGISTERED_AT - CLAUDE_REGISTRATION_WINDOW_MS + 1_000 } };
+    expect(await liveProcessOver({ [ENTRY]: entryWith({ status: 'idle' }) }, inside)).toEqual({
+      pid: PID,
+      phase: 'idle',
+      startedAt: REGISTERED_AT - CLAUDE_REGISTRATION_WINDOW_MS + 1_000,
+    });
+  });
+
+  it('names no process for a live pid this machine cannot date', async () => {
+    const undatable = { undatable: [PID] };
+    expect(await liveProcessOver({ [ENTRY]: entryWith({ status: 'idle' }) }, undatable)).toBeNull();
+  });
+
+  it('names no process while any entry in the registry will not read', async () => {
+    // The unread entry could name this session under a more current pid, and
+    // the pid this one names would then be the wrong process to signal.
+    const unreadable = `${SESSIONS}/4242.json`;
+    expect(
+      await liveProcessOver(
+        { [ENTRY]: entryWith({ status: 'idle' }), [unreadable]: '{}' },
+        theSameProcess,
+        [unreadable],
+      ),
+    ).toBeNull();
+  });
+
+  it('names no process for a session no entry names', async () => {
+    const files = { [ENTRY]: entryWith({ status: 'idle', sessionId: OTHER_SESSION_ID }) };
+    expect(await liveProcessOver(files)).toBeNull();
+  });
+
+  it('reads the registry again on every ask, so a process that has exited is gone', async () => {
+    const probe = createFakeProcessProbe(theSameProcess);
+    const adapter = createClaudeAdapter({
+      files: createFakeProviderFiles({ files: { [ENTRY]: entryWith({ status: 'idle' }) } }),
+      probe,
+      homeDirectory: HOME,
+    });
+
+    expect(await adapter.liveProcess(STORE, SESSION)).toEqual({
+      pid: PID,
+      phase: 'idle',
+      startedAt: PROCESS_STARTED_AT,
+    });
+    probe.exit(PID);
+    expect(await adapter.liveProcess(STORE, SESSION)).toBeNull();
+  });
+});
+
 describe('createClaudeAdapter.status', () => {
   const observed = { updatedAt: 1_756_000_000_000, now: 1_756_000_001_000 };
 
@@ -883,7 +1007,35 @@ describe('createClaudeAdapter.transcript', () => {
 
     expect(read).toEqual({
       ok: true,
-      transcript: { activities: [{ kind: 'command', text: 'Bash' }], olderExist: false },
+      transcript: {
+        activities: [{ kind: 'command', text: 'Bash' }],
+        olderExist: false,
+        turnsExist: true,
+      },
+    });
+  });
+
+  it('says a transcript that only talked holds a turn, though it lists no activity', async () => {
+    const adapter = adapterOver({
+      files: { [`${PROJECT}/${SESSION_ID}.jsonl`]: TEXT_ONLY_TURN },
+    });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 1 });
+
+    expect(read).toEqual({
+      ok: true,
+      transcript: { activities: [], olderExist: false, turnsExist: true },
+    });
+  });
+
+  it('says a transcript file with no turn in it holds none', async () => {
+    const adapter = adapterOver({ files: { [`${PROJECT}/${SESSION_ID}.jsonl`]: NO_TURNS } });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 1 });
+
+    expect(read).toEqual({
+      ok: true,
+      transcript: { activities: [], olderExist: false, turnsExist: false },
     });
   });
 
@@ -944,7 +1096,10 @@ describe('createClaudeAdapter.transcript', () => {
 
     const read = await adapter.transcript({ store: STORE, session, limit: 0 });
 
-    expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: true } });
+    expect(read).toEqual({
+      ok: true,
+      transcript: { activities: [], olderExist: true, turnsExist: true },
+    });
   });
 
   describe('for a live claude that has not typed yet', () => {
@@ -958,7 +1113,11 @@ describe('createClaudeAdapter.transcript', () => {
 
       const read = await adapter.transcript({ store: STORE, session, limit: 10 });
 
-      expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: false } });
+      // Nothing has been said, so there is no turn for anything to continue.
+      expect(read).toEqual({
+        ok: true,
+        transcript: { activities: [], olderExist: false, turnsExist: false },
+      });
     });
 
     it('still refuses a session neither a transcript nor a verified entry names', async () => {

@@ -4,6 +4,7 @@ import {
   sessionUsageSchema,
   type Provider,
   type ProviderReadiness,
+  type SessionRef,
   type SessionStatus,
   type StoreDescriptor,
 } from '@agentplex/protocol';
@@ -16,6 +17,7 @@ import type {
   InstallPlan,
   InstallRequest,
   Launch,
+  LiveProcess,
   LoginRequest,
   ProviderAdapter,
   ProviderDiscovery,
@@ -120,6 +122,11 @@ export interface FakeProviderAdapterOptions {
    */
   readonly throwsOnTranscript?: string;
   readonly status?: (observation: StatusObservation) => SessionStatus;
+  /**
+   * The process this made-up provider verifies for a session, by session id.
+   * Absent names none, which is what a provider with no registry answers.
+   */
+  readonly liveProcesses?: Readonly<Record<string, LiveProcess>>;
 }
 
 export interface FakeProviderAdapter extends ProviderAdapter {
@@ -191,6 +198,10 @@ export function createFakeProviderAdapter(
         request.limit,
         files,
       );
+    },
+
+    async liveProcess(_store: StoreDescriptor, session: SessionRef): Promise<LiveProcess | null> {
+      return options.liveProcesses?.[session.sessionId] ?? null;
     },
 
     provisioning: fakeProvisioning(provider),
@@ -418,6 +429,9 @@ async function readSessionTranscript(
     transcript: {
       activities: limit <= 0 ? [] : all.slice(-limit),
       olderExist: all.length > limit,
+      // This provider has no file that is not a session: discovery lists every
+      // record that parses, so a record that parsed is a conversation.
+      turnsExist: true,
     },
   };
 }

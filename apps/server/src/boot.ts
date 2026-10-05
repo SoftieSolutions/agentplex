@@ -3,7 +3,12 @@ import { ensureDataRoot, type DataRootFileSystem } from './data-root/data-root.j
 import type { DirectoryReader } from './directories/directory-browse.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProjectFileSystem } from './projects/project-files.js';
-import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
+import type {
+  ProcessProbe,
+  ProviderPreflight,
+  ProviderRegistry,
+  StoreFileSystem,
+} from '@agentplex/providers';
 import type { GrantFileSystem } from './grants/server-grants.js';
 import type { BeaconNetwork } from './beacon/server-beacon.js';
 import type { StoreWatcher } from './store-watch/store-watch.js';
@@ -13,6 +18,7 @@ import type { ServerAbout } from './about/server-about.js';
 import type { MachineLoadReader } from './machine-load/machine-load.js';
 import type { WorkingTree } from './working-tree/working-tree.js';
 import type { TerminalManager } from './terminal/terminal-manager.js';
+import type { ProcessSignaller } from './sessions/process-signaller.js';
 import type { Clock, IdGenerator, Logger, Timers, TokenMinter } from '@agentplex/node-shared';
 import type { ProviderReadiness } from '@agentplex/protocol';
 
@@ -129,6 +135,10 @@ export interface RuntimeDependencies {
    * because its cap is configuration, and only `main` has read the config.
    */
   readonly terminals: TerminalManager;
+  /** The one way a retake ends a process this server did not start; `main` builds it. */
+  readonly signaller: ProcessSignaller;
+  /** Whether a pid is alive and when it started; `main` builds the real one. */
+  readonly processes: ProcessProbe;
   /**
    * The operation registry: every child that is not a pty.
    *
@@ -224,6 +234,8 @@ export async function startRuntime(
     providers,
     preflight,
     terminals,
+    signaller,
+    processes,
     operations,
     workingTree,
     machineLoad,
@@ -268,6 +280,8 @@ export async function startRuntime(
     providers,
     preflight,
     terminals,
+    signaller,
+    processes,
     drainMs: config.drainMs,
     operations,
     workingTree,

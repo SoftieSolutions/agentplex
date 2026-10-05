@@ -336,6 +336,9 @@ describe('a store that changes while it is being scanned', () => {
       start: () => {
         throw new Error('this controller starts nothing');
       },
+      retake: () => {
+        throw new Error('this controller retakes nothing');
+      },
       stop: () => {
         throw new Error('this controller stops nothing');
       },

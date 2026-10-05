@@ -610,6 +610,15 @@ describe('createCodexAdapter', () => {
   });
 });
 
+describe('createCodexAdapter.liveProcess', () => {
+  it('names no process, even for a session it lists: codex keeps no registry to verify one from', async () => {
+    const adapter = adapterOver({ files: { [PENDING_PATH]: PENDING_TOOL_CALL } });
+    const session = sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: PENDING_ID });
+
+    expect(await adapter.liveProcess(STORE, session)).toBeNull();
+  });
+});
+
 describe('createCodexAdapter.transcript', () => {
   const session = sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: PENDING_ID });
 
@@ -625,6 +634,7 @@ describe('createCodexAdapter.transcript', () => {
       transcript: {
         activities: [{ kind: 'command', text: "printf 'hello' > probe.txt", exitStatus: 1 }],
         olderExist: false,
+        turnsExist: true,
       },
     });
   });
@@ -657,7 +667,10 @@ describe('createCodexAdapter.transcript', () => {
 
     const read = await adapter.transcript({ store: STORE, session, limit: 0 });
 
-    expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: true } });
+    expect(read).toEqual({
+      ok: true,
+      transcript: { activities: [], olderExist: true, turnsExist: true },
+    });
   });
 
   it('does not answer with a rollout whose name merely contains the id', async () => {

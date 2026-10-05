@@ -504,6 +504,7 @@ describe('codexRolloutActivities', () => {
     expect(read).toEqual({
       activities: [{ kind: 'command', text: "printf 'hello' > probe.txt", exitStatus: 1 }],
       olderExist: false,
+      turnsExist: true,
     });
   });
 
@@ -531,16 +532,24 @@ describe('codexRolloutActivities', () => {
         { kind: 'command', text: 'pnpm test', exitStatus: 1 },
       ],
       olderExist: true,
+      turnsExist: true,
     });
   });
 
-  it('answers nothing for a rollout whose session ran no command', () => {
+  it('answers no activity but a turn for a rollout whose session ran no command', () => {
     // `codex-completed-turn.jsonl` is a question answered in words. Its only
     // completed items are a `UserMessage` and an `AgentMessage`, both redacted,
-    // so there is nothing this parser can honestly report.
+    // so there is nothing this parser can honestly report -- and it is still
+    // a conversation, which is a separate answer.
     const read = codexRolloutActivities(COMPLETED_TURN, 10);
 
-    expect(read).toEqual({ activities: [], olderExist: false });
+    expect(read).toEqual({ activities: [], olderExist: false, turnsExist: true });
+  });
+
+  it('counts a turn the way the session parser does, so the two never disagree', () => {
+    for (const captured of [COMPLETED_TURN, PENDING_TOOL_CALL, ABORTED_TURN, NO_TURNS]) {
+      expect(codexRolloutActivities(captured, 10).turnsExist).toBe(parseCodexRollout(captured).ok);
+    }
   });
 
   it('costs one unusable command itself and keeps the rest of the rollout', () => {
@@ -563,6 +572,7 @@ describe('codexRolloutActivities', () => {
     expect(read).toEqual({
       activities: [{ kind: 'command', text: "printf 'hello' > probe.txt", exitStatus: 1 }],
       olderExist: false,
+      turnsExist: true,
     });
   });
 

@@ -123,6 +123,21 @@ export interface ProviderAdapter {
   transcript(request: TranscriptRequest): Promise<TranscriptRead>;
 
   /**
+   * The process running this session that the adapter can verify right now,
+   * and what it is doing, or `null` when it can verify none.
+   *
+   * Asked before a server signals a process it did not start, so the bar is
+   * higher than discovery's and the answer is never a cached one: the
+   * provider's registry is re-read and the pid re-verified at the moment of
+   * the call, because a pid is stale the moment it is read and this one is
+   * about to be sent a signal. `null` covers every answer short of a verified
+   * process -- none running, a registry this server could not read in full, a
+   * pid it could not date, and every provider that keeps no registry -- because
+   * each of them is the same instruction to the caller: signal nothing.
+   */
+  liveProcess(store: StoreDescriptor, session: SessionRef): Promise<LiveProcess | null>;
+
+  /**
    * How this provider gets onto a machine, and how to tell what is already on
    * one.
    *
@@ -156,6 +171,33 @@ export interface ProviderDiscovery {
    * of quietly reporting nine.
    */
   readonly problems: readonly DiscoveryProblem[];
+}
+
+/**
+ * What a verified process is doing, in the words a retake decides on.
+ *
+ * `working` is a turn or a command in flight, which ending the process would
+ * cut off. `idle` is a process at its prompt, and `waiting` one blocked on a
+ * human -- a question or a permission dialog -- and ending either loses
+ * nothing the transcript has not already recorded. `unknown` is a process
+ * that did not say, which a caller must treat as `working`.
+ */
+export type ProcessPhase = 'working' | 'idle' | 'waiting' | 'unknown';
+
+/** A process an adapter verified runs a session; see `ProviderAdapter.liveProcess`. */
+export interface LiveProcess {
+  readonly pid: number;
+  readonly phase: ProcessPhase;
+  /**
+   * Epoch ms the process holding `pid` started, as the process probe dated it
+   * in the reading that verified it.
+   *
+   * What a caller that signals the pid holds it to afterwards. The registry is
+   * the process's own bookkeeping, and a process may drop its entry while it
+   * is still running, so "has it gone" is asked of the pid; a pid is reissued,
+   * so a live one is this process only while it still dates to this.
+   */
+  readonly startedAt: number;
 }
 
 /** What an adapter could tell about a session's process; see `DiscoveredSession.process`. */
@@ -374,6 +416,18 @@ export interface SessionTranscript {
    * presenting a tail as the whole.
    */
   readonly olderExist: boolean;
+  /**
+   * Whether the read found at least one turn of the session's conversation,
+   * counted the way the adapter's own parser counts one when discovery decides
+   * a file is a session.
+   *
+   * Separate from `activities` because an activity is a tool call and a turn
+   * need not make one: a session asked one question and answered in text has
+   * nothing to list and is still a conversation a resume can continue. Not a
+   * wire field: a screen draws the activities, and only a server deciding
+   * whether a session can be resumed asks this.
+   */
+  readonly turnsExist: boolean;
 }
 
 export interface DiscoveryProblem {

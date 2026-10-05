@@ -21,7 +21,7 @@ export { createFakeStoreFiles } from './fake-store-files.js';
 export type { FakeStoreFiles, FakeStoreFilesOptions } from './fake-store-files.js';
 
 export { createFakeProcessProbe } from './fake-process-probe.js';
-export type { FakeProcessProbeOptions } from './fake-process-probe.js';
+export type { FakeProcessProbe, FakeProcessProbeOptions } from './fake-process-probe.js';
 
 export {
   createFakeDetachedSpawner,

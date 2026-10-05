@@ -1,6 +1,7 @@
 import type { SessionRef, StoreId } from '@agentplex/protocol';
 import type {
   PauseOutcome,
+  RetakeSessionRequest,
   SessionController,
   SessionOutcome,
   StartSessionRequest,
@@ -27,6 +28,8 @@ export interface FakeSessionController extends SessionController {
   readonly starts: readonly StartSessionRequest[];
   /** Every stop it was asked for, in order. */
   readonly stops: readonly SessionRef[];
+  /** Every retake it was asked for, in order. It signals nothing and forks nothing. */
+  readonly retakes: readonly RetakeSessionRequest[];
   /** Every pause and every resume it was asked for, in order. */
   readonly pauses: readonly SessionRef[];
   readonly resumes: readonly SessionRef[];
@@ -41,7 +44,7 @@ export interface FakeSessionController extends SessionController {
   readonly scans: readonly StoreId[];
   /** Every transcript it was asked for, in order. */
   readonly transcripts: readonly TranscriptSessionRequest[];
-  /** What the next start and stop answer with. */
+  /** What the next start, retake and stop answer with. */
   answerWith(outcome: SessionOutcome): void;
   /** What the next pause and resume answer with. Its own shape, so its own setter. */
   answerPauseWith(outcome: PauseOutcome): void;
@@ -68,6 +71,7 @@ export function createFakeSessionController(
 ): FakeSessionController {
   const starts: StartSessionRequest[] = [];
   const stops: SessionRef[] = [];
+  const retakes: RetakeSessionRequest[] = [];
   const pauses: SessionRef[] = [];
   const resumes: SessionRef[] = [];
   const transcripts: TranscriptSessionRequest[] = [];
@@ -99,6 +103,11 @@ export function createFakeSessionController(
   return {
     async start(request: StartSessionRequest): Promise<SessionOutcome> {
       starts.push(request);
+      return outcome;
+    },
+
+    async retake(request: RetakeSessionRequest): Promise<SessionOutcome> {
+      retakes.push(request);
       return outcome;
     },
 
@@ -149,6 +158,10 @@ export function createFakeSessionController(
 
     get stops(): readonly SessionRef[] {
       return stops;
+    },
+
+    get retakes(): readonly RetakeSessionRequest[] {
+      return retakes;
     },
 
     get pauses(): readonly SessionRef[] {

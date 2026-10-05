@@ -13,11 +13,12 @@ import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { createFakeTimers, type FakeTimers } from '@agentplex/node-shared/testing';
 import { createProviderRegistry, type ProviderPreflight } from '@agentplex/providers';
 import {
+  createFakeProcessProbe,
   createFakeProcessRunner,
   createFakeStoreFiles,
+  type FakeProcessRunner,
   missingProvider,
   readyProvider,
-  type FakeProcessRunner,
 } from '@agentplex/providers/testing';
 import { createFakeGrantFiles } from './grants/fake-grant-files.js';
 import type { Launch, LaunchPlan } from '@agentplex/providers';
@@ -29,6 +30,7 @@ import { createFakeDataRoot } from './data-root/fake-data-root.js';
 import { createFakeDirectoryReader } from './directories/fake-directory-reader.js';
 import { createFakeWorkingTree } from './working-tree/fake-working-tree.js';
 import { createFakeTerminals, type FakeTerminals } from './terminal/fake-terminals.js';
+import { createFakeProcessSignaller } from './sessions/fake-process-signaller.js';
 import { createFakeMachineLoadReader } from './machine-load/fake-machine-probe.js';
 import { createFakeProjectFiles, type FakeProjectFiles } from './projects/fake-project-files.js';
 import { createFakeStoreWatcher, type FakeStoreWatcher } from './store-watch/fake-store-watcher.js';
@@ -204,6 +206,8 @@ async function start(
     providers: createProviderRegistry([]),
     preflight,
     terminals: terminals.terminals,
+    signaller: createFakeProcessSignaller(),
+    processes: createFakeProcessProbe(),
     machineLoad: createFakeMachineLoadReader(),
     about: ABOUT,
     operations: createOperationRegistry(runner),

@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { serverAddressSchema, type HubId } from '@agentplex/protocol';
-import { createFakeProcessRunner, createFakeStoreFiles } from '@agentplex/providers/testing';
+import {
+  createFakeProcessProbe,
+  createFakeProcessRunner,
+  createFakeStoreFiles,
+} from '@agentplex/providers/testing';
 import {
   parseServerGrants,
   serverGrantsPath,
@@ -35,6 +39,7 @@ import {
   type DialTarget,
 } from '../../../apps/hub/src/servers/server-handshake.js';
 import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * The `--role=both` box, end to end, across the change that introduced grants.
@@ -83,6 +88,8 @@ async function startServer({
   grantFiles: FakeGrantFiles;
 }): Promise<SessionServer> {
   return startSessionServer({
+    signaller: createFakeProcessSignaller(),
+    processes: createFakeProcessProbe(),
     logger,
     ids,
     host: '127.0.0.1',

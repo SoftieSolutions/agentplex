@@ -414,6 +414,7 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
 export function codexRolloutActivities(contents: string, limit: number): SessionTranscript {
   const activities: Activity[] = [];
   let dropped = false;
+  let turnsExist = false;
 
   for (const raw of contents.split('\n')) {
     if (raw.trim() === '') continue;
@@ -432,7 +433,13 @@ export function codexRolloutActivities(contents: string, limit: number): Session
     if (!line.success || line.data.type !== 'event_msg') continue;
 
     const completed = itemCompletedSchema.safeParse(line.data.payload);
-    if (!completed.success) continue;
+    if (!completed.success) {
+      // A turn is a `task_started`, as the parser above counts one, whether or
+      // not the turn ran anything this list could show.
+      const event = turnEventSchema.safeParse(line.data.payload);
+      if (event.success && event.data.type === 'task_started') turnsExist = true;
+      continue;
+    }
 
     const activity = commandActivity(completed.data.item);
     if (activity === null) continue;
@@ -447,7 +454,7 @@ export function codexRolloutActivities(contents: string, limit: number): Session
     }
   }
 
-  return { activities, olderExist: dropped };
+  return { activities, olderExist: dropped, turnsExist };
 }
 
 /**

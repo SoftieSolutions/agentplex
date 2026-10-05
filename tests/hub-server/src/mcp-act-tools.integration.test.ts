@@ -17,10 +17,11 @@ import { serveServerEnd } from './server-end.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
+  createFakeProcessProbe,
   createFakeProviderAdapter,
-  readyProvider,
   createFakeProviderFiles,
   createFakeStoreFiles,
+  readyProvider,
 } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
 import { createSessionController } from '../../../apps/server/src/sessions/session-control.js';
@@ -56,6 +57,7 @@ import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-lo
 import { createDirectoryBrowser } from '../../../apps/server/src/directories/directory-browse.js';
 import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
 import { createProjects, type Projects } from '../../../apps/hub/src/projects/projects.js';
+import { createFakeProcessSignaller } from '../../../apps/server/src/sessions/fake-process-signaller.js';
 
 /**
  * The act tools, from an agent's call to a pty on another machine and back.
@@ -188,6 +190,9 @@ async function start(
         terminals,
         machineLoad: createFakeMachineLoadReader(),
         sessions: createSessionController({
+          signaller: createFakeProcessSignaller(),
+          processes: createFakeProcessProbe(),
+          timers: createFakeTimers(),
           stores,
           providers: createProviderRegistry([
             createFakeProviderAdapter({

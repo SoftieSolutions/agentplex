@@ -389,6 +389,7 @@ function activityOf(last: z.infer<typeof turnSchema>): Activity | null {
 export function claudeTranscriptActivities(contents: string, limit: number): SessionTranscript {
   const activities: Activity[] = [];
   let dropped = false;
+  let turnsExist = false;
 
   for (const line of contents.split('\n')) {
     if (line.trim() === '') continue;
@@ -406,6 +407,9 @@ export function claudeTranscriptActivities(contents: string, limit: number): Ses
     const turn = turnSchema.safeParse(entry);
     if (!turn.success || turn.data.isSidechain === true) continue;
 
+    // The parser above's count of a turn, whatever the turn did: one that
+    // answered in text and called nothing is still conversation.
+    turnsExist = true;
     for (const activity of turnActivities(turn.data)) {
       activities.push(activity);
       // Bounded as it goes rather than sliced at the end, so a transcript of
@@ -418,7 +422,7 @@ export function claudeTranscriptActivities(contents: string, limit: number): Ses
     }
   }
 
-  return { activities, olderExist: dropped };
+  return { activities, olderExist: dropped, turnsExist };
 }
 
 /**
