@@ -194,18 +194,8 @@ export function paneState(input: PaneStateInput): PaneState {
   let retakeRefusal: string | null = null;
   if (retake !== null) {
     switch (retake.kind) {
-      case 'waiting': {
-        if (row.descriptor.process === 'running') return outside(row, state, { kind: 'retaking' });
-        const machine = state === null ? row.source : machineLabel(state, row);
-        return {
-          kind: 'starting',
-          send: false,
-          words:
-            `the ${row.descriptor.provider} that was running this session on ${machine} has ` +
-            'stopped; it is being started here',
-          action: null,
-        };
-      }
+      case 'waiting':
+        return retakeOwed(row, state);
       case 'answered':
         return startLapsed
           ? afterLapse(row, state, retake.answer, 'retake')
@@ -288,6 +278,36 @@ export function paneState(input: PaneStateInput): PaneState {
       };
     }
   }
+}
+
+/**
+ * A retake owed its answer, said in what the row can vouch for.
+ *
+ * Only a reachable row that says nothing runs it says the outside process
+ * stopped. A machine out of reach reported last before the retake could do
+ * anything, and a row that cannot tell cannot tell either way: neither is
+ * word that the process the retake was sent to end has ended.
+ */
+function retakeOwed(row: SessionRow, state: MachineState | null): PaneState {
+  const machine = state === null ? row.source : machineLabel(state, row);
+  const { provider, process } = row.descriptor;
+  let words: string;
+  if (!row.reachable) {
+    words =
+      `${machine}, the machine the retake went to, cannot be reached: what became of the ` +
+      `${provider} running this session there is unknown until that machine reports again`;
+  } else if (process === 'running') {
+    return outside(row, state, { kind: 'retaking' });
+  } else if (process === 'unknown') {
+    words =
+      `the retake went to ${machine} and is owed its answer; agentplex cannot tell whether ` +
+      'anything is running this session until that answer comes';
+  } else {
+    words =
+      `the ${provider} that was running this session on ${machine} has stopped; it is being ` +
+      'started here';
+  }
+  return { kind: 'starting', send: false, words, action: null };
 }
 
 /** A start the hub answered, waiting for its machine to report it held. */

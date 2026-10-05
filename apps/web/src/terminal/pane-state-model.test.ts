@@ -74,6 +74,8 @@ const fixAuth = rowIn(populated, 'store-agentplex', 'session-fix-auth');
 const docsSweep = rowIn(populated, 'store-universe', 'session-docs-sweep');
 const sharedNotes = rowIn(shared, 'store-shared', 'session-shared-notes');
 const staleBench = rowIn(stale, 'store-universe', 'session-bench-tokenizer');
+/** Nothing runs it, by the last word of a machine now out of reach. */
+const staleLora = rowIn(stale, 'store-universe', 'session-train-lora');
 /** Run outside agentplex at its prompt, rather than working as `cliRun` is. */
 const cliAtPrompt = rowIn(retakeable, 'store-agentplex', 'session-cli-run');
 const cliRetaken = rowIn(retaken, 'store-agentplex', 'session-cli-run');
@@ -386,6 +388,34 @@ describe('taking over a session run outside agentplex', () => {
     // run would otherwise call that a session somebody stopped.
     const state = paneState(input({ ran: true, retake: asked }));
     expect(state).toMatchObject({ kind: 'starting', send: false, action: null });
+  });
+
+  it('says the outside claude stopped while the retake is owed only when nothing runs it', () => {
+    const state = paneState(input({ row: cliQuit, state: outsideQuit, retake: asked }));
+    expect(state).toMatchObject({ kind: 'starting', send: false, action: null });
+    if (state.kind !== 'starting') return;
+    expect(state.words).toContain(
+      'the claude that was running this session on mbp-robert has stopped',
+    );
+  });
+
+  it('claims nothing stopped while the retake is owed and nothing can tell what runs it', () => {
+    const state = paneState(input({ row: sharedNotes, state: shared, retake: asked }));
+    expect(state).toMatchObject({ kind: 'starting', send: false, action: null });
+    if (state.kind !== 'starting') return;
+    expect(state.words).not.toContain('stopped');
+    expect(state.words).toContain('cannot tell');
+  });
+
+  it('claims nothing stopped while the retake is owed and its machine is out of reach', () => {
+    for (const row of [staleLora, staleBench]) {
+      const state = paneState(input({ row, state: stale, retake: asked }));
+      expect(state).toMatchObject({ kind: 'starting', send: false, action: null });
+      if (state.kind !== 'starting') return;
+      expect(state.words).not.toContain('stopped');
+      expect(state.words).toContain('gpu-box-01');
+      expect(state.words).toContain('cannot be reached');
+    }
   });
 
   it('keeps the hub’s own words when the retake was refused, and offers it again', () => {
