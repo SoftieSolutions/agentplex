@@ -381,6 +381,9 @@ export function createTerminalStreams({
         return { ok: false, problem: 'that session is paused; resume it to type into it' };
       }
       terminal.run.write(data);
+      // After the write and only for one that was taken: a refused keystroke
+      // is not somebody using the session. The idle stop reads this.
+      terminals.noteInput(terminal.terminalId);
       return { ok: true };
     },
 

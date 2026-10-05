@@ -572,6 +572,34 @@ describe('createTerminalStreams input and resize', () => {
   });
 });
 
+describe('createTerminalStreams input stamp', () => {
+  it('stamps the terminal when a write reaches the pty', () => {
+    // What the idle stop reads: somebody typing is somebody using the session.
+    let now = 1_756_000_000_000;
+    const { terminals, streams } = harness({ clock: { now: () => now } });
+    const terminalId = spawn(terminals);
+    terminals.bind(terminalId, SESSION_A);
+    expect(terminals.terminal(terminalId)?.lastInputAt).toBeNull();
+
+    now += 600_000;
+    expect(streams.write(bySession(SESSION_A), 'y').ok).toBe(true);
+
+    expect(terminals.terminal(terminalId)?.lastInputAt).toBe(now);
+  });
+
+  it('does not stamp a write it refused', () => {
+    const { terminals, streams } = harness();
+    const terminalId = spawn(terminals);
+    terminals.bind(terminalId, SESSION_A);
+    terminals.observe({ storeId: STORE.storeId, sessionId: SESSION_A }, 'idle');
+    terminals.pause(terminalId);
+
+    expect(streams.write(bySession(SESSION_A), 'ls\r').ok).toBe(false);
+
+    expect(terminals.terminal(terminalId)?.lastInputAt).toBeNull();
+  });
+});
+
 describe('createTerminalStreams start provenance', () => {
   it('reports a start with no session id yet, so a pending pane has something to be', () => {
     const { terminals, streams } = harness();

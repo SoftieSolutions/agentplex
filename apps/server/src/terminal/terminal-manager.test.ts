@@ -883,6 +883,41 @@ describe('createTerminalManager shutdown', () => {
   });
 });
 
+describe('createTerminalManager input stamp', () => {
+  it('has seen no input on a terminal nobody has typed into', () => {
+    const { manager } = harness();
+    const terminalId = open(manager);
+
+    expect(manager.terminal(terminalId)?.lastInputAt).toBeNull();
+    expect(manager.holder(sessionRef('session-a'))).toBeUndefined();
+  });
+
+  it('stamps the time of the last input, on the terminal and on its holder', () => {
+    // What the idle stop reads: keys typed through agentplex are somebody
+    // still using the session, whatever the provider says about its turn.
+    const { manager, clock } = harness();
+    const session = sessionRef('session-a');
+    const opened = manager.resume(session, launch);
+    if (!opened.ok) throw new Error(opened.problem);
+    const { terminalId } = opened.terminal;
+
+    clock.advance(60_000);
+    manager.noteInput(terminalId);
+    expect(opened.terminal.lastInputAt).toBe(START + 60_000);
+
+    clock.advance(30_000);
+    manager.noteInput(terminalId);
+    expect(manager.terminal(terminalId)?.lastInputAt).toBe(START + 90_000);
+    expect(manager.holder(session)?.lastInputAt).toBe(START + 90_000);
+  });
+
+  it('ignores input noted against a terminal it does not hold', () => {
+    const { manager } = harness();
+
+    expect(() => manager.noteInput('run-unknown')).not.toThrow();
+  });
+});
+
 describe('createTerminalManager seal', () => {
   it('refuses a spawn and a resume once it is sealed, and starts nothing', () => {
     const { manager, factory } = harness();

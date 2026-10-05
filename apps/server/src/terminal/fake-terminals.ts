@@ -37,6 +37,11 @@ export interface FakeTerminalsOptions {
    * hand, and a stop or a shutdown waits on it. See `FakeChild.diesOn`.
    */
   readonly diesOn?: readonly PtySignal[];
+  /**
+   * The manager's and the supervisor's clock. Absent, one that does not move:
+   * only the rules about time care, and a test of one of those passes its own.
+   */
+  readonly clock?: Clock;
 }
 
 /** A clock that does not move: only the eviction rules care, and they set their own. */
@@ -52,9 +57,10 @@ export function createFakeTerminals(options: FakeTerminalsOptions = {}): FakeTer
     options.diesOn === undefined ? {} : { child: { diesOn: options.diesOn } },
   );
   const timers = options.timers ?? createFakeTimers();
+  const clock = options.clock ?? fixedClock;
   const supervisor = createPtySupervisor({
     pty: factory,
-    clock: fixedClock,
+    clock,
     ids: countingIds(),
     environment: {},
     // Omitted rather than passed as undefined: the workspace is on
@@ -63,7 +69,7 @@ export function createFakeTerminals(options: FakeTerminalsOptions = {}): FakeTer
   });
   const terminals = createTerminalManager({
     supervisor,
-    clock: fixedClock,
+    clock,
     timers,
     ...(options.cap === undefined ? {} : { cap: options.cap }),
   });
