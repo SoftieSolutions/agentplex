@@ -39,10 +39,17 @@ import { machineLabel } from './presentation.js';
  * process, offered for a retake, whatever this pane's last start came to and
  * whatever ended before -- a refusal, a lost start, a lapse or an ending is
  * history once a claude runs the session in somebody's own terminal, and the
- * Resume or Try again each of them offers would be a second process on its
- * transcript. Then what became of this pane's last start. Then the session
- * ending, which never resumes on its own -- a session somebody just stopped
- * is not one to restart behind their back. That covers every session this
+ * Resume or Try again each of them offers is at best a press that cannot
+ * succeed. On a store one machine mounts, the server that would start it
+ * refuses a resume over a pid it verified running outside agentplex; on a
+ * store several machines mount, the hub may route it to one that cannot see
+ * that pid, and it starts a second process on the transcript. Then a row out
+ * of reach, which offers nothing whatever came before, as `afterLapse` does:
+ * the last word of a machine that is gone cannot vouch that nothing runs the
+ * session there, and a refusal is kept as words with nothing to press. Then
+ * what became of this pane's last start. Then the session ending, which
+ * never resumes on its own -- a session somebody just stopped is not one to
+ * restart behind their back. That covers every session this
  * page has seen run since it loaded, held or not, in a pane or only in the
  * sidebar: a pane resumes on its own only a session no state has shown held
  * or running the whole time, and one that stopped at any point before or
@@ -101,12 +108,17 @@ export type PaneState =
   | { readonly kind: 'lost'; readonly words: string; readonly action: 'try-again' }
   /** The session ended under this pane, or stopped after a pane saw it run. */
   | { readonly kind: 'ended'; readonly words: string; readonly action: 'resume' }
-  /** Every machine that reported it is out of reach. */
+  /**
+   * Every machine that reported it is out of reach. `refusal` is this pane's
+   * last start or retake refusal, if it had one: still said, with nothing to
+   * press under it.
+   */
   | {
       readonly kind: 'unreachable';
       readonly machine: string;
       readonly words: string;
       readonly action: null;
+      readonly refusal: PaneRefusal | null;
     }
   /**
    * A process runs it that agentplex does not hold. `retake` is the offer to
@@ -146,6 +158,12 @@ export type PaneState =
  * row's word is a courtesy and not the guard -- a `shell` session reads as not
  * working here, is offered, and comes back refused in the server's words.
  */
+/** A refusal of this pane's start, in the refusing side's own words, and which kind of start it was. */
+export interface PaneRefusal {
+  readonly of: 'resume' | 'retake';
+  readonly words: string;
+}
+
 export type RetakeOffer =
   | { readonly kind: 'available' }
   | { readonly kind: 'working-elsewhere'; readonly words: string }
@@ -215,10 +233,24 @@ export function paneState(input: PaneStateInput): PaneState {
 
   // Nothing of this pane's is in flight, so a process outside agentplex
   // running it now beats whatever this pane's last start came to and
-  // whatever ended before: Resume or Try again over it is a second process.
+  // whatever ended before: Resume or Try again over it is refused by its own
+  // machine on a single-machine store, and on a shared store may reach a
+  // machine that cannot see that process and start a second one.
   const process = row.descriptor.process;
   const retakeRefusal = retake?.kind === 'refused' ? retake.words : null;
   if (row.reachable && process === 'running') return runningOutside(row, state, retakeRefusal);
+
+  // A row out of reach offers nothing, whatever came before, as afterLapse
+  // does: a process its machine last reported may still run it there.
+  if (!row.reachable) {
+    const refusal: PaneRefusal | null =
+      retakeRefusal !== null
+        ? { of: 'retake', words: retakeRefusal }
+        : start?.kind === 'refused'
+          ? { of: 'resume', words: start.words }
+          : null;
+    return unreachable(row, state, refusal);
+  }
 
   if (retake?.kind === 'answered') return afterLapse(row, state, retake.answer, 'retake');
   if (start !== null) {
@@ -246,8 +278,6 @@ export function paneState(input: PaneStateInput): PaneState {
       action: 'resume',
     };
   }
-
-  if (!row.reachable) return unreachable(row, state);
 
   switch (process) {
     case 'running':
@@ -336,8 +366,9 @@ function awaitingHold(answer: Answer<'session-started'>, state: MachineState | n
  * -- whose outside process is gone too -- is a session that stopped, to
  * resume, because trying a retake again has nothing left to end.
  *
- * `paneState` reads a reachable row's outside process before any lapse, so
- * the running case here is that same rule, kept so the lapse is whole alone.
+ * `paneState` reads a row out of reach and a reachable row's outside process
+ * before any lapse, so those two cases here are the same rules, kept so the
+ * lapse is whole alone.
  */
 function afterLapse(
   row: SessionRow,
@@ -345,7 +376,7 @@ function afterLapse(
   answer: Answer<'session-started'>,
   was: 'resume' | 'retake',
 ): PaneState {
-  if (!row.reachable) return unreachable(row, state);
+  if (!row.reachable) return unreachable(row, state, null);
   switch (row.descriptor.process) {
     case 'running':
       return runningOutside(row, state, null);
@@ -364,7 +395,11 @@ function afterLapse(
 }
 
 /** A session whose machine is out of reach: nothing to attach to and nothing to press. */
-function unreachable(row: SessionRow, state: MachineState | null): PaneState {
+function unreachable(
+  row: SessionRow,
+  state: MachineState | null,
+  refusal: PaneRefusal | null,
+): PaneState {
   const machine = state === null ? row.source : machineLabel(state, row);
   return {
     kind: 'unreachable',
@@ -373,6 +408,7 @@ function unreachable(row: SessionRow, state: MachineState | null): PaneState {
       `${machine}, the machine that reported this session, cannot be reached: ` +
       'nothing can attach to it or resume it until that machine is back',
     action: null,
+    refusal,
   };
 }
 

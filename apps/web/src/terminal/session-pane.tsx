@@ -363,6 +363,19 @@ function PaneStateNotice({
           {pane.words}
         </Text>
       )}
+      {pane.kind === 'unreachable' && pane.refusal !== null && (
+        <Text
+          fz={12}
+          {...(pane.refusal.of === 'resume'
+            ? { 'data-pane-refusal': true }
+            : { 'data-pane-retake-refusal': true })}
+          style={{ color: colorForToneText('blocked', scheme) }}
+        >
+          {pane.refusal.of === 'resume'
+            ? `the hub would not resume this session: ${pane.refusal.words}`
+            : `this session was not taken over: ${pane.refusal.words}`}
+        </Text>
+      )}
       {pane.kind === 'cannot-tell' && (
         <Text fz={12} style={{ color: colorForToneText('needs-you', scheme) }}>
           {pane.warning}

@@ -2537,6 +2537,26 @@ describe('a pane on a session nothing holds', () => {
     expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
   });
 
+  it('keeps the hub’s refusal but offers no Try again once the machine is out of reach', async () => {
+    const connected = await connectedTo(hubFrames.machineStatePopulated);
+    await mount(pane(connected.hub, 'store-universe', 'session-train-lora'));
+    const [start] = ofType(sentSince(connected), 'session-start');
+    if (start === undefined) throw new Error('no start was sent');
+    await deliver(connected.socket, addressedTo(hubFrames.refusal, start.id));
+    expect(shown()?.getAttribute('data-pane-state')).toBe('refused');
+
+    await deliver(connected.socket, hubFrames.machineStateStale);
+
+    expect(shown()?.getAttribute('data-pane-state')).toBe('unreachable');
+    const words = container.querySelector<HTMLElement>('[data-pane-refusal]');
+    expect(words?.textContent).toBe(
+      'the hub would not resume this session: no server the hub is paired with has that store mounted',
+    );
+    expect(words?.style.color).toBe(rgb(colorForToneText('blocked', 'dark')));
+    expect(action()).toBeNull();
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+  });
+
   it('says the session ended under it, offers one control, and never resends on its own', async () => {
     const connected = await connectedTo(hubFrames.machineStateResumed);
     await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));

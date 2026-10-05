@@ -319,7 +319,83 @@ describe('paneState', () => {
 
   it('says a session on a machine it cannot reach cannot be acted on, and offers nothing', () => {
     const state = paneState(input({ row: staleBench, state: stale }));
-    expect(state).toMatchObject({ kind: 'unreachable', machine: 'gpu-box-01', action: null });
+    expect(state).toMatchObject({
+      kind: 'unreachable',
+      machine: 'gpu-box-01',
+      action: null,
+      refusal: null,
+    });
+  });
+
+  describe('a machine out of reach offers nothing, whatever this pane’s last start came to', () => {
+    // staleBench was last reported running and unheld by a machine now out of
+    // reach: whatever runs it there may still run it, and a start routed to
+    // another machine on a shared store cannot see that process.
+    const unreachableBench = {
+      kind: 'unreachable',
+      machine: 'gpu-box-01',
+      action: null,
+    } as const;
+    const refusedStart = followUp(ASKED, answered(hubFrames.refusal), 'session-started');
+    const refusedRetake = followUp(ASKED, answered(hubFrames.refusalRetake), 'session-started');
+    const idle = followUp(ASKED, NO_ANSWERS, 'session-started');
+
+    it('keeps a refused start’s words, without Try again', () => {
+      expect(paneState(input({ start: refusedStart, row: staleBench, state: stale }))).toEqual({
+        ...unreachableBench,
+        words: expect.stringContaining('cannot be reached') as string,
+        refusal: {
+          of: 'resume',
+          words: 'no server the hub is paired with has that store mounted',
+        },
+      });
+    });
+
+    it('offers no Try again for a lost start', () => {
+      expect(paneState(input({ start: idle, row: staleBench, state: stale }))).toMatchObject({
+        ...unreachableBench,
+        refusal: null,
+      });
+    });
+
+    it('offers no Resume for a terminal that ended, or a session it saw run', () => {
+      for (const overrides of [{ terminal: { ended: 'session-ended' as const } }, { ran: true }]) {
+        for (const row of [staleBench, staleLora]) {
+          expect(paneState(input({ ...overrides, row, state: stale }))).toMatchObject({
+            ...unreachableBench,
+            refusal: null,
+          });
+        }
+      }
+    });
+
+    it('keeps a refused retake’s words, without Resume', () => {
+      for (const terminal of [null, { ended: 'session-ended' as const }]) {
+        expect(
+          paneState(input({ retake: refusedRetake, terminal, row: staleBench, state: stale })),
+        ).toMatchObject({
+          ...unreachableBench,
+          refusal: {
+            of: 'retake',
+            words:
+              'nothing is running that session, so there is nothing to retake; resume it instead',
+          },
+        });
+      }
+    });
+
+    it('offers no Resume for a lost retake over a terminal that ended', () => {
+      expect(
+        paneState(
+          input({
+            retake: idle,
+            terminal: { ended: 'session-ended' },
+            row: staleBench,
+            state: stale,
+          }),
+        ),
+      ).toMatchObject({ ...unreachableBench, refusal: null });
+    });
   });
 
   it('says where a session runs that something outside agentplex is running', () => {
