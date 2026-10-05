@@ -3877,6 +3877,114 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const machineStateOutsideQuit = await captureState(resumableHub.hub);
     await resumableHub.cleanup();
 
+    // A pane offering to take over a session somebody runs in their own
+    // terminal. `cli-run` is running outside agentplex and at its prompt this
+    // time -- a status other than working, which is the one a pane offers the
+    // retake on -- beside `spike-wasm`, which nothing runs. The retake of
+    // spike-wasm is the hub's own refusal, in the words a pane repeats: a
+    // pane drawn off an older state can still offer the button after the
+    // outside claude went. Then the retake of cli-run, answered as a start is
+    // and preceded by the held reading, which is what a pane re-subscribes on.
+    const retakeReport = (held: boolean): StoreReport => ({
+      storeId: resumableStore,
+      sessions: [
+        descriptor(
+          'store-agentplex',
+          'session-spike-wasm',
+          'claude',
+          'idle',
+          START - 120 * MINUTE,
+          '/Users/robert/code/agentplex',
+          'spike-wasm',
+        ),
+        {
+          // `descriptor` reads a process off a working status only; a claude
+          // at its prompt in somebody's terminal is running and not working.
+          ...descriptor(
+            'store-agentplex',
+            'session-cli-run',
+            'claude',
+            'awaiting-input',
+            START - 2 * MINUTE,
+            '/Users/robert/code/agentplex',
+            'cli-run',
+          ),
+          process: 'running',
+        },
+      ],
+      holding: held ? [hold('session-cli-run', true)] : [],
+    });
+    const retakeController = createFakeSessionController({
+      reports: [retakeReport(false)],
+      outcome: {
+        ok: true,
+        storeId: resumableStore,
+        sessionId: sessionIdSchema.parse('session-cli-run'),
+        terminalId: 'terminal-mbp-retaken',
+      },
+    });
+    const retakeHub = await startFleetHub(
+      new Map<string, Machine>([
+        [
+          'mbp-robert.example',
+          {
+            serverId: 'server-mbp',
+            providers: [readyProvider('claude'), readyProvider('codex')],
+            stores: [{ storeId: resumableStore, path: '/Users/robert/code/agentplex' }],
+            reports: [retakeReport(false)],
+            controller: retakeController,
+          },
+        ],
+      ]),
+      [{ label: 'mbp-robert', host: 'mbp-robert.example' }],
+      new Map(),
+    );
+    await until(
+      () =>
+        retakeHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        sessionCount(retakeHub.hub) === 2,
+      'the retake machine to connect and report',
+    );
+    const machineStateRetakeable = await captureState(retakeHub.hub);
+    const retaker = await openClient(retakeHub.hub);
+    retaker.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    await retaker.framesReceived(2);
+    retaker.send({
+      type: 'session-retake',
+      id: 2,
+      storeId: 'store-agentplex',
+      sessionId: 'session-spike-wasm',
+    });
+    await until(
+      () => retaker.received.some((text) => labelFor(text) === 'refusal'),
+      () => `the retake of a session nothing runs to be refused: ${retaker.received.join('\n')}`,
+    );
+    const refusalRetake = firstFrame(retaker, 'refusal');
+    // Set before the retake, as the resume's is: the scan the server takes
+    // before answering is the held reading.
+    retakeController.setReport(retakeReport(true));
+    retaker.send({
+      type: 'session-retake',
+      id: 3,
+      storeId: 'store-agentplex',
+      sessionId: 'session-cli-run',
+    });
+    await until(
+      () =>
+        retaker.received.some((text) => labelFor(text) === 'sessionStarted') &&
+        retakeHub.hub.state
+          .snapshot()
+          .stores.some((view) =>
+            view.sessions.some(
+              (row) => row.descriptor.sessionId === 'session-cli-run' && row.holder !== null,
+            ),
+          ),
+      () => `the retake to be answered and the session held: ${retaker.received.join('\n')}`,
+    );
+    const sessionStartedRetaken = firstFrame(retaker, 'sessionStarted');
+    const machineStateRetaken = await captureState(retakeHub.hub);
+    await retakeHub.cleanup();
+
     const captured = new Map<string, string>();
     for (const text of [
       ...first.received,
@@ -3981,6 +4089,10 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('machineStateSharedResumed', machineStateSharedResumed);
     captured.set('machineStateSpawnExited', machineStateSpawnExited);
     captured.set('machineStateOutsideQuit', machineStateOutsideQuit);
+    captured.set('machineStateRetakeable', machineStateRetakeable);
+    captured.set('refusalRetake', refusalRetake);
+    captured.set('sessionStartedRetaken', sessionStartedRetaken);
+    captured.set('machineStateRetaken', machineStateRetaken);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)
