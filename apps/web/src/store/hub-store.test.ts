@@ -1934,6 +1934,7 @@ describe('a start the hub named', () => {
       ran: false,
       start: id,
       lapsed: false,
+      retake: false,
     });
   });
 
@@ -1964,6 +1965,7 @@ describe('a start the hub named', () => {
       ran: false,
       start: id,
       lapsed: true,
+      retake: false,
     });
   });
 });

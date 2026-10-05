@@ -22,6 +22,9 @@ import {
   headerWords,
   paneState,
   resumeCommand,
+  resumeFollowUp,
+  retakeCommand,
+  retakeFollowUp,
   type PaneStateInput,
 } from './pane-state-model.js';
 
@@ -54,6 +57,8 @@ const stale = stateFrom(hubFrames.machineStateStale);
 const shared = stateFrom(hubFrames.machineStateShared);
 const resumable = stateFrom(hubFrames.machineStateResumable);
 const resumed = stateFrom(hubFrames.machineStateResumed);
+const retakeable = stateFrom(hubFrames.machineStateRetakeable);
+const retaken = stateFrom(hubFrames.machineStateRetaken);
 
 function rowIn(state: MachineState, storeId: string, sessionId: string): SessionRow {
   const row = findSessionRow(state, sessionRefSchema.parse({ storeId, sessionId }));
@@ -67,6 +72,9 @@ const fixAuth = rowIn(populated, 'store-agentplex', 'session-fix-auth');
 const docsSweep = rowIn(populated, 'store-universe', 'session-docs-sweep');
 const sharedNotes = rowIn(shared, 'store-shared', 'session-shared-notes');
 const staleBench = rowIn(stale, 'store-universe', 'session-bench-tokenizer');
+/** Run outside agentplex at its prompt, rather than working as `cliRun` is. */
+const cliAtPrompt = rowIn(retakeable, 'store-agentplex', 'session-cli-run');
+const cliRetaken = rowIn(retaken, 'store-agentplex', 'session-cli-run');
 
 const ASKED = 7 as FrameId;
 
@@ -82,6 +90,7 @@ function input(overrides: Partial<PaneStateInput>): PaneStateInput {
     row: spikeWasm,
     state: resumable,
     start: null,
+    retake: null,
     terminal: null,
     ran: false,
     startLapsed: false,
@@ -247,6 +256,126 @@ describe('paneState', () => {
     expect(state).toMatchObject({ kind: 'unsupported', provider: 'codex', action: null });
     if (state.kind !== 'unsupported') return;
     expect(state.reasons).toEqual([expect.stringMatching(/^gpu-box-01 cannot run codex: /)]);
+  });
+});
+
+describe('taking over a session run outside agentplex', () => {
+  const asked = followUp(
+    ASKED,
+    { replies: new Map(), outstanding: new Set([ASKED]) },
+    'session-started',
+  );
+
+  it('offers the retake, disabled with the reason, while the outside claude works', () => {
+    const state = paneState(input({ row: cliRun }));
+    expect(state).toMatchObject({ kind: 'outside', retake: { kind: 'working-elsewhere' } });
+    if (state.kind !== 'outside' || state.retake.kind !== 'working-elsewhere') return;
+    expect(state.retake.words).toContain('working');
+    expect(state.retakeLabel).toBe('Stop the claude on mbp-robert and run this session here');
+  });
+
+  it('offers it, pressable, for any status but working', () => {
+    expect(paneState(input({ row: cliAtPrompt, state: retakeable }))).toMatchObject({
+      kind: 'outside',
+      machine: 'mbp-robert',
+      retake: { kind: 'available' },
+      retakeLabel: 'Stop the claude on mbp-robert and run this session here',
+    });
+  });
+
+  it('says it is retaking while the retake is owed an answer, then is held once it is', () => {
+    const state = paneState(input({ row: cliAtPrompt, state: retakeable, retake: asked }));
+    expect(state).toMatchObject({ kind: 'outside', retake: { kind: 'retaking' } });
+    if (state.kind !== 'outside') return;
+    expect(state.retakeLabel).toBe('stopping it, then starting here');
+
+    // The machine reports the hold before it answers, and either way round
+    // the holder is what ends it.
+    const yes = followUp(ASKED, answered(hubFrames.sessionStartedRetaken), 'session-started');
+    expect(paneState(input({ row: cliRetaken, state: retaken, retake: asked })).kind).toBe('held');
+    expect(paneState(input({ row: cliRetaken, state: retaken, retake: yes })).kind).toBe('held');
+  });
+
+  it('waits for the hold once answered, and gives a way out if none comes', () => {
+    const yes = followUp(ASKED, answered(hubFrames.sessionStartedRetaken), 'session-started');
+    const waiting = paneState(input({ row: cliAtPrompt, state: retakeable, retake: yes }));
+    expect(waiting).toMatchObject({ kind: 'starting', send: false });
+    if (waiting.kind !== 'starting') return;
+    expect(waiting.words).toContain('mbp-robert');
+    expect(
+      paneState(input({ row: cliAtPrompt, state: retakeable, retake: yes, startLapsed: true })),
+    ).toMatchObject({ kind: 'lapsed', action: 'try-again' });
+  });
+
+  it('is not an ending while the outside claude has gone and the retake is still owed', () => {
+    // The process the retake ended is gone before the one it starts is held:
+    // nothing runs the session for that moment, and a pane that has seen it
+    // run would otherwise call that a session somebody stopped.
+    const state = paneState(input({ ran: true, retake: asked }));
+    expect(state).toMatchObject({ kind: 'starting', send: false, action: null });
+  });
+
+  it('keeps the hub’s own words when the retake was refused, and offers it again', () => {
+    const refused = followUp(ASKED, answered(hubFrames.refusalRetake), 'session-started');
+    expect(
+      paneState(input({ row: cliAtPrompt, state: retakeable, retake: refused, ran: true })),
+    ).toMatchObject({
+      kind: 'outside',
+      retake: {
+        kind: 'refused',
+        words: 'nothing is running that session, so there is nothing to retake; resume it instead',
+      },
+      retakeLabel: 'Stop the claude on mbp-robert and run this session here',
+    });
+  });
+
+  it('says the session stopped, not refused, when the outside claude went after a refusal', () => {
+    const refused = followUp(ASKED, answered(hubFrames.refusalRetake), 'session-started');
+    expect(paneState(input({ retake: refused, ran: true }))).toMatchObject({ kind: 'ended' });
+  });
+
+  it('offers it again when no answer will ever come for the retake', () => {
+    const idle = followUp(ASKED, NO_ANSWERS, 'session-started');
+    expect(paneState(input({ row: cliAtPrompt, state: retakeable, retake: idle }))).toMatchObject({
+      kind: 'outside',
+      retake: { kind: 'available' },
+    });
+  });
+
+  it('offers no retake when nothing can say whether a process runs it', () => {
+    const state = paneState(input({ row: sharedNotes, state: shared }));
+    expect(state.kind).toBe('cannot-tell');
+    expect(state).not.toHaveProperty('retake');
+  });
+});
+
+describe('retakeCommand', () => {
+  it('names the session and nothing else', () => {
+    expect(retakeCommand(cliAtPrompt.descriptor)).toEqual({
+      type: 'session-retake',
+      storeId: 'store-agentplex',
+      sessionId: 'session-cli-run',
+    });
+  });
+});
+
+describe('the start a pane reads out of resume memory', () => {
+  const answers = answered(hubFrames.refusalRetake);
+
+  it('is the retake when the start was one, and the resume otherwise', () => {
+    const retake = { ran: true, start: ASKED, lapsed: false, retake: true };
+    expect(retakeFollowUp(retake, answers)).toMatchObject({ kind: 'refused' });
+    expect(resumeFollowUp(retake, answers)).toBeNull();
+
+    const resume = { ...retake, retake: false };
+    expect(resumeFollowUp(resume, answers)).toMatchObject({ kind: 'refused' });
+    expect(retakeFollowUp(resume, answers)).toBeNull();
+  });
+
+  it('is neither when no start is out', () => {
+    const none = { ran: false, start: null, lapsed: false, retake: false };
+    expect(resumeFollowUp(none, answers)).toBeNull();
+    expect(retakeFollowUp(none, answers)).toBeNull();
   });
 });
 

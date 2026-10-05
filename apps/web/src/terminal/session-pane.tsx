@@ -17,7 +17,7 @@ import {
   type TerminalSize,
 } from '@agentplex/protocol';
 
-import { followUp, refusalTo } from '../store/answers.js';
+import { refusalTo } from '../store/answers.js';
 import type { HubStore } from '../store/hub-store.js';
 import { resumeMemoryOf } from '../store/resume-memory.js';
 import { terminalKey } from '../store/terminals.js';
@@ -79,6 +79,8 @@ import {
   headerWords,
   paneState,
   resumeCommand,
+  resumeFollowUp,
+  retakeFollowUp,
   type PaneState,
 } from './pane-state-model.js';
 
@@ -487,8 +489,8 @@ export function SessionPane({
   const pane: PaneState = paneState({
     row,
     state,
-    start:
-      memory.start === null ? null : followUp(memory.start, snapshot.answers, 'session-started'),
+    start: resumeFollowUp(memory, snapshot.answers),
+    retake: retakeFollowUp(memory, snapshot.answers),
     terminal: endedHere ? { ended: 'session-ended' } : terminal,
     ran: held.everHeld || memory.ran,
     startLapsed: memory.lapsed,
