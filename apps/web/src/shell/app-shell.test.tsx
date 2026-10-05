@@ -818,7 +818,7 @@ describe('the shell', () => {
   it('lists no start and draws no pane for it while the connection that carried it is down', async () => {
     const timers = storeOn(Date.now);
     const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
-    const socket = await mount(Date.now, layoutStore);
+    const socket = await mount(Date.now, null, layoutStore);
     await chooseSessionsTab();
     const id = await placedStart(socket);
     expect(pendingRowNames()).toHaveLength(1);
@@ -861,7 +861,7 @@ describe('the shell', () => {
     let clock = 1_000_000;
     storeOn(() => clock);
     const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
-    const socket = await mount(() => clock, layoutStore);
+    const socket = await mount(() => clock, null, layoutStore);
     await chooseSessionsTab();
     await placedStart(socket);
     expect(pendingRowNames()).toHaveLength(1);
@@ -904,7 +904,7 @@ describe('the shell', () => {
     let clock = 1_000_000;
     storeOn(() => clock);
     const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
-    const socket = await mount(() => clock, layoutStore);
+    const socket = await mount(() => clock, null, layoutStore);
     await chooseSessionsTab();
     const id = await placedStart(socket);
     await relayStart(socket, id);
@@ -940,7 +940,7 @@ describe('the shell', () => {
     let clock = 1_000_000;
     storeOn(() => clock);
     const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
-    const socket = await mount(() => clock, layoutStore);
+    const socket = await mount(() => clock, null, layoutStore);
     await chooseSessionsTab();
     const id = await placedStart(socket);
     await relayStart(socket, id);
@@ -963,7 +963,7 @@ describe('the shell', () => {
     let clock = 1_000_000;
     storeOn(() => clock);
     const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
-    const socket = await mount(() => clock, layoutStore);
+    const socket = await mount(() => clock, null, layoutStore);
     await chooseSessionsTab();
     const id = await placedStart(socket);
     clock += 1_000;
