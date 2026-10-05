@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_DRAIN_MS,
+  DEFAULT_IDLE_STOP_MINUTES,
   DEFAULT_TERMINAL_CAP,
   HUB_SETTINGS,
   SERVER_SETTINGS,
@@ -8,6 +9,7 @@ import {
   readDataPath,
   readDrainSeconds,
   readHost,
+  readIdleStopMinutes,
   readIdentityPath,
   readLocalServer,
   readLogLevel,
@@ -107,6 +109,38 @@ describe('readDrainSeconds', () => {
     for (const raw of ['-1', 'soon', '2.5']) {
       expect(parsed((into) => readDrainSeconds(raw, into)).problems).toHaveLength(1);
     }
+  });
+});
+
+describe('readIdleStopMinutes', () => {
+  it('defaults to a quarter of an hour, read in minutes and carried in milliseconds', () => {
+    expect(DEFAULT_IDLE_STOP_MINUTES).toBe(15);
+    expect(readIdleStopMinutes(undefined, [])).toBe(15 * 60_000);
+  });
+
+  it('reads a whole number of minutes', () => {
+    expect(readIdleStopMinutes('30', [])).toBe(30 * 60_000);
+  });
+
+  it('refuses zero, a negative, and anything that is not a whole number of minutes', () => {
+    // There is no off value. Zero would read as "never", and it would also
+    // read as "at once" -- one of the two is a server that stops every
+    // session the moment its turn ends, so neither is accepted.
+    for (const raw of ['0', '-1', 'x', '2.5']) {
+      const { value, problems } = parsed((into) => readIdleStopMinutes(raw, into));
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain(
+        '--idle-stop-minutes must be a whole number of minutes, at least 1',
+      );
+      expect(value).toBe(15 * 60_000);
+    }
+  });
+
+  it('is in the server table under its own flag and variable', () => {
+    expect(SERVER_SETTINGS.idleStopMinutes).toEqual({
+      flag: '--idle-stop-minutes',
+      env: 'AGENTPLEX_IDLE_STOP_MINUTES',
+    });
   });
 });
 

@@ -134,6 +134,7 @@ const serverOnly: ServerConfig = {
   timezone: undefined,
   terminalCap: 8,
   drainMs: 15_000,
+  idleStopMs: 15 * 60_000,
   // Quiet, like the default. This file is about what starts and stops, and a
   // beacon would be a second thing coming up with the server.
   announce: false,

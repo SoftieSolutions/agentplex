@@ -283,6 +283,37 @@ describe('loadServerConfig terminal cap', () => {
   });
 });
 
+describe('loadServerConfig idle stop', () => {
+  function idleStopMs(argv: string[], env: Record<string, string | undefined> = {}): unknown {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok ? result.config.idleStopMs : undefined;
+  }
+
+  it('defaults to fifteen minutes', () => {
+    expect(idleStopMs([])).toBe(15 * 60_000);
+  });
+
+  it('is read in minutes, from a flag or the environment', () => {
+    expect(idleStopMs(['--idle-stop-minutes=30'])).toBe(30 * 60_000);
+    expect(idleStopMs([], { AGENTPLEX_IDLE_STOP_MINUTES: '5' })).toBe(5 * 60_000);
+  });
+
+  it('refuses zero, a negative and a word, each with the message', () => {
+    for (const raw of ['0', '-1', 'x']) {
+      const problems = expectProblems(load([`--idle-stop-minutes=${raw}`]));
+      expect(problems).toEqual([
+        `--idle-stop-minutes must be a whole number of minutes, at least 1, not ${JSON.stringify(raw)}`,
+      ]);
+    }
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(serverUsage()).toContain('--idle-stop-minutes');
+    expect(serverUsage()).toContain('AGENTPLEX_IDLE_STOP_MINUTES');
+  });
+});
+
 describe('loadServerConfig drain budget', () => {
   function drainMs(argv: string[], env: Record<string, string | undefined> = {}): unknown {
     const result = load(argv, env);

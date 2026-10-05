@@ -72,6 +72,18 @@ export const DEFAULT_TERMINAL_CAP = 8;
 export const DEFAULT_DRAIN_MS = 15_000;
 
 /**
+ * How long, absent configuration, a held claude may sit at its prompt before
+ * the server stops it, in minutes.
+ *
+ * Long enough that a person who stepped away to read a diff comes back to the
+ * session they left, short enough that a forgotten one does not hold a
+ * terminal, and its slot under the cap, until the next restart.
+ */
+export const DEFAULT_IDLE_STOP_MINUTES = 15;
+
+const MS_PER_MINUTE = 60_000;
+
+/**
  * What the server's own paths fall back to under the account's home.
  *
  * The same directory an install already owns: a plain `install.sh` run puts
@@ -180,6 +192,12 @@ export const SERVER_SETTINGS = {
    * `--announce=false`, which a presence flag could never express.
    */
   announce: { flag: '--announce', env: 'AGENTPLEX_ANNOUNCE' },
+  /**
+   * In minutes, because nobody thinks about an idle session in seconds. It
+   * applies only to a session the server holds whose provider reports a turn
+   * that is over; it has no off value, so a server always has one.
+   */
+  idleStopMinutes: { flag: '--idle-stop-minutes', env: 'AGENTPLEX_IDLE_STOP_MINUTES' },
 } as const satisfies Record<string, Setting>;
 
 /** The hub's table, built the same way and for the same reasons. */
@@ -326,6 +344,29 @@ export function readDrainSeconds(raw: string | undefined, problems: string[]): n
     return DEFAULT_DRAIN_MS;
   }
   return seconds * 1000;
+}
+
+/**
+ * The idle stop: a whole number of minutes, at least one. Minutes in,
+ * milliseconds out, the way the drain budget is seconds in.
+ *
+ * Zero is refused rather than read as "off". It reads as "never" to one
+ * operator and as "at once" to the next, and the second is a server that stops
+ * every session the moment its turn ends -- the opposite of what the first one
+ * meant, discovered by losing a session. Nobody has asked for a server that
+ * keeps an idle agent forever, so there is no word for it; a large number says
+ * it plainly enough.
+ */
+export function readIdleStopMinutes(raw: string | undefined, problems: string[]): number {
+  if (raw === undefined) return DEFAULT_IDLE_STOP_MINUTES * MS_PER_MINUTE;
+  const minutes = Number(raw);
+  if (!Number.isInteger(minutes) || minutes < 1) {
+    problems.push(
+      `${SERVER_SETTINGS.idleStopMinutes.flag} must be a whole number of minutes, at least 1, not ${JSON.stringify(raw)}`,
+    );
+    return DEFAULT_IDLE_STOP_MINUTES * MS_PER_MINUTE;
+  }
+  return minutes * MS_PER_MINUTE;
 }
 
 /**

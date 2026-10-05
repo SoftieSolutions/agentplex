@@ -7,6 +7,7 @@ import {
   readDrainSeconds,
   readFlags,
   readHost,
+  readIdleStopMinutes,
   readIdentityPath,
   readLogLevel,
   readPort,
@@ -204,6 +205,15 @@ export interface ServerConfig {
    * nothing; pairing remains the user typing this server's token into the hub.
    */
   readonly announce: boolean;
+  /**
+   * How long a claude this server holds may sit at its prompt, its turn over,
+   * before the server stops it, in milliseconds. Read in minutes.
+   *
+   * Only that one state counts. A turn in progress, a shell command, and a
+   * question waiting on its answer are all an agent someone is still using or
+   * about to; the stop is for the session somebody forgot.
+   */
+  readonly idleStopMs: number;
 }
 
 export type ServerConfigResult =
@@ -272,6 +282,7 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
   const terminalCap = readTerminalCap(read(SETTINGS.terminalCap), problems);
   const drainMs = readDrainSeconds(read(SETTINGS.drainSeconds), problems);
   const announce = readAnnounce(read(SETTINGS.announce), problems);
+  const idleStopMs = readIdleStopMinutes(read(SETTINGS.idleStopMinutes), problems);
   const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), env, problems);
   const serverToken = readServerToken(read(SETTINGS.serverToken), problems);
   const dataPath = readDataPath(read(SETTINGS.dataPath), env, problems);
@@ -296,6 +307,7 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
       terminalCap,
       drainMs,
       announce,
+      idleStopMs,
     },
   };
 }

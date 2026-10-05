@@ -88,6 +88,7 @@ const config: ServerConfig = {
   timezone: undefined,
   terminalCap: 8,
   drainMs: 15_000,
+  idleStopMs: 15 * 60_000,
   announce: false,
 };
 
