@@ -138,6 +138,11 @@ interface WorldOptions {
   readonly codex?: boolean;
   /** A claude outside agentplex, registered with this status, with no terminal here. */
   readonly outside?: string;
+  /**
+   * A claude outside agentplex resumed on the held session itself, registered
+   * with this status and written after the held one, so the registry's newest.
+   */
+  readonly rival?: string;
   /** Report through a real hub audience with nobody in it, in place of a recorder. */
   readonly audience?: boolean;
 }
@@ -147,13 +152,18 @@ async function world(options: WorldOptions = {}): Promise<World> {
     string,
     unknown
   >;
-  const entry = (pid: number, sessionId: string, status: string): string =>
+  const entry = (
+    pid: number,
+    sessionId: string,
+    status: string,
+    statusUpdatedAt = REGISTERED_AT,
+  ): string =>
     JSON.stringify({
       ...fixture,
       pid,
       sessionId,
       startedAt: REGISTERED_AT,
-      statusUpdatedAt: REGISTERED_AT,
+      statusUpdatedAt,
       status,
     });
 
@@ -162,6 +172,9 @@ async function world(options: WorldOptions = {}): Promise<World> {
     disk[entryPath(HELD_PID)] = entry(HELD_PID, SESSION, options.status);
   if (options.outside !== undefined) {
     disk[entryPath(OUTSIDE_PID)] = entry(OUTSIDE_PID, OUTSIDE, options.outside);
+  }
+  if (options.rival !== undefined) {
+    disk[entryPath(OUTSIDE_PID)] = entry(OUTSIDE_PID, SESSION, options.rival, START);
   }
   // A fresh fake over the record on every read, so a rewrite shows up at the
   // next sweep the way Claude Code's own write would.
@@ -387,6 +400,19 @@ describe('createIdleStop', () => {
     expect(signaller.sent).toEqual([]);
     expect(held()).toEqual([]);
     expect(records.filter((record) => record.message === 'session stopped')).toEqual([]);
+  });
+
+  it('never stops a held claude because another claude on the same session is idle', async () => {
+    // Somebody ran `claude --resume` on the held session in their own terminal
+    // and left it at its prompt. Its entry is the newer, so it is the one the
+    // registry answers for the session; the claude this server holds is busy.
+    const { sweepAt, held, signaller, records } = await world({ status: 'busy', rival: 'idle' });
+
+    for (const minute of [0, 15, 30, 60]) await sweepAt(minute);
+
+    expect(held()).toEqual([]);
+    expect(signaller.sent).toEqual([]);
+    expect(idleStops(records)).toEqual([]);
   });
 
   it('sweeps with no hub connected, and reports to nobody', async () => {

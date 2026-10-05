@@ -40,7 +40,10 @@ import type { SessionOutcome } from './session-control.js';
  *
  * **Only what this server holds.** It walks the terminal table, never the
  * registry: a claude somebody runs in their own terminal is in the same
- * registry and is not this server's to end.
+ * registry and is not this server's to end. One somebody resumed on a held
+ * session is in it under that session's id, and can be the entry the registry
+ * answers with; a phase counts only when its pid is the held terminal's own,
+ * and any other is "could not tell".
  *
  * It runs whether or not a hub is connected. A session nobody is watching is
  * the one most likely to have been forgotten.
@@ -139,7 +142,11 @@ export function createIdleStop({
     if (stopped || !asked.ok) return;
 
     const now = clock.now();
-    if (asked.process?.phase !== 'idle') {
+    // The registry answers for the session, not for this terminal: its newest
+    // entry may be a claude somebody resumed on it in their own terminal.
+    // Only the phase of the process this pty runs counts.
+    const ours = asked.process?.pid === terminal.run.pid ? asked.process : null;
+    if (ours?.phase !== 'idle') {
       watch.idleSince = null;
       return;
     }
