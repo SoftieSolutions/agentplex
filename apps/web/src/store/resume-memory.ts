@@ -81,6 +81,11 @@ export function rememberRan(memories: ResumeMemories, ref: Addressed): ResumeMem
 /**
  * What a command this page sent says about a session: a start that names one
  * is that session's start, and a stop is a session somebody here watched run.
+ *
+ * A retake is that session's start too. It ends in a resume, answered with
+ * `session-started` and then by the hold, so it waits for the hold and lapses
+ * without one exactly as a start does. It keeps `ran`: the page saw the
+ * outside process run the session, which is what made it a retake.
  */
 export function rememberCommand(
   memories: ResumeMemories,
@@ -97,6 +102,8 @@ export function rememberCommand(
         lapsed: false,
       }));
     }
+    case 'session-retake':
+      return withMemory(memories, command, (memory) => ({ ...memory, start: id, lapsed: false }));
     case 'session-stop':
       return rememberRan(memories, command);
     default:
