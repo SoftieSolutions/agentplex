@@ -152,7 +152,9 @@ export interface LayoutStore {
    *
    * The same three rules again, and one more that is this call's own: the pane
    * stops being pending the moment the hub says which session that start
-   * became, and the store is what notices -- see `rebindPendingPanes`.
+   * became, and the store is what notices -- see `rebindPendingPanes`. A start
+   * already named by then is shown as that session, so coming back to its
+   * address focuses the pane on it rather than opening a second.
    */
   showPendingSession(startId: FrameId): void;
   /** Moves focus to the pane across the boundary. Never saves. */
@@ -288,6 +290,13 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     update({ focus: empty.path });
   }
 
+  /** Which session a start became, by the hub's own answer, or `null` while unnamed. */
+  function sessionOfStart(startId: FrameId): SessionRef | null {
+    const answer = hub.getSnapshot();
+    const watch = answer.terminals.get(terminalKey({ by: 'start', startId })) ?? null;
+    return pendingSession(answer.starts.get(startId) ?? null, watch);
+  }
+
   /**
    * Every pending pane whose start has since been named, become its session.
    *
@@ -305,11 +314,9 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
   function rebindPendingPanes(): void {
     const waiting = pendingStarts(snapshot.tree);
     if (waiting.length === 0) return;
-    const answer = hub.getSnapshot();
     let tree = snapshot.tree;
     for (const startId of waiting) {
-      const watch = answer.terminals.get(terminalKey({ by: 'start', startId })) ?? null;
-      const session = pendingSession(answer.starts.get(startId) ?? null, watch);
+      const session = sessionOfStart(startId);
       if (session === null) continue;
       tree = rebindPending(tree, startId, session);
     }
@@ -324,7 +331,12 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
   }
 
   /** The showing rules, shared by the live call and the deferred one. */
-  function show(content: PaneContent): void {
+  function show(asked: PaneContent): void {
+    // A start that is already named is shown as its session. Opened pending,
+    // it would rebind on the next hub change to a session another pane may
+    // already show, and nothing would merge the two.
+    const named = asked.type === 'pending' ? sessionOfStart(asked.startId) : null;
+    const content: PaneContent = named === null ? asked : { type: 'session', session: named };
     const showing = findPaneShowing(snapshot.tree, content);
     if (showing !== null) {
       // Already on screen: this is a focus change, which never saves.

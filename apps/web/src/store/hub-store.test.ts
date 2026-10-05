@@ -71,6 +71,9 @@ const START: HubCommand = {
   project: null,
 };
 
+/** What a start of START says it asked for, as the store files it. */
+const START_ASKED = { storeId: STORE_ID, provider: 'claude', project: null } as const;
+
 const STOP: HubCommand = {
   type: 'session-stop',
   storeId: SESSION.storeId,
@@ -103,6 +106,9 @@ function harness(overrides: Partial<HubStoreDependencies> = {}) {
     createSocket: (ticket) => sockets.create(ticket),
     timers,
     frameIds: createFrameIds(),
+    // A clock that never moves unless a test moves it, so a stamp is a number
+    // the test can name.
+    now: () => 0,
     ...overrides,
   });
   return { store, sockets, timers };
@@ -1730,7 +1736,13 @@ describe('terminal frames from the hub', () => {
     // pane reading its entry back as missing would go back to saying it was
     // asking about a session that is running.
     expect(starts.has(answered.id)).toBe(false);
-    expect(starts.get(waiting.id)).toEqual({ started: null, refusal: null, named: null });
+    expect(starts.get(waiting.id)).toEqual({
+      asked: START_ASKED,
+      started: null,
+      refusal: null,
+      named: null,
+      sentOn: 1,
+    });
 
     // The exemption yields to the bound, which is the half that is not a
     // preference: with nothing answered left to drop, the oldest goes anyway,
@@ -1765,14 +1777,17 @@ describe('terminal frames from the hub', () => {
       message: 'no server the hub is paired with has that store mounted',
     });
     expect(snapshot.starts.get(succeeding.id)).toEqual({
+      asked: START_ASKED,
       started: {
         replyTo: succeeding.id,
         storeId: 'store-agentplex',
         sessionId: null,
         server: 'registration-mbp-robert',
+        receivedAt: 0,
       },
       refusal: null,
       named: null,
+      sentOn: 1,
     });
   });
 
@@ -1809,6 +1824,17 @@ describe('a start the hub named', () => {
     expect(sent.id).toBe(2);
     return { h, socket, id: sent.id };
   }
+
+  it('files what the start asked for the moment it is accepted, and keeps it past the yes', async () => {
+    const { h, socket, id } = await spawned();
+    // A sidebar row for a start that has no session yet has nothing else to
+    // name it by: the provider, the store and the project are only in the ask.
+    expect(h.store.getSnapshot().starts.get(id)?.asked).toEqual(START_ASKED);
+
+    socket.deliver(hubFrames.sessionStarted);
+
+    expect(h.store.getSnapshot().starts.get(id)?.asked).toEqual(START_ASKED);
+  });
 
   it('files the session against the start, beside the yes it already had', async () => {
     const { h, socket, id } = await spawned();
@@ -1897,6 +1923,69 @@ describe('a start the hub named', () => {
       start: id,
       lapsed: true,
     });
+  });
+});
+
+describe('which connection a start can still be heard on', () => {
+  it('counts the welcomes, so a fresh connection is a different number', async () => {
+    const h = harness();
+    expect(h.store.getSnapshot().connection).toBe(0);
+    const { socket } = await establish(h);
+    expect(h.store.getSnapshot().connection).toBe(1);
+
+    socket.drop();
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+
+    expect(h.store.getSnapshot().connection).toBe(2);
+  });
+
+  it('files a start under the connection it went out on, and keeps it there past a reconnect', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const sent = h.store.sendCommand(START);
+    if (!sent.accepted) throw new Error(sent.reason);
+    expect(h.store.getSnapshot().starts.get(sent.id)?.sentOn).toBe(1);
+
+    // The hub drops a socket's start handles when it closes, so the naming
+    // this start was owed can only ever have come down the first connection.
+    socket.drop();
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+
+    expect(h.store.getSnapshot().starts.get(sent.id)?.sentOn).toBe(1);
+  });
+
+  it('files a queued start under the connection that finally carries it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.drop();
+    const queued = h.store.sendCommand(START);
+    if (!queued.accepted) throw new Error(queued.reason);
+    expect(queued.delivery).toBe('queued');
+    // Not sent anywhere yet, so on no connection: the hub has not heard of it.
+    expect(h.store.getSnapshot().starts.get(queued.id)?.sentOn).toBeNull();
+
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+
+    expect(h.store.getSnapshot().starts.get(queued.id)?.sentOn).toBe(2);
+  });
+
+  it('stamps the yes with the injected clock, the one the bound is read against', async () => {
+    let clock = 1_000;
+    const h = harness({ now: () => clock });
+    const { socket } = await establish(h);
+    const sent = h.store.sendCommand(START);
+    if (!sent.accepted) throw new Error(sent.reason);
+    clock = 4_500;
+
+    socket.deliver(hubFrames.sessionStarted);
+
+    expect(h.store.getSnapshot().starts.get(sent.id)?.started?.receivedAt).toBe(4_500);
   });
 });
 

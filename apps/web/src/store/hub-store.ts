@@ -227,6 +227,11 @@ export interface HubStoreDependencies {
    * the store; the returned function unsubscribes. None means no wakes.
    */
   readonly wake?: (fire: () => void) => () => void;
+  /**
+   * The wall clock a start's yes is stamped with, in milliseconds. The app
+   * takes `Date.now`; a test pins it, so a start's age is a number it chose.
+   */
+  readonly now?: () => number;
 }
 
 /**
@@ -258,6 +263,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     terminalInput: INITIAL_TERMINAL,
     answers: NO_ANSWERS,
     starts: new Map(),
+    connection: 0,
     approvalPolicies: new Map(),
     catalogue: null,
     graphDocuments: new Map(),
@@ -334,7 +340,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     update,
   });
   const graphs = createGraphReplies({ snapshot: () => snapshot, update });
-  const sessions = createSessionReplies({ update });
+  const sessions = createSessionReplies({ update, now: dependencies.now ?? Date.now });
 
   function queueView(overflowed: string | null): CommandQueueView {
     return { queued: queue.length, capacity, overflowed };
@@ -409,6 +415,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           phase: 'connected',
           // The state kept is the last connection's until this one's lands.
           machineStateCurrent: false,
+          // Counted before the queue is flushed below, so what goes out now is
+          // filed under the connection it actually went out on.
+          connection: snapshot.connection + 1,
           hubId: frame.hubId,
           // Taken from every welcome and not only the first. A hub that was
           // restarted with push wired in is a hub whose next welcome says so,
@@ -677,10 +686,15 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   function flushQueue(): void {
     const wire = connection.live();
     if (wire === null) return;
-    for (const { id, command } of queue.splice(0)) {
+    const flushed = queue.splice(0);
+    for (const { id, command } of flushed) {
       pending.add(id);
       wire.send(encodeClientFrame({ ...command, id }));
     }
+    sessions.sent(
+      flushed.map(({ id }) => id),
+      snapshot.connection,
+    );
     update({ commandQueue: queueView(null) });
   }
 
@@ -767,7 +781,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           answers: answersWith(snapshot.answers.replies),
           resumes: rememberCommand(snapshot.resumes, command, id),
         };
-        sessions.asked(command, id);
+        sessions.asked(command, id, snapshot.connection);
         wire.send(encodeClientFrame({ ...command, id }));
         return { accepted: true, id, delivery: 'sent' };
       }
@@ -785,7 +799,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         answers: answersWith(snapshot.answers.replies),
         resumes: rememberCommand(snapshot.resumes, command, id),
       });
-      sessions.asked(command, id);
+      sessions.asked(command, id, null);
       return { accepted: true, id, delivery: 'queued' };
     },
 

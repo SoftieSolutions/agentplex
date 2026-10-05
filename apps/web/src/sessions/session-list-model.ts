@@ -451,11 +451,12 @@ const PLACE_SEPARATOR = '·';
  * with a blank in front of it is the screen claiming an association the hub
  * did not report. A store id is coarser than a project name and it is true.
  *
- * One helper because two surfaces draw this line -- the sidebar's rows and the
- * card's meta line -- and two copies of a fallback are two chances for one of
- * them to forget it and draw a bare dot.
+ * One helper because three surfaces draw this line -- the sidebar's rows, its
+ * rows for starts not yet named, and the card's meta line -- and three copies
+ * of a fallback are three chances for one of them to forget it and draw a bare
+ * dot. Hence the narrow parameter: a start has a place and no session.
  */
-export function placeLabel(item: SessionListItem): string {
+export function placeLabel(item: Pick<SessionListItem, 'project' | 'storeId' | 'machine'>): string {
   return `${item.project ?? item.storeId} ${PLACE_SEPARATOR} ${item.machine}`;
 }
 

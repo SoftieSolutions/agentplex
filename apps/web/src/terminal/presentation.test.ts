@@ -148,6 +148,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     terminalInput: { discarded: 0, notice: null },
     answers: NO_ANSWERS,
     starts: new Map(),
+    connection: 1,
     approvalPolicies: new Map(),
     catalogue: null,
     graphDocuments: new Map(),

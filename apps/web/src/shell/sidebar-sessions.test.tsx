@@ -2,7 +2,15 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
+import {
+  frameIdSchema,
+  parseHubFrame,
+  parseTextFrame,
+  storeIdSchema,
+  type FrameId,
+  type MachineState,
+} from '@agentplex/protocol';
+import type { PendingRow } from '../sessions/pending-rows-model.js';
 import {
   createSessionFiltersStore,
   type SessionFiltersStore,
@@ -56,6 +64,18 @@ function stateFrom(text: string): MachineState {
 }
 
 const populated = stateFrom(hubFrames.machineStatePopulated);
+/** A fleet with a machine on it and no session in any store. */
+const sessionless = stateFrom(hubFrames.machineStateWithServer);
+
+/** A start the hub accepted and the provider has not named. */
+const PENDING: PendingRow = {
+  startId: frameIdSchema.parse(7),
+  provider: 'claude',
+  storeId: storeIdSchema.parse('store-agentplex'),
+  project: null,
+  machine: 'mbp-robert',
+  words: 'starting',
+};
 
 /** The moment every age on these renders is measured against. */
 const NOW = 1_756_000_000_000;
@@ -81,7 +101,17 @@ describe('a sidebar session row', () => {
     container.remove();
   });
 
-  function draw(): void {
+  interface DrawOptions {
+    readonly state?: MachineState;
+    readonly pending?: readonly PendingRow[];
+    readonly onOpenPending?: (startId: FrameId) => void;
+  }
+
+  function draw({
+    state = populated,
+    pending = [],
+    onOpenPending = () => {},
+  }: DrawOptions = {}): void {
     act(() => {
       root = createRoot(container);
       root.render(
@@ -91,7 +121,9 @@ describe('a sidebar session row', () => {
           defaultColorScheme="dark"
         >
           <SidebarSessions
-            state={populated}
+            state={state}
+            pending={pending}
+            onOpenPending={onOpenPending}
             filters={filters}
             machine={null}
             scheme="dark"
@@ -181,5 +213,72 @@ describe('a sidebar session row', () => {
     expect(names()).toEqual([]);
     expect(words()).toContain('no session here matches the narrowing');
     expect(words()).not.toContain('no sessions in any store yet');
+  });
+
+  /** Every row, in the order the column draws them: a session's name, or `start`. */
+  function order(): string[] {
+    return [...container.querySelectorAll<HTMLElement>('a[aria-label], button[aria-label]')].map(
+      (row) =>
+        row.tagName === 'BUTTON'
+          ? 'start'
+          : (row.getAttribute('aria-label') ?? '').replace('open ', ''),
+    );
+  }
+
+  it('draws a start before any session exists, instead of the empty sentence', () => {
+    draw({ state: sessionless, pending: [PENDING] });
+
+    const row = container.querySelector<HTMLButtonElement>('button[aria-label]');
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain('claude');
+    expect(row?.textContent).toContain('store-agentplex');
+    expect(row?.textContent).toContain('mbp-robert');
+    expect(row?.textContent).toContain('starting');
+    expect(words()).not.toContain('no sessions in any store yet');
+  });
+
+  it('opens the pending pane, not an address, when the start row is pressed', () => {
+    const opened: FrameId[] = [];
+    draw({ state: sessionless, pending: [PENDING], onOpenPending: (id) => opened.push(id) });
+
+    const row = container.querySelector<HTMLButtonElement>('button[aria-label]');
+    expect(row?.tagName).toBe('BUTTON');
+    act(() => {
+      row?.click();
+    });
+
+    expect(opened).toEqual([PENDING.startId]);
+  });
+
+  it('names each start by its place as well, as the row shows it', () => {
+    // Two claude starts on one machine, in two projects: a name that stopped
+    // at the machine would be one name for two different rows.
+    const other: PendingRow = { ...PENDING, startId: frameIdSchema.parse(9), project: 'docs' };
+    draw({ state: sessionless, pending: [other, PENDING] });
+
+    const rows = [...container.querySelectorAll<HTMLButtonElement>('button[aria-label]')];
+    const names = rows.map((row) => row.getAttribute('aria-label') ?? '');
+    expect(names).toEqual([
+      'open the claude session starting in docs · mbp-robert',
+      'open the claude session starting in store-agentplex · mbp-robert',
+    ]);
+    // Label in name: the place line a sighted person reads is in what a voice
+    // user says and a screen reader announces.
+    for (const row of rows) {
+      const place = row.lastElementChild?.textContent ?? '';
+      expect(place).not.toBe('');
+      expect(row.getAttribute('aria-label')).toContain(place);
+    }
+  });
+
+  it('puts a start between the sessions waiting on somebody and the rest', () => {
+    draw({ pending: [PENDING] });
+
+    const drawn = order();
+    const start = drawn.indexOf('start');
+    // The fixture's two needs-you sessions, then the start, then the rest.
+    expect(drawn.slice(0, start)).toEqual(['migrate-db-v9', 'docs-sweep']);
+    expect(start).toBe(2);
+    expect(drawn.length).toBeGreaterThan(start + 1);
   });
 });

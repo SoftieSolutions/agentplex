@@ -1,5 +1,6 @@
 import { useState, type JSX } from 'react';
 import type {
+  FrameId,
   Layout,
   MachineState,
   NodeId,
@@ -15,6 +16,7 @@ import { GraphScreen } from '../graphs/graph-screen.js';
 import { NewGraphForm } from '../graphs/new-graph-form.js';
 import { appLayoutStore } from '../layout/app-layout.js';
 import { LayoutScreen } from '../layout/layout-screen.js';
+import type { LayoutStore } from '../layout/layout-store.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
 import { useMockSwitch } from '../mock/use-mock-mode.js';
 import { CommandPalette } from '../palette/palette.js';
@@ -26,8 +28,11 @@ import { listSessions } from '../sessions/session-list-model.js';
 import { SessionListScreen } from '../sessions/session-list-screen.js';
 import { SettingsRoute } from '../settings/settings-route.js';
 import type { HubStore } from '../store/hub-store.js';
+import { terminalKey } from '../store/terminals.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
+import { startShown } from '../terminal/pending-pane-model.js';
 import { useSessionRoute } from '../terminal/session-route.js';
+import { useStartRoute } from '../terminal/start-route.js';
 import { Box, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { AttentionBell } from './attention-bell.js';
@@ -101,7 +106,8 @@ export interface AppShellProps {
   readonly tokens: TokenStore;
   /**
    * The clock, injected so a test can pin what the bell's panel says about how
-   * long a session has been waiting. The same seam `SessionListScreen` takes
+   * long a session has been waiting, and when a start's address stops drawing
+   * a pane for a start whose name is overdue. The same seam `SessionListScreen` takes
    * for its own ages, for the same reason: a wall clock is the one thing in
    * here a test cannot supply, and every other reading the shell draws comes
    * off a frame.
@@ -114,6 +120,12 @@ export interface AppShellProps {
    * The page's is this device's, and the wide frame is the only reader.
    */
   readonly sidebarWidth?: SidebarWidth;
+  /**
+   * The pane arrangement, injected so a test can read panes off its own hub
+   * store. The page's is `appLayoutStore`, one per page and bound to the first
+   * hub store that asked for it -- which in a suite is some earlier test's.
+   */
+  readonly layoutStore?: LayoutStore;
 }
 
 /**
@@ -128,6 +140,7 @@ export function AppShell({
   tokens,
   now = Date.now,
   sidebarWidth = browserSidebarWidth,
+  layoutStore,
 }: AppShellProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
   const snapshot = useHubSnapshot(hub);
@@ -138,6 +151,22 @@ export function AppShell({
   const sessionRef = useSessionRoute();
   const doc = useDocRoute();
   const graph = useGraphRoute();
+  // Read only when this tab holds the start and has something true to show
+  // for it: the id is this tab's own name for it, so a reloaded or pasted
+  // address names nothing, and a start whose connection has closed or that is
+  // long unnamed is one the hub can no longer answer. Each falls to the list rather
+  // than to a pane that would wait on an answer nobody owes it.
+  const start = useStartRoute();
+  const pending =
+    start !== null &&
+    startShown(
+      snapshot.starts.get(start) ?? null,
+      snapshot.terminals.get(terminalKey({ by: 'start', startId: start })) ?? null,
+      { connection: snapshot.connection, phase: snapshot.phase, now: now() },
+    )
+      ? start
+      : null;
+  const arrangement = layoutStore ?? appLayoutStore(hub);
   const destination = useDestination();
   const form = useShellForm();
   // The settings section, resolved once here and handed to both the sidebar
@@ -303,7 +332,7 @@ export function AppShell({
       opened={starting}
       onClose={() => setStarting(false)}
       scheme={scheme}
-      onPending={(startId) => appLayoutStore(hub).showPendingSession(startId)}
+      onPending={(startId) => arrangement.showPendingSession(startId)}
     />
   );
   const region = content({
@@ -315,6 +344,8 @@ export function AppShell({
     sessionRef,
     doc,
     graph,
+    pending,
+    arrangement,
     destination: place,
     section,
     machine,
@@ -330,7 +361,9 @@ export function AppShell({
         onPickMachine={pickMachine}
         // A session, a document or a graph is a thing and not one of the three
         // places the bar offers, so no tab claims to be where the app is.
-        current={sessionRef !== null || doc !== null || graph !== null ? null : place}
+        current={
+          sessionRef !== null || doc !== null || graph !== null || pending !== null ? null : place
+        }
         onStartSession={() => setStarting(true)}
         status={status}
         actions={actions}
@@ -370,6 +403,10 @@ export function AppShell({
             section={section}
             sections={sections}
             scheme={scheme}
+            // The shell's clock, so a start's row and the pane its address
+            // draws are judged against one reading of the naming bound.
+            now={now}
+            layoutStore={arrangement}
           />
         </SidebarFrame>
         <Box
@@ -418,6 +455,9 @@ interface ContentProps {
   readonly doc: NodeId | null;
   /** The graph the address names, or `null` for no graph route. */
   readonly graph: NodeId | null;
+  /** The start the address names and this tab holds, or `null`. */
+  readonly pending: FrameId | null;
+  readonly arrangement: LayoutStore;
   /** Already resolved for the form: see `resolveDestination`. */
   readonly destination: Destination;
   /** The settings section the address names, already resolved. */
@@ -462,6 +502,8 @@ function content({
   sessionRef,
   doc,
   graph,
+  pending,
+  arrangement,
   destination,
   section,
   machine,
@@ -474,7 +516,13 @@ function content({
     return <GraphScreen key={graph} nodeId={graph} store={hub} />;
   }
   if (sessionRef !== null || doc !== null) {
-    return <LayoutScreen session={sessionRef} doc={doc} store={hub} />;
+    return <LayoutScreen session={sessionRef} doc={doc} store={hub} layoutStore={arrangement} />;
+  }
+  if (pending !== null) {
+    // Its own branch rather than a third clause on the one above: a start is
+    // shown by the address alone, and the pane it opens rebinds to the
+    // session in place, so the region stays the panes until the address moves.
+    return <LayoutScreen session={null} pending={pending} store={hub} layoutStore={arrangement} />;
   }
   if (destination === 'settings') {
     return <SettingsRoute store={hub} tokens={tokens} section={section} form={form} />;

@@ -1,11 +1,17 @@
 import { useState, useSyncExternalStore, type JSX } from 'react';
-import type { Layout, MachineState, ServerRegistrationId } from '@agentplex/protocol';
+import type { FrameId, Layout, MachineState, ServerRegistrationId } from '@agentplex/protocol';
 import { CataloguePanel } from '../catalogue/catalogue-panel.js';
 import type { CatalogueStore } from '../catalogue/catalogue-store.js';
+import { appLayoutStore } from '../layout/app-layout.js';
+import type { LayoutStore } from '../layout/layout-store.js';
 import { MachineSelector } from '../machines/machine-selector.js';
+import { pendingRows } from '../sessions/pending-rows-model.js';
 import { appSessionFiltersStore } from '../sessions/session-filters-store.js';
 import { SettingsSectionNav } from '../settings/settings-section-nav.js';
 import type { HubStore } from '../store/hub-store.js';
+import { shallowEqual, useHubSelector } from '../store/use-hub-store.js';
+import type { HubSnapshot } from '../store/views.js';
+import { startHash } from '../terminal/start-route.js';
 import { Box, SegmentedControl, Stack, Text, UnstyledButton } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import {
@@ -124,6 +130,8 @@ export interface SidebarProps {
    * `Date.now` in one render are two answers to how old a session is.
    */
   readonly now?: () => number;
+  /** Where a start's row opens its pane: the page's arrangement unless a test's. */
+  readonly layoutStore?: LayoutStore;
 }
 
 export function Sidebar({
@@ -139,6 +147,7 @@ export function Sidebar({
   sections,
   scheme,
   now = Date.now,
+  layoutStore,
 }: SidebarProps): JSX.Element {
   const [tab, setTab] = useState<SidebarTab>('projects');
   // The address the tab was last reconciled with, so a move to Projects is
@@ -158,6 +167,16 @@ export function Sidebar({
   const held = useSyncExternalStore(filters.subscribe, filters.getSnapshot);
   const projects = tab === 'projects';
   const moment = now();
+  const { starts, terminals, connection, phase } = useHubSelector(
+    store,
+    startsAndTerminals,
+    shallowEqual,
+  );
+  const pending = pendingRows(starts, terminals, state, layout, machine, {
+    connection,
+    phase,
+    now: moment,
+  });
   if (destination === 'settings') {
     return (
       <Stack gap={10} p={10} style={{ height: '100%', minHeight: 0 }}>
@@ -239,6 +258,8 @@ export function Sidebar({
         ) : (
           <SidebarSessions
             state={state}
+            pending={pending}
+            onOpenPending={(startId) => openPending(layoutStore ?? appLayoutStore(store), startId)}
             filters={filters}
             machine={machine}
             scheme={scheme}
@@ -293,4 +314,30 @@ function FootNav({
 /** A control hands back a string, and a string is a claim. */
 function readTab(value: string): SidebarTab {
   return value === 'sessions' ? 'sessions' : 'projects';
+}
+
+/** What a start's row is read off -- its two maps and which connection is up -- and nothing else. */
+function startsAndTerminals(
+  snapshot: HubSnapshot,
+): Pick<HubSnapshot, 'starts' | 'terminals' | 'connection' | 'phase'> {
+  return {
+    starts: snapshot.starts,
+    terminals: snapshot.terminals,
+    connection: snapshot.connection,
+    phase: snapshot.phase,
+  };
+}
+
+/**
+ * Opens the pane waiting on a start, then routes the content region to it.
+ *
+ * The pane first and the address second, so the layout screen that the new
+ * address mounts finds the pane already there and only focuses it. The
+ * address is what makes the region draw panes at all: from the list, the
+ * layout store holding a pending pane is not something the shell is looking
+ * at.
+ */
+function openPending(layout: LayoutStore, startId: FrameId): void {
+  layout.showPendingSession(startId);
+  window.location.hash = startHash(startId);
 }

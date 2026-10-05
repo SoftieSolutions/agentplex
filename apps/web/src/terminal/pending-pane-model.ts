@@ -1,5 +1,5 @@
-import type { MachineState, SessionRef } from '@agentplex/protocol';
-import type { StartView } from '../store/views.js';
+import type { MachineState, SessionRef, SubscriptionEndReason } from '@agentplex/protocol';
+import type { ConnectionPhase, StartView } from '../store/views.js';
 import { serverLabel } from '../sessions/session-list-model.js';
 
 /**
@@ -56,6 +56,129 @@ export function pendingSession(
   // carries both names -- which is the server's reading of its own store
   // report, relayed. Provenance, not proximity.
   return terminal?.session ?? null;
+}
+
+/**
+ * How long after its yes a spawn may go unnamed before this client stops
+ * expecting the name: one minute.
+ *
+ * A provider given a prompt writes its session file on its first turn, which
+ * is seconds after the fork; the naming is one store report and one frame after
+ * that. A minute is an order of magnitude past the slow end of that and still
+ * short enough that a provider which exited before writing anything stops
+ * being listed as starting while the person who started it is still looking.
+ * Past it, nothing is drawn as starting: whether the start is slow, dead, or
+ * waiting for a first message is something this client cannot tell, and a row
+ * guessing at it would be a claim the scans may contradict a moment later. If
+ * the provider does write an id, the scan lists the session under its own row.
+ */
+export const NAMING_BOUND_MS = 60_000;
+
+/**
+ * Where this client stands when it judges a start: which connection it is on
+ * or last was (`HubSnapshot.connection`), whether that connection is still up
+ * (`HubSnapshot.phase`), and what its clock reads.
+ *
+ * The count and the phase answer different halves of one question -- is the
+ * socket that carried this start still open -- and neither answers it alone.
+ * The count tells a redialled connection from the one before it even when the
+ * phase reads `connected` both times; the phase tells a dropped connection
+ * from a live one before any welcome is counted, which through a backoff or
+ * after a refusal that stops redialling is never.
+ *
+ * Passed in rather than read, so the functions stay pure and the clock is the
+ * caller's injected one -- the same reading as every age drawn beside them.
+ */
+export interface StartMoment {
+  readonly connection: number;
+  readonly phase: ConnectionPhase;
+  readonly now: number;
+}
+
+/**
+ * Whether this client can still expect to hear about a start: its answer, or,
+ * once placed, its name.
+ *
+ * Queued is expected, because it goes out on the next connection. Sent is
+ * expected only while the connection that carried it is up, because the hub
+ * answers and names a start down that socket alone and forgets its handles the
+ * moment it closes -- at the drop, not at the next welcome. Placed is expected
+ * for `NAMING_BOUND_MS` after the yes and not after. A refusal is the answer it
+ * was owed, so nothing more is coming.
+ *
+ * Says nothing about whether the start became a session; `pendingSession` is
+ * that, and a caller asks both.
+ */
+export function startAwaited(start: StartView, moment: StartMoment): boolean {
+  if (start.refusal !== null) return false;
+  if (start.sentOn === null) return true;
+  if (!onCarrier(start, moment)) return false;
+  if (start.started === null) return true;
+  return moment.now - start.started.receivedAt < NAMING_BOUND_MS;
+}
+
+/** Whether the socket that carried a sent start is the one open now. */
+function onCarrier(start: StartView, moment: StartMoment): boolean {
+  return start.sentOn === moment.connection && moment.phase === 'connected';
+}
+
+/** The slice of a watched terminal `startLive` reads: its name, and whether it is being fed. */
+export interface WatchedStart extends NamedTerminal {
+  readonly attached: boolean;
+  readonly ended: SubscriptionEndReason | null;
+}
+
+/**
+ * Whether a start that has not become a session is still something this client
+ * can draw as live: awaited, or past the bound with its terminal relayed by the
+ * hub right now on the connection that carried it.
+ *
+ * The second half is the case the bound cannot see. A spawn given no prompt
+ * writes no session until somebody types into it, and codex, which has no
+ * registry to name it from, waits for a first turn; the pane somebody is
+ * typing into is live, not a promise. Past the bound with nothing relaying it
+ * -- the terminal ended, detached, or was never watched -- or with the
+ * connection gone, it is neither, and nothing more about it is coming.
+ *
+ * One predicate for the start's sidebar row and its address, so the two never
+ * disagree: a row dropped while its pane is still live would leave the pane
+ * with no way back to it once somebody navigates away, and a row kept for a
+ * pane the address no longer draws would open the list.
+ */
+export function startLive(
+  start: StartView,
+  terminal: WatchedStart | null,
+  moment: StartMoment,
+): boolean {
+  if (startAwaited(start, moment)) return true;
+  return (
+    start.refusal === null &&
+    onCarrier(start, moment) &&
+    terminal !== null &&
+    terminal.attached &&
+    terminal.ended === null
+  );
+}
+
+/**
+ * Whether a start's address, `#/start/<id>`, draws the panes rather than the
+ * list.
+ *
+ * Yes for a start that became a session, since the panes show that session;
+ * yes for a refused one, whose pane says so in the hub's words; yes while the
+ * start is live (`startLive`). Otherwise no -- a start whose connection has
+ * gone, or past the bound with nothing relaying it, would open a pane that can
+ * only say "starting" forever or be refused, so the address falls to the list.
+ */
+export function startShown(
+  start: StartView | null,
+  terminal: WatchedStart | null,
+  moment: StartMoment,
+): boolean {
+  if (start === null) return false;
+  if (pendingSession(start, terminal) !== null) return true;
+  if (start.refusal !== null) return true;
+  return startLive(start, terminal, moment);
 }
 
 /** What the pane says about a start that has not become a session yet. */
