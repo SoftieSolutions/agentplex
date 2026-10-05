@@ -105,6 +105,8 @@ async function startServer(storePaths: readonly string[] = []) {
     // Nothing to drain: no session in this suite is ever mid-turn, so a budget
     // here would only be a number the shutdown does not reach for.
     drainMs: 0,
+    // Nothing here sits idle long enough to reach it.
+    idleStopMs: 15 * 60_000,
     operations: createOperationRegistry(createFakeProcessRunner()),
     machineLoad: createFakeMachineLoadReader(),
     // What `main` reads at boot, written down: the handshake below is the

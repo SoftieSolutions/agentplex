@@ -347,6 +347,25 @@ describe('loadDoctorConfig announce', () => {
   });
 });
 
+describe('loadDoctorConfig idle stop', () => {
+  function idleStopMs(argv: string[], env: Record<string, string | undefined> = {}): unknown {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok && 'server' in result.config ? result.config.server.idleStopMs : undefined;
+  }
+
+  it('reads the same minutes the server does, defaulting to fifteen', () => {
+    expect(idleStopMs(['--role=server'])).toBe(15 * 60_000);
+    expect(idleStopMs(['--role=server', '--idle-stop-minutes=30'])).toBe(30 * 60_000);
+    expect(idleStopMs(['--role=server'], { AGENTPLEX_IDLE_STOP_MINUTES: '5' })).toBe(5 * 60_000);
+  });
+
+  it('refuses what the server would refuse at boot', () => {
+    const problems = expectProblems(load(['--role=server', '--idle-stop-minutes=0']));
+    expect(problems[0]).toContain('--idle-stop-minutes must be a whole number of minutes');
+  });
+});
+
 describe('loadDoctorConfig server identity file', () => {
   /**
    * Deliberately not the helper above: these cases are about the identity

@@ -283,6 +283,7 @@ export async function startRuntime(
     signaller,
     processes,
     drainMs: config.drainMs,
+    idleStopMs: config.idleStopMs,
     operations,
     workingTree,
     machineLoad,

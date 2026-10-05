@@ -26,10 +26,13 @@ import type { LaunchOptions, PtyExit, PtyRun, PtySupervisor } from '@agentplex/p
  *   terminal whose last watcher left longest ago is closed. That is safe
  *   because a terminal is not a session: the transcript is on disk, and a
  *   closed terminal is resumed by resuming the session.
- * - **Nothing else closes a terminal.** No idle timer, no close-on-detach.
+ * - **Nothing here closes a terminal on its own.** No close-on-detach.
  *   Sessions outlive tabs and sockets — a lid closing is not a decision — and
- *   an agent that is mid-work keeps working with nobody watching. Only the cap
- *   and server shutdown close anything.
+ *   an agent that is mid-work keeps working with nobody watching. The cap and
+ *   server shutdown close terminals; the one other thing that ends a process
+ *   is the idle stop in `sessions/idle-stop.ts`, which stops a claude sat at
+ *   its prompt with its turn over, through `stop` like any person would, and
+ *   reads `noteInput`'s stamp so that somebody typing is never idle.
  * - **One live process per session id.** Two agents on one transcript is the
  *   corruption there is no recovery from; the second one is refused and the
  *   refusal names the live holder, so the answer is "it is running over here"
@@ -195,6 +198,12 @@ export interface Terminal {
   /** How paused this terminal's session is. `paused` withholds its input. */
   readonly pause: SessionPause;
   /**
+   * Epoch ms of the last input written into this terminal, or `null` when
+   * nobody has typed into it. Keys are somebody using the session, whatever
+   * the provider says about its turn.
+   */
+  readonly lastInputAt: number | null;
+  /**
    * Attaches a watcher: it receives output, and it holds the terminal against
    * eviction until it detaches. Returns the detach, which is idempotent —
    * a socket that closes twice must not count a watcher off twice.
@@ -225,6 +234,7 @@ export interface TerminalHolder {
   readonly watchers: number;
   readonly stoppable: boolean;
   readonly pause: SessionPause;
+  readonly lastInputAt: number | null;
 }
 
 /**
@@ -301,6 +311,11 @@ export interface TerminalManager extends SessionLiveness {
   starts(grantId: GrantId): readonly TerminalStart[];
   /** Records the status somebody derived for a session, if a terminal holds it. */
   observe(session: SessionRef, status: SessionStatus): void;
+  /**
+   * Records that input was just written into a terminal. Called by whatever
+   * wrote it, after the write took; a terminal this does not hold is ignored.
+   */
+  noteInput(terminalId: string): void;
   terminal(terminalId: string): Terminal | undefined;
   /** The live terminal for a session, in the form a refusal reports it. */
   holder(session: SessionRef): TerminalHolder | undefined;
@@ -386,6 +401,7 @@ interface TerminalRecord {
   /** Watcher to how many times it attached: one hub may open two tabs on one terminal. */
   readonly watchers: Map<WatcherId, number>;
   unwatchedSince: number | null;
+  lastInputAt: number | null;
   /** The one termination in flight, so a second stop neither hangs up nor schedules again. */
   terminating: Promise<PtyExit> | null;
 }
@@ -570,6 +586,7 @@ export function createTerminalManager({
       pause: 'none',
       watchers: new Map(),
       unwatchedSince: openedAt,
+      lastInputAt: null,
       terminating: null,
     };
     return { record, view: viewOf(record, clock) };
@@ -639,6 +656,11 @@ export function createTerminalManager({
       // is working. Only `working` re-arms: `unknown` is no evidence either way.
       if (record.pause === 'requested' && atBoundary(status)) record.pause = 'paused';
       else if (record.pause === 'paused' && status === 'working') record.pause = 'requested';
+    },
+
+    noteInput(terminalId: string): void {
+      const record = terminals.get(terminalId)?.record;
+      if (record !== undefined) record.lastInputAt = clock.now();
     },
 
     terminal(terminalId: string): Terminal | undefined {
@@ -811,6 +833,7 @@ function holderOf(record: TerminalRecord): TerminalHolder {
     watchers: record.watchers.size,
     stoppable: stoppable(record.status),
     pause: record.pause,
+    lastInputAt: record.lastInputAt,
   };
 }
 
@@ -844,6 +867,10 @@ function viewOf(record: TerminalRecord, clock: Clock): Terminal {
 
     get pause(): SessionPause {
       return record.pause;
+    },
+
+    get lastInputAt(): number | null {
+      return record.lastInputAt;
     },
 
     watch(watcher: WatcherId, listener: (chunk: Uint8Array) => void): () => void {

@@ -29,6 +29,7 @@ import { createOperationRegistry } from './operations/operation-registry.js';
 import { createFakeDataRoot } from './data-root/fake-data-root.js';
 import { createFakeDirectoryReader } from './directories/fake-directory-reader.js';
 import { createFakeWorkingTree } from './working-tree/fake-working-tree.js';
+import { IDLE_STOP_SWEEP_MS } from './sessions/idle-stop.js';
 import { createFakeTerminals, type FakeTerminals } from './terminal/fake-terminals.js';
 import { createFakeProcessSignaller } from './sessions/fake-process-signaller.js';
 import { createFakeMachineLoadReader } from './machine-load/fake-machine-probe.js';
@@ -88,6 +89,7 @@ const config: ServerConfig = {
   timezone: undefined,
   terminalCap: 8,
   drainMs: 15_000,
+  idleStopMs: 15 * 60_000,
   announce: false,
 };
 
@@ -470,6 +472,20 @@ describe('a draining shutdown', () => {
  * for a fresh reading at all, and the only path a fresh one has to a hub --
  * which is the handshake it already reads, taken again.
  */
+describe('the idle stop', () => {
+  it('sweeps from boot, with no hub connected, and stops sweeping on shutdown', async () => {
+    // What it does on each sweep is `idle-stop.test`; this is that the server
+    // runs it at all, and that shutdown cancels it, since a pending timer is a
+    // process that will not exit.
+    const started = await start();
+    expect(started.timers.delays).toContain(IDLE_STOP_SWEEP_MS);
+
+    await started.runtime.stop();
+
+    expect(started.timers.delays).not.toContain(IDLE_STOP_SWEEP_MS);
+  });
+});
+
 describe('what the server says about itself', () => {
   it('states the os and daemon version it was handed on every handshake', async () => {
     const started = await start();

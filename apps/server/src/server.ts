@@ -42,6 +42,7 @@ import { ensureServerIdentity } from '@agentplex/providers';
 import { createHubAudience } from './hub/hub-audience.js';
 import { sweepGrants } from './hub/grant-sweep.js';
 import { createSessionController } from './sessions/session-control.js';
+import { createIdleStop } from './sessions/idle-stop.js';
 import type { ProcessSignaller } from './sessions/process-signaller.js';
 import type { ServerAbout } from './about/server-about.js';
 import type { MachineLoadReader } from './machine-load/machine-load.js';
@@ -175,9 +176,10 @@ export interface SessionServerDependencies {
    * finds sessions it did not launch and cannot drive, and on a laptop they
    * outlive the terminal that started them.
    *
-   * Shutdown is also the only thing besides the cap that closes a terminal:
-   * nothing here runs an idle timer, and a session whose last tab closed goes
-   * on working.
+   * Shutdown is also the only thing besides the cap that closes a terminal,
+   * and a session whose last tab closed goes on working. The one other thing
+   * that ends a process is the idle stop, and only for a claude its own
+   * registry says has sat at its prompt for `idleStopMs`; see `idle-stop.ts`.
    */
   readonly terminals: TerminalManager;
   /**
@@ -199,6 +201,11 @@ export interface SessionServerDependencies {
    * against, and `config.ts` for why the two numbers are rendered from one.
    */
   readonly drainMs: number;
+  /**
+   * How long a held claude may sit at its prompt, turn over and untyped into,
+   * before this server stops it, in milliseconds. See `idle-stop.ts`.
+   */
+  readonly idleStopMs: number;
   /**
    * The one thing on this server that starts anything else.
    *
@@ -356,6 +363,7 @@ export async function startSessionServer(
     signaller,
     processes,
     drainMs,
+    idleStopMs,
     operations,
     workingTree,
     machineLoad,
@@ -661,6 +669,23 @@ export async function startSessionServer(
   // the hub that reconnects; this covers the one that does not have to.
   const sweep = sweepGrants({ grants: grants.store, audience, timers, logger });
 
+  // A held claude its registry has called idle for the configured time is
+  // stopped, through the same stop a hub's would take, and every hub is told.
+  // It runs whether or not any hub is connected: a session nobody is watching
+  // is the one most likely to have been forgotten.
+  const idle = createIdleStop({
+    terminals,
+    providers,
+    stores,
+    stop: (session) => sessions.stop(session),
+    report: (storeId) => audience.reportToAll(storeId),
+    clock,
+    timers,
+    logger,
+    idleStopMs,
+  });
+  idle.start();
+
   // The one reporter on this server that no hub prompted, and the answer to the
   // staleness the scan above is careful not to claim it fixed: a session
   // somebody starts in a terminal changes a store, and until this nothing told
@@ -849,6 +874,10 @@ export async function startSessionServer(
       // The sweep next, because a pending timer is a process that will not
       // exit, and there is nothing left for it to revoke access to.
       sweep.stop();
+      // And the idle stop, for the same reason, and before the drain: the drain
+      // is the one deciding which agents end now, and a second thing stopping
+      // them meanwhile would be a stop nobody could account for.
+      idle.stop();
       // Then the watches, before the drain rather than after it. Everything
       // the drain does writes into a store -- it is closing sessions -- so a
       // watch left open would spend the shutdown scanning stores on behalf of

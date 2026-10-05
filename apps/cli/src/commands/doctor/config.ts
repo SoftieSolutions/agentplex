@@ -12,6 +12,7 @@ import {
   readDrainSeconds,
   readFlags,
   readHost,
+  readIdleStopMinutes,
   readIdentityPath,
   readLocalServer,
   readLogLevel,
@@ -130,6 +131,8 @@ export interface ServerConfig {
   readonly timezone: string | undefined;
   /** How long the server's shutdown waits for turns to end, in milliseconds. */
   readonly drainMs: number;
+  /** How long a held claude may sit at its prompt before the server stops it, in milliseconds. */
+  readonly idleStopMs: number;
   /**
    * How many terminals this server may hold at once.
    *
@@ -392,6 +395,7 @@ function readServerConfig(
   const announce = readAnnounce(read(table.announce), problems);
   const timezone = readTimezone(read(table.timezone), problems);
   const drainMs = readDrainSeconds(read(table.drainSeconds), problems);
+  const idleStopMs = readIdleStopMinutes(read(table.idleStopMinutes), problems);
   const serverToken = readServerToken(read(table.serverToken), problems);
   const namedIdentityPath = read(table.serverIdentityFile);
   const identityPath = readIdentityPath(namedIdentityPath, env, problems);
@@ -410,6 +414,7 @@ function readServerConfig(
     timezone,
     terminalCap,
     drainMs,
+    idleStopMs,
     announce,
   };
 }
