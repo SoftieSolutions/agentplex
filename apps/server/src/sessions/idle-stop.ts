@@ -27,7 +27,10 @@ import type { SessionOutcome } from './session-control.js';
  * typed and not yet sent, so the registry alone cannot tell a forgotten
  * session from one somebody is writing into. Input through agentplex is
  * stamped on the terminal, and the idle time is counted from whichever is
- * later: the first idle sighting or the last keystroke.
+ * later: the first idle sighting or the last keystroke. Measured on Claude
+ * Code 2.1.289: a prompt typed and not sent left the entry at `idle` with its
+ * `statusUpdatedAt` unmoved, a `!` command read `busy` while it ran, and the
+ * entry went back to `idle` once it had finished.
  *
  * **Through the stop a person would press.** `stop` is the session
  * controller's, so the same refusals hold -- a terminal whose last scanned
