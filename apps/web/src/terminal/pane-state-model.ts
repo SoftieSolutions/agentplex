@@ -237,6 +237,9 @@ export function paneState(input: PaneStateInput): PaneState {
   }
 
   const process = row.descriptor.process;
+  // A process outside agentplex runs it now, whatever ended before: the
+  // ending is history, and its Resume would be a second process.
+  if (row.reachable && process === 'running') return runningOutside(row, state, retakeRefusal);
   if (terminal?.ended === 'session-ended' || (ran && process === 'none')) {
     return {
       kind: 'ended',

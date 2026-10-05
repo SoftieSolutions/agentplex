@@ -253,6 +253,22 @@ describe('paneState', () => {
     expect(paneState(input({ terminal: { ended: 'server-draining' } })).kind).toBe('starting');
   });
 
+  it('offers the retake, not Resume, when a claude outside agentplex runs a session that ended', () => {
+    // The pane watched a held session end, and then somebody ran
+    // `claude --resume` in their own terminal: the ending is history, and
+    // Resume over that process would put a second one on its transcript.
+    const ended = { terminal: { ended: 'session-ended' as const }, ran: true };
+    expect(paneState(input({ ...ended, row: cliAtPrompt, state: retakeable }))).toMatchObject({
+      kind: 'outside',
+      action: null,
+      retake: { kind: 'available' },
+    });
+    expect(paneState(input({ ...ended, row: cliRun }))).toMatchObject({
+      kind: 'outside',
+      retake: { kind: 'working-elsewhere' },
+    });
+  });
+
   it('a pane that asked again shows that start rather than the ending', () => {
     const waiting = followUp(
       ASKED,
