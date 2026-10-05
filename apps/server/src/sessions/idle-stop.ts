@@ -20,8 +20,8 @@ import type { SessionOutcome } from './session-control.js';
  * the stop is one. A provider that keeps no registry -- codex -- answers `null`
  * and is never stopped; the transcript-derived status the scan keeps is a
  * guess from the last line written, and an idle stop on a guess would end a
- * session that was only quiet. `unknown` and `null` clear the clock, because
- * "could not tell" is not "idle".
+ * session that was only quiet. `unknown`, `null` and an adapter that throws
+ * clear the clock, because "could not tell" is not "idle".
  *
  * **Keys reset the clock.** Claude Code says `idle` while a prompt is being
  * typed and not yet sent, so the registry alone cannot tell a forgotten
@@ -87,7 +87,7 @@ interface Watch {
   stopped: boolean;
 }
 
-/** One verified process, or `null`, or a throw that costs this terminal's pass. */
+/** One verified process, or `null`, or a throw that costs this terminal its pass and its clock. */
 type Asked = { readonly ok: true; readonly process: LiveProcess | null } | { readonly ok: false };
 
 export function createIdleStop({
@@ -139,7 +139,11 @@ export function createIdleStop({
     }
 
     const asked = await ask(store, session);
-    if (stopped || !asked.ok) return;
+    if (stopped) return;
+    if (!asked.ok) {
+      watch.idleSince = null;
+      return;
+    }
 
     const now = clock.now();
     // The registry answers for the session, not for this terminal: its newest

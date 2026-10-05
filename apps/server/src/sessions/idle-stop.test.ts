@@ -461,6 +461,25 @@ describe('createIdleStop', () => {
     expect(held()).toEqual(['SIGHUP']);
   });
 
+  it('starts the clock again once a registry that would not read reads again', async () => {
+    // Sweeps that could not tell are not sweeps that saw idle. Idle at the
+    // first and the last is not idle in between, so the quarter hour is
+    // counted from the read that recovered, not from the idle before it.
+    const { sweepAt, held, breakRegistry } = await world({ status: 'idle' });
+
+    await sweepAt(0);
+    breakRegistry(true);
+    for (const minute of [1, 5, 10, 14]) await sweepAt(minute);
+    breakRegistry(false);
+
+    await sweepAt(15);
+    expect(held()).toEqual([]);
+    await sweepAt(29.99);
+    expect(held()).toEqual([]);
+    await sweepAt(30);
+    expect(held()).toEqual(['SIGHUP']);
+  });
+
   it('schedules nothing once it is stopped', async () => {
     const { idle, timers } = await world({ status: 'idle' });
     expect(timers.pending).toBe(1);
