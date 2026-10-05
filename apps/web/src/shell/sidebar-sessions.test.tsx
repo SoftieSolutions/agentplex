@@ -250,6 +250,27 @@ describe('a sidebar session row', () => {
     expect(opened).toEqual([PENDING.startId]);
   });
 
+  it('names each start by its place as well, as the row shows it', () => {
+    // Two claude starts on one machine, in two projects: a name that stopped
+    // at the machine would be one name for two different rows.
+    const other: PendingRow = { ...PENDING, startId: frameIdSchema.parse(9), project: 'docs' };
+    draw({ state: sessionless, pending: [other, PENDING] });
+
+    const rows = [...container.querySelectorAll<HTMLButtonElement>('button[aria-label]')];
+    const names = rows.map((row) => row.getAttribute('aria-label') ?? '');
+    expect(names).toEqual([
+      'open the claude session starting in docs · mbp-robert',
+      'open the claude session starting in store-agentplex · mbp-robert',
+    ]);
+    // Label in name: the place line a sighted person reads is in what a voice
+    // user says and a screen reader announces.
+    for (const row of rows) {
+      const place = row.lastElementChild?.textContent ?? '';
+      expect(place).not.toBe('');
+      expect(row.getAttribute('aria-label')).toContain(place);
+    }
+  });
+
   it('puts a start between the sessions waiting on somebody and the rest', () => {
     draw({ pending: [PENDING] });
 

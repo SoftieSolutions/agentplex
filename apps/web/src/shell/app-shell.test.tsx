@@ -760,7 +760,7 @@ describe('the shell', () => {
 
   /** The sidebar's rows for starts with no session yet, by their accessible names. */
   function pendingRowNames(): string[] {
-    return [...container.querySelectorAll('aside button[aria-label*=" starting on "]')].map(
+    return [...container.querySelectorAll('aside button[aria-label*=" session starting in "]')].map(
       (button) => button.getAttribute('aria-label') ?? '',
     );
   }

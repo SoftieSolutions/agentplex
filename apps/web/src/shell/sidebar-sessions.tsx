@@ -170,7 +170,10 @@ function SidebarPendingRow({ row, scheme, onOpen }: SidebarPendingRowProps): JSX
     <UnstyledButton
       component="button"
       type="button"
-      aria-label={`open the ${row.provider} session starting on ${row.machine}`}
+      // The place line in the name as it is drawn, so two starts of one
+      // provider on one machine in two projects are two names, and the words
+      // a person reads off the row are words they can say to reach it.
+      aria-label={`open the ${row.provider} session ${row.words} in ${placeLabel(row)}`}
       onClick={() => onOpen(row.startId)}
       style={{ display: 'block', width: '100%', padding: '6px 8px', borderRadius: 6, minWidth: 0 }}
     >
