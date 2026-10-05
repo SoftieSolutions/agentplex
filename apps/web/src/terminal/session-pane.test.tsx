@@ -5,18 +5,21 @@ import {
   parseClientFrame,
   parseHubFrame,
   parseTextFrame,
+  providerSchema,
+  serverRegistrationIdSchema,
   sessionRefSchema,
+  storeIdSchema,
   TERMINAL_INPUT_MAX_CHARS,
   type ClientFrame,
 } from '@agentplex/protocol';
-import { act, Fragment, type JSX } from 'react';
+import { act, Fragment, StrictMode, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
-import { createFakeTimers } from '../store/timers.js';
+import { createFakeTimers, type FakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { colorForTone, colorForToneText } from '../ui/tokens.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
@@ -98,22 +101,33 @@ const COARSE_POINTER = (query: string): boolean => query === '(pointer: coarse)'
  */
 interface StoreHarness {
   readonly store: HubStore;
+  /** The store's clock, which is what fires a redial. */
+  readonly timers: FakeTimers;
   /** The socket the store dialled, once `settle` has let the ticket resolve. */
   socket(): FakeSocket;
+  /** The socket it dialled last. */
+  latestSocket(): FakeSocket;
 }
 
 function buildStore(): StoreHarness {
   const sockets = createFakeSocketFactory();
+  const timers = createFakeTimers();
   const store = createHubStore({
     fetchTicket: () => Promise.resolve('ticket-1'),
     createSocket: (ticket) => sockets.create(ticket),
-    timers: createFakeTimers(),
+    timers,
     frameIds: createFrameIds(),
   });
   return {
     store,
+    timers,
     socket(): FakeSocket {
       const dialled = sockets.sockets[0];
+      if (dialled === undefined) throw new Error('the store dialled nothing');
+      return dialled;
+    },
+    latestSocket(): FakeSocket {
+      const dialled = sockets.sockets.at(-1);
       if (dialled === undefined) throw new Error('the store dialled nothing');
       return dialled;
     },
@@ -1416,12 +1430,14 @@ describe('the header above a session', () => {
   });
 
   it('says the words the list says, and animates nothing that is not working', async () => {
-    await mountHeaderOn('store-universe', 'session-docs-sweep');
+    // A held row: an unheld one with no process says it is not running,
+    // whatever its transcript last asked for (the pane-state tests below).
+    await mountHeaderOn('store-agentplex', 'session-migrate-db');
 
-    // `awaiting input` and not `awaiting-input`: the header and the list read
-    // the same field through the same mapping, so one screen cannot start
-    // spelling a status differently from the other.
-    expect(status()).toEqual({ word: 'awaiting input', live: false });
+    // `awaiting permission` and not `awaiting-permission`: the header and the
+    // list read the same field through the same mapping, so one screen cannot
+    // start spelling a status differently from the other.
+    expect(status()).toEqual({ word: 'awaiting permission', live: false });
   });
 
   it('leaves the model out of the metadata line when the descriptor names none', async () => {
@@ -2226,5 +2242,519 @@ describe('replaying a session', () => {
     const since = sentFrames(socket).slice(before);
     expect(since.length).toBeGreaterThan(0);
     expect(new Set(since.map((frame) => frame.type))).toEqual(new Set(['session-transcript']));
+  });
+});
+
+/**
+ * A pane on a session nothing in agentplex holds, which is the pane that used
+ * to subscribe anyway and draw a blank rectangle over the hub's refusal.
+ *
+ * Every state is one a real hub published, and the store is already connected
+ * and holding it when the pane opens -- the way a pane opened from the list
+ * finds it -- so the frames counted are exactly the ones the pane sent.
+ */
+describe('a pane on a session nothing holds', () => {
+  interface Connected {
+    readonly hub: StoreHarness;
+    readonly socket: FakeSocket;
+    /** How many frames had gone out before the pane opened. */
+    readonly before: number;
+  }
+
+  async function connectedTo(state: string): Promise<Connected> {
+    const hub = buildStore();
+    // Something else on the page holds the connection open, as the shell does.
+    hub.store.subscribe(() => {});
+    await act(settle);
+    const socket = hub.socket();
+    await act(async () => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+      socket.deliver(state);
+    });
+    return { hub, socket, before: socket.sent.length };
+  }
+
+  function pane(hub: StoreHarness, storeId: string, sessionId: string): JSX.Element {
+    return (
+      <SessionPane
+        sessionRef={sessionRefSchema.parse({ storeId, sessionId })}
+        store={hub.store}
+        emulators={emulators}
+      />
+    );
+  }
+
+  function sentSince(connected: Connected): ClientFrame[] {
+    return sentFrames(connected.socket).slice(connected.before);
+  }
+
+  function ofType<T extends ClientFrame['type']>(
+    frames: readonly ClientFrame[],
+    type: T,
+  ): Extract<ClientFrame, { type: T }>[] {
+    return frames.filter(
+      (frame): frame is Extract<ClientFrame, { type: T }> => frame.type === type,
+    );
+  }
+
+  function shown(): HTMLElement | null {
+    return container.querySelector<HTMLElement>('[data-pane-state]');
+  }
+
+  function action(): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>('button[data-pane-action]');
+  }
+
+  /** A captured answer re-addressed to the frame it answers; `replyTo` is the only field touched. */
+  function addressedTo(frame: string, replyTo: number): string {
+    return JSON.stringify({ ...(JSON.parse(frame) as Record<string, unknown>), replyTo });
+  }
+
+  async function click(element: HTMLElement): Promise<void> {
+    await act(async () => {
+      element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(settle);
+  }
+
+  const SPIKE_WASM = {
+    by: 'session' as const,
+    storeId: 'store-agentplex',
+    sessionId: 'session-spike-wasm',
+  };
+
+  it('resumes a session no process runs, once, and subscribes only when it is held', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+
+    expect(sentSince(connected)).toEqual([
+      {
+        type: 'session-start',
+        id: expect.any(Number) as number,
+        storeId: 'store-agentplex',
+        sessionId: 'session-spike-wasm',
+        provider: 'claude',
+        prompt: null,
+        server: null,
+        project: null,
+      },
+    ]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+    const [start] = ofType(sentSince(connected), 'session-start');
+    if (start === undefined) throw new Error('no start was sent');
+
+    // The same state again is a re-render, and a re-render sends nothing.
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+    await deliver(connected.socket, addressedTo(hubFrames.sessionStartedResumed, start.id));
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+    expect(ofType(sentSince(connected), 'session-subscribe')).toEqual([]);
+
+    await deliver(connected.socket, hubFrames.machineStateResumed);
+
+    expect(ofType(sentSince(connected), 'session-subscribe')).toEqual([
+      { type: 'session-subscribe', id: expect.any(Number) as number, target: SPIKE_WASM },
+    ]);
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+    expect(shown()).toBeNull();
+    expect(emulators.created).toHaveLength(1);
+  });
+
+  it('sends one start under StrictMode', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await mount(
+      <StrictMode>{pane(connected.hub, 'store-agentplex', 'session-spike-wasm')}</StrictMode>,
+    );
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+  });
+
+  it('resumes once the state arrives for a pane that opened before the connection did', async () => {
+    const hub = buildStore();
+    await mount(pane(hub, 'store-agentplex', 'session-spike-wasm'));
+    const socket = hub.socket();
+    await act(async () => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+      socket.deliver(hubFrames.machineStateResumable);
+    });
+
+    const frames = sentFrames(socket);
+    expect(ofType(frames, 'session-start')).toHaveLength(1);
+  });
+
+  it('decides nothing on the last connection’s state until this one’s arrives', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await act(async () => {
+      connected.socket.drop();
+    });
+    // Opened while the connection is down: nothing goes out, and the "nothing
+    // runs it" the page holds is the last connection's word.
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    await act(async () => {
+      connected.hub.timers.fireAll();
+      await settle();
+    });
+    const next = connected.hub.latestSocket();
+    expect(next).not.toBe(connected.socket);
+    await act(async () => {
+      next.open();
+      next.deliver(hubFrames.welcome);
+    });
+
+    expect(connected.hub.store.getSnapshot().phase).toBe('connected');
+    expect(ofType(sentFrames(next), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+
+    await deliver(next, hubFrames.machineStateResumable);
+    expect(ofType(sentFrames(next), 'session-start')).toHaveLength(1);
+  });
+
+  it('says it cannot tell, warns of two copies, and resumes only when pressed', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await mount(pane(connected.hub, 'store-shared', 'session-shared-notes'));
+
+    expect(sentSince(connected)).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('cannot-tell');
+    expect(shown()?.textContent).toContain('cannot tell whether anything is running this session');
+    expect(shown()?.textContent).toContain('two processes on one transcript');
+    expect(action()?.textContent).toBe('Resume');
+
+    const button = action();
+    if (button === null) throw new Error('no Resume control');
+    await click(button);
+
+    const starts = ofType(sentSince(connected), 'session-start');
+    expect(starts).toEqual([
+      {
+        type: 'session-start',
+        id: expect.any(Number) as number,
+        storeId: 'store-shared',
+        sessionId: 'session-shared-notes',
+        provider: 'claude',
+        prompt: null,
+        server: null,
+        project: null,
+      },
+    ]);
+    const [start] = starts;
+    if (start === undefined) throw new Error('no start was sent');
+    await deliver(connected.socket, addressedTo(hubFrames.sessionStartedShared, start.id));
+    await deliver(connected.socket, hubFrames.machineStateSharedResumed);
+
+    expect(ofType(sentSince(connected), 'session-subscribe')).toEqual([
+      {
+        type: 'session-subscribe',
+        id: expect.any(Number) as number,
+        target: { by: 'session', storeId: 'store-shared', sessionId: 'session-shared-notes' },
+      },
+    ]);
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+    expect(shown()).toBeNull();
+  });
+
+  it('says where a session runs that agentplex does not hold, and sends nothing', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));
+
+    expect(sentSince(connected)).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('outside');
+    expect(shown()?.textContent).toContain('running on mbp-robert, but not under agentplex');
+    expect(action()).toBeNull();
+  });
+
+  it('names the provider and each machine’s reason when nothing can run it, and offers nothing', async () => {
+    const connected = await connectedTo(hubFrames.machineStatePopulated);
+    await mount(pane(connected.hub, 'store-universe', 'session-docs-sweep'));
+
+    expect(sentSince(connected)).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('unsupported');
+    expect(shown()?.textContent).toContain('can run codex');
+    const reasons = [...container.querySelectorAll('[data-pane-reason]')].map(
+      (reason) => reason.textContent,
+    );
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/^gpu-box-01 cannot run codex: /);
+    expect(action()).toBeNull();
+  });
+
+  it('says a machine it cannot reach cannot be acted on, and sends nothing', async () => {
+    const connected = await connectedTo(hubFrames.machineStateStale);
+    await mount(pane(connected.hub, 'store-universe', 'session-bench-tokenizer'));
+
+    expect(sentSince(connected)).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('unreachable');
+    expect(shown()?.textContent).toContain('gpu-box-01');
+    expect(action()).toBeNull();
+  });
+
+  it('gives a way out when a later state shows nothing running the start it was answered', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    const [start] = ofType(sentSince(connected), 'session-start');
+    if (start === undefined) throw new Error('no start was sent');
+    await deliver(connected.socket, addressedTo(hubFrames.sessionStartedResumed, start.id));
+    expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+
+    // A resume that exits before its machine reports again is never held:
+    // the next state still shows nothing running it.
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    expect(shown()?.getAttribute('data-pane-state')).toBe('lapsed');
+    expect(shown()?.textContent).toContain('mbp-robert');
+    expect(action()?.textContent).toBe('Try again');
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+
+    const button = action();
+    if (button === null) throw new Error('no Try again control');
+    await click(button);
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(2);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+  });
+
+  it('repeats the hub’s refusal in the blocked tone, and tries again when asked', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    const [start] = ofType(sentSince(connected), 'session-start');
+    if (start === undefined) throw new Error('no start was sent');
+
+    await deliver(connected.socket, addressedTo(hubFrames.refusal, start.id));
+
+    expect(shown()?.getAttribute('data-pane-state')).toBe('refused');
+    const words = container.querySelector<HTMLElement>('[data-pane-refusal]');
+    expect(words?.textContent).toContain('no server the hub is paired with has that store mounted');
+    expect(words?.style.color).toBe(rgb(colorForToneText('blocked', 'dark')));
+    expect(action()?.textContent).toBe('Try again');
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+
+    const button = action();
+    if (button === null) throw new Error('no Try again control');
+    await click(button);
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(2);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+  });
+
+  it('says the session ended under it, offers one control, and never resends on its own', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumed);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    const [subscribe] = ofType(sentSince(connected), 'session-subscribe');
+    if (subscribe === undefined) throw new Error('a held session was not subscribed to');
+
+    // The holder goes and the machine reports no process: a session this
+    // pane watched running has stopped, and is not one to restart behind
+    // whoever stopped it.
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+    expect(container.querySelectorAll('button[data-pane-action]')).toHaveLength(1);
+    expect(action()?.textContent).toBe('Resume');
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+  });
+
+  it('does not restart a session stopped from it when a split remounts it', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumed);
+    const spike = pane(connected.hub, 'store-agentplex', 'session-spike-wasm');
+    await mount(spike);
+    const stop = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="stop session-spike-wasm"]',
+    );
+    if (stop === null) throw new Error('a held, stoppable session offered no Stop');
+    await click(stop);
+    expect(ofType(sentSince(connected), 'session-stop')).toHaveLength(1);
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+
+    // A split puts the pane under a split node, which is a different element
+    // in the same place: React mounts the pane again from nothing.
+    await rerender(<div data-split>{spike}</div>);
+
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+    expect(action()?.textContent).toBe('Resume');
+  });
+
+  it('does not restart a session it saw held when it is opened again after it ended', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumed);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+  });
+
+  it('does not restart a session the page saw held before any pane opened on it', async () => {
+    // The sidebar is what saw it: the state showed it held, and no pane was
+    // open on it then.
+    const connected = await connectedTo(hubFrames.machineStateResumed);
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+    expect(action()?.textContent).toBe('Resume');
+  });
+
+  it('resumes, once, a session no state since the page loaded has shown running', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    await mount(pane(connected.hub, 'store-agentplex', 'session-spike-wasm'));
+    await deliver(connected.socket, hubFrames.machineStateResumable);
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+  });
+
+  it('shows its own start, and sends no second, when it is remounted while starting', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    const spike = pane(connected.hub, 'store-agentplex', 'session-spike-wasm');
+    await mount(spike);
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+
+    await rerender(<div data-split>{spike}</div>);
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+  });
+
+  it('never resumes a spawn this page started that exits once named, before it is seen held', async () => {
+    const connected = await connectedTo(hubFrames.machineState);
+    const { store } = connected.hub;
+    // The captured conversation's ids: the start is frame 2, a frame the
+    // capture spent on a refused subscribe is 3, and the pending pane's
+    // subscribe by the start's handle is 4.
+    const start = store.sendCommand({
+      type: 'session-start',
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: null,
+      provider: providerSchema.parse('claude'),
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    if (!start.accepted) throw new Error(start.reason);
+    expect(start.id).toBe(2);
+    store.sendCommand({
+      type: 'directory-list',
+      server: serverRegistrationIdSchema.parse('registration-mbp-robert'),
+      directory: null,
+    });
+    await act(async () => {
+      store.watchTerminal({ by: 'start', startId: start.id });
+      connected.socket.deliver(hubFrames.sessionStarted);
+      connected.socket.deliver(hubFrames.sessionSubscribedPending);
+      connected.socket.deliver(hubFrames.terminalOutputNamed);
+    });
+
+    // Named: the pending pane is rebound to the session its start became,
+    // before any state has a row for it. Then the agent quits at its first
+    // prompt, and the state that says so is the first to show the row.
+    await mount(pane(connected.hub, 'store-work', 'session-spawned'));
+    await deliver(connected.socket, hubFrames.machineStateSpawnExited);
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('lapsed');
+    expect(action()?.textContent).toBe('Try again');
+  });
+
+  it('shows a spawn lapsed, and sends nothing, when the state of its exit arrives before its name', async () => {
+    const connected = await connectedTo(hubFrames.machineState);
+    const { store } = connected.hub;
+    // The same captured conversation as above, delivered in the other order
+    // a socket may carry it: the machine reports the exited spawn's unheld
+    // row before the output chunk that names the spawn reaches this page.
+    const start = store.sendCommand({
+      type: 'session-start',
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: null,
+      provider: providerSchema.parse('claude'),
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    if (!start.accepted) throw new Error(start.reason);
+    expect(start.id).toBe(2);
+    store.sendCommand({
+      type: 'directory-list',
+      server: serverRegistrationIdSchema.parse('registration-mbp-robert'),
+      directory: null,
+    });
+    await act(async () => {
+      store.watchTerminal({ by: 'start', startId: start.id });
+      connected.socket.deliver(hubFrames.sessionStarted);
+      connected.socket.deliver(hubFrames.sessionSubscribedPending);
+      connected.socket.deliver(hubFrames.machineStateSpawnExited);
+      connected.socket.deliver(hubFrames.terminalOutputNamed);
+    });
+
+    await mount(pane(connected.hub, 'store-work', 'session-spawned'));
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('lapsed');
+    expect(action()?.textContent).toBe('Try again');
+  });
+
+  it('says a session run outside agentplex stopped, and resumes it only when pressed', async () => {
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));
+    expect(shown()?.getAttribute('data-pane-state')).toBe('outside');
+
+    // Whoever ran it quits their own claude: the machine reports nothing.
+    await deliver(connected.socket, hubFrames.machineStateOutsideQuit);
+
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+    expect(shown()?.textContent).toContain('stopped');
+    expect(action()?.textContent).toBe('Resume');
+
+    const button = action();
+    if (button === null) throw new Error('no Resume control');
+    await click(button);
+    expect(ofType(sentSince(connected), 'session-start')).toEqual([
+      {
+        type: 'session-start',
+        id: expect.any(Number) as number,
+        storeId: 'store-agentplex',
+        sessionId: 'session-cli-run',
+        provider: 'claude',
+        prompt: null,
+        server: null,
+        project: null,
+      },
+    ]);
+  });
+
+  it('says not running in the header for a row nothing holds and no process runs', async () => {
+    const connected = await connectedTo(hubFrames.machineStatePopulated);
+    await mount(pane(connected.hub, 'store-universe', 'session-docs-sweep'));
+
+    expect(container.querySelector('[data-status]')?.textContent).toBe('not running');
+  });
+
+  it('subscribes to nothing in any state but held', async () => {
+    const cases: readonly [string, string, string][] = [
+      [hubFrames.machineStateResumable, 'store-agentplex', 'session-spike-wasm'],
+      [hubFrames.machineStateResumable, 'store-agentplex', 'session-cli-run'],
+      [hubFrames.machineStateResumable, 'store-shared', 'session-shared-notes'],
+      [hubFrames.machineStatePopulated, 'store-universe', 'session-docs-sweep'],
+      [hubFrames.machineStateStale, 'store-universe', 'session-bench-tokenizer'],
+    ];
+    for (const [state, storeId, sessionId] of cases) {
+      const connected = await connectedTo(state);
+      await mount(pane(connected.hub, storeId, sessionId));
+      expect(ofType(sentSince(connected), 'session-subscribe')).toEqual([]);
+      await act(async () => {
+        root?.unmount();
+      });
+      root = null;
+    }
   });
 });

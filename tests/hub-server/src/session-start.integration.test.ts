@@ -863,6 +863,39 @@ describe('a client-initiated session start', () => {
     expect(machine('attic').ptys.ptys[0]?.kills).toBe(0);
   });
 
+  it('starts a session once when two starts for it arrive together', async () => {
+    // Two panes opening on one unheld session, or one pane whose ref callback
+    // StrictMode ran twice: both starts reach the hub before either machine
+    // has answered, and no holder exists yet to refuse the second.
+    const client = await attach();
+    const resume = (id: number): ClientFrame => ({
+      type: 'session-start',
+      id,
+      storeId: WORK,
+      sessionId: sessionIdSchema.parse('session-quiet'),
+      provider: 'claude',
+      prompt: null,
+      server: null,
+      project: null,
+    });
+
+    await Promise.all([client.say(resume(2)), client.say(resume(3))]);
+
+    const answers = [client.reply(2), client.reply(3)];
+    expect(answers.map((answer) => answer.type).sort()).toEqual(['refusal', 'session-started']);
+    const refused = answers.find((answer) => answer.type === 'refusal');
+    expect(refused).toMatchObject({
+      code: 'refused',
+      message: 'that session is already being started',
+      holder: null,
+    });
+    // One process anywhere, and the session is held by the machine running it.
+    expect([...launches(machine('attic')), ...launches(machine('workshop'))]).toEqual([
+      ['--resume', 'session-quiet'],
+    ]);
+    expect(client.row('session-quiet')?.holder).not.toBeNull();
+  });
+
   it('stops a session the client addressed, resolving the owner hub-side', async () => {
     const client = await attach();
 

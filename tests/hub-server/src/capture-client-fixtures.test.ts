@@ -29,7 +29,10 @@ import {
   hookLine,
 } from '../../../apps/server/src/approvals/fake-approval-hooks.js';
 import { createHubAudience } from '../../../apps/server/src/hub/hub-audience.js';
-import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
+import {
+  createFakeSessionController,
+  type FakeSessionController,
+} from '../../../apps/server/src/sessions/fake-session-controller.js';
 import {
   createFakeStoreFiles,
   createFakeProviderAdapter,
@@ -375,6 +378,13 @@ interface Machine {
   /** What it answers a pause and a resume with. Default: a refusal. */
   readonly pauseOutcome?: PauseOutcome;
   /**
+   * The fake controller itself, for the one capture that changes what a
+   * machine reports between two frames: a resume whose server holds the
+   * session once it has answered. Every other machine is handed a fresh fake
+   * built from the fields above.
+   */
+  readonly controller?: FakeSessionController;
+  /**
    * What a client may browse on this machine, and what is under it.
    *
    * Absent is a machine with no browse roots, which is the default a server
@@ -466,11 +476,13 @@ function fleetDialer(
       const machine = machines.get(host);
       if (machine === undefined) return { ok: false, problem: 'connection refused' };
       const { hubEnd, serverEnd } = createSocketPair();
-      const fake = createFakeSessionController(
-        machine.startOutcome === undefined
-          ? { reports: machine.reports }
-          : { reports: machine.reports, outcome: machine.startOutcome },
-      );
+      const fake =
+        machine.controller ??
+        createFakeSessionController(
+          machine.startOutcome === undefined
+            ? { reports: machine.reports }
+            : { reports: machine.reports, outcome: machine.startOutcome },
+        );
       if (machine.pauseOutcome !== undefined) fake.answerPauseWith(machine.pauseOutcome);
       const controller = machine.live?.sessions ?? fake;
       // A real scan reads a disk and takes event-loop turns; a fake that
@@ -3387,6 +3399,36 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     spawned?.emit('named now\r\n');
     await quiet(spawning);
 
+    // And the spawn exits on its own once it has been named: the agent quit
+    // at its first prompt. Nothing ends the watch -- the hub sends an ending
+    // only for a terminal it finds gone on a redial -- so what a pane rebound
+    // to that session learns is this state, with nothing holding the row.
+    // A machine reports a store after anything it does there, so another
+    // start is the scan, as it was for the naming above.
+    spawned?.close({ exitCode: 0, signal: null });
+    spawning.send({
+      type: 'session-start',
+      id: 6,
+      storeId: LIVE_STORE.storeId,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    await until(
+      () =>
+        terminalHub.hub.state
+          .snapshot()
+          .stores.some((view) =>
+            view.sessions.some(
+              (row) => row.descriptor.sessionId === SPAWNED_SESSION && row.holder === null,
+            ),
+          ),
+      'the exited spawn to be reported with nothing holding it',
+    );
+    const machineStateSpawnExited = await captureState(terminalHub.hub);
+
     // And the machine goes away without saying so. The rows it reported stay,
     // labelled, so this is a refusal naming a machine rather than a session
     // that cannot be found -- which is the difference between a pane that says
@@ -3525,6 +3567,198 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
 
     const refusalNoPush = firstFrame(sixth, 'refusal');
 
+    // A pane opened on a session nothing runs, and on one something outside
+    // agentplex runs. One machine reports both, unheld: `spike-wasm` has no
+    // process and is the session a pane resumes on its own, and `cli-run` is
+    // working with no holder, which is a session somebody started in a shell
+    // -- a pane must say where it runs and send nothing. Then the resume
+    // itself: the machine answers the start naming the session and reports it
+    // held, which is the state a pane re-subscribes on.
+    //
+    // And a store both machines mount, whose session the hub publishes as
+    // `unknown` because neither machine can see the other's processes: the
+    // pane offers a resume there only when a person presses it, and the held
+    // state after that press is captured the same way.
+    const resumableStore = storeIdSchema.parse('store-agentplex');
+    const resumableShared = storeIdSchema.parse('store-shared');
+    // `cliRunning` is whether somebody's own claude, outside agentplex, still
+    // runs cli-run: the one capture that changes it is that claude quitting.
+    const resumableReport = (held: boolean, cliRunning = true): StoreReport => ({
+      storeId: resumableStore,
+      sessions: [
+        descriptor(
+          'store-agentplex',
+          'session-spike-wasm',
+          'claude',
+          'idle',
+          START - 120 * MINUTE,
+          '/Users/robert/code/agentplex',
+          'spike-wasm',
+        ),
+        descriptor(
+          'store-agentplex',
+          'session-cli-run',
+          'claude',
+          cliRunning ? 'working' : 'idle',
+          START - 2 * MINUTE,
+          '/Users/robert/code/agentplex',
+          'cli-run',
+        ),
+      ],
+      holding: held ? [hold('session-spike-wasm', true)] : [],
+    });
+    const sharedReport = (held: boolean): StoreReport => ({
+      storeId: resumableShared,
+      sessions: [
+        descriptor(
+          'store-shared',
+          'session-shared-notes',
+          'claude',
+          'idle',
+          START - 30 * MINUTE,
+          '/mnt/shared/notes',
+          'shared-notes',
+        ),
+      ],
+      holding: held ? [hold('session-shared-notes', true)] : [],
+    });
+    const resumableController = createFakeSessionController({
+      reports: [resumableReport(false), sharedReport(false)],
+      outcome: {
+        ok: true,
+        storeId: resumableStore,
+        sessionId: sessionIdSchema.parse('session-spike-wasm'),
+        terminalId: 'terminal-mbp-resumed',
+      },
+    });
+    const resumableHub = await startFleetHub(
+      new Map<string, Machine>([
+        [
+          'mbp-robert.example',
+          {
+            serverId: 'server-mbp',
+            providers: [readyProvider('claude'), readyProvider('codex')],
+            stores: [
+              { storeId: resumableStore, path: '/Users/robert/code/agentplex' },
+              { storeId: resumableShared, path: '/mnt/shared' },
+            ],
+            reports: [resumableReport(false), sharedReport(false)],
+            controller: resumableController,
+          },
+        ],
+        [
+          'gpu-box.example',
+          {
+            serverId: 'server-gpu',
+            providers: [readyProvider('claude'), missingProvider('codex')],
+            stores: [{ storeId: resumableShared, path: '/mnt/shared' }],
+            reports: [sharedReport(false)],
+          },
+        ],
+      ]),
+      [
+        { label: 'mbp-robert', host: 'mbp-robert.example' },
+        { label: 'gpu-box-01', host: 'gpu-box.example' },
+      ],
+      new Map(),
+    );
+    const sessionHeld = (sessionId: string) => (): boolean =>
+      resumableHub.hub.state
+        .snapshot()
+        .stores.some((view) =>
+          view.sessions.some(
+            (row) => row.descriptor.sessionId === sessionId && row.holder !== null,
+          ),
+        );
+    await until(
+      () =>
+        resumableHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        sessionCount(resumableHub.hub) === 3,
+      'the resumable machines to connect and report',
+    );
+    const machineStateResumable = await captureState(resumableHub.hub);
+    const resumer = await openClient(resumableHub.hub);
+    resumer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    await resumer.framesReceived(2);
+    // What the machine reports once it runs the session, set before the start
+    // so the scan the server takes after answering one is the held reading.
+    resumableController.setReport(resumableReport(true));
+    resumer.send({
+      type: 'session-start',
+      id: 2,
+      storeId: 'store-agentplex',
+      sessionId: 'session-spike-wasm',
+      provider: 'claude',
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    await until(
+      () =>
+        resumer.received.some((text) => labelFor(text) === 'sessionStarted') &&
+        sessionHeld('session-spike-wasm')(),
+      () => `the resume to be answered and the session held: ${resumer.received.join('\n')}`,
+    );
+    const sessionStartedResumed = firstFrame(resumer, 'sessionStarted');
+    // Read by a client that says hello now, as the other states here are: what
+    // a pane is sent is the state as it stands when it asks.
+    const machineStateResumed = await captureState(resumableHub.hub);
+
+    // Pinned to the machine whose controller answers, because which of two
+    // mounting machines the hub would pick is the router's question and not
+    // this capture's: what a pane reads is the answer and the held state.
+    resumableController.setReport(sharedReport(true));
+    resumableController.answerWith({
+      ok: true,
+      storeId: resumableShared,
+      sessionId: sessionIdSchema.parse('session-shared-notes'),
+      terminalId: 'terminal-mbp-shared',
+    });
+    resumer.send({
+      type: 'session-start',
+      id: 3,
+      storeId: 'store-shared',
+      sessionId: 'session-shared-notes',
+      provider: 'claude',
+      prompt: null,
+      server: 'registration-mbp-robert',
+      project: null,
+    });
+    await until(
+      () =>
+        resumer.received.filter((text) => labelFor(text) === 'sessionStarted').length === 2 &&
+        sessionHeld('session-shared-notes')(),
+      () => `the shared resume to be answered and held: ${resumer.received.join('\n')}`,
+    );
+    const sessionStartedShared = lastFrame(resumer, 'sessionStarted');
+    const machineStateSharedResumed = await captureState(resumableHub.hub);
+
+    // Whoever ran cli-run in their own terminal quits it, and the resumed
+    // spike-wasm is stopped from a page. The stop is what makes the machine
+    // report the store again; the quit is what its scan then finds -- a
+    // session run outside agentplex that nothing runs any more.
+    resumableController.setReport(resumableReport(false, false));
+    resumer.send({
+      type: 'session-stop',
+      id: 4,
+      storeId: 'store-agentplex',
+      sessionId: 'session-spike-wasm',
+    });
+    await until(
+      () =>
+        resumableHub.hub.state
+          .snapshot()
+          .stores.some((view) =>
+            view.sessions.some(
+              (row) =>
+                row.descriptor.sessionId === 'session-cli-run' && row.descriptor.process === 'none',
+            ),
+          ) && !sessionHeld('session-spike-wasm')(),
+      () => `the stop to be reported with cli-run quit: ${resumer.received.join('\n')}`,
+    );
+    const machineStateOutsideQuit = await captureState(resumableHub.hub);
+    await resumableHub.cleanup();
+
     const captured = new Map<string, string>();
     for (const text of [
       ...first.received,
@@ -3621,6 +3855,13 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('pushUnsubscribed', pushUnsubscribed);
     captured.set('refusalNoPush', refusalNoPush);
     captured.set('approvalPolicy', approvalPolicy);
+    captured.set('machineStateResumable', machineStateResumable);
+    captured.set('sessionStartedResumed', sessionStartedResumed);
+    captured.set('machineStateResumed', machineStateResumed);
+    captured.set('sessionStartedShared', sessionStartedShared);
+    captured.set('machineStateSharedResumed', machineStateSharedResumed);
+    captured.set('machineStateSpawnExited', machineStateSpawnExited);
+    captured.set('machineStateOutsideQuit', machineStateOutsideQuit);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)

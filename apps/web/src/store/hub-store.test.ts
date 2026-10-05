@@ -24,6 +24,7 @@ import { createFakeTimers } from './timers.js';
 import type { HubCommand } from './commands.js';
 import type { StoreSocket } from './connection.js';
 import { createHubStore, type HubStoreDependencies } from './hub-store.js';
+import { resumeMemoryOf } from './resume-memory.js';
 import { MAX_REMEMBERED_TRANSCRIPTS } from './session-replies.js';
 import { terminalKey } from './terminals.js';
 import {
@@ -1133,6 +1134,53 @@ describe('what is still owed an answer', () => {
     expect(asked).not.toBeNull();
     if (asked !== null) expect(stopFollowUp(h, asked)).toEqual({ kind: 'waiting' });
     stop();
+  });
+});
+
+describe('whether the state is this connection’s', () => {
+  it('is not until a state arrives after the welcome, though the last one is kept', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    expect(h.store.getSnapshot().machineStateCurrent).toBe(false);
+    socket.deliver(hubFrames.machineState);
+    expect(h.store.getSnapshot().machineStateCurrent).toBe(true);
+
+    socket.drop();
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+    expect(h.store.getSnapshot().phase).toBe('connected');
+    expect(h.store.getSnapshot().machineState).not.toBeNull();
+    expect(h.store.getSnapshot().machineStateCurrent).toBe(false);
+
+    next.deliver(hubFrames.machineState);
+    expect(h.store.getSnapshot().machineStateCurrent).toBe(true);
+  });
+});
+
+describe('resume memory', () => {
+  it('remembers a session stopped from this page, sent or queued, past a teardown', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    h.store.sendCommand(STOP);
+    expect(resumeMemoryOf(h.store.getSnapshot().resumes, SESSION).ran).toBe(true);
+
+    unsubscribe();
+    expect(socket.closedByStore).toBe(true);
+    expect(resumeMemoryOf(h.store.getSnapshot().resumes, SESSION).ran).toBe(true);
+  });
+
+  it('remembers a pane seeing a session run, and says nothing the second time', async () => {
+    const h = harness();
+    await establish(h);
+    let told = 0;
+    h.store.subscribe(() => (told += 1));
+
+    h.store.noteRan(SESSION);
+    h.store.noteRan(SESSION);
+
+    expect(resumeMemoryOf(h.store.getSnapshot().resumes, SESSION).ran).toBe(true);
+    expect(told).toBe(1);
   });
 });
 
