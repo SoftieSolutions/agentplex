@@ -26,6 +26,7 @@ import {
   rememberCommand,
   rememberNamed,
   rememberRan,
+  rememberSpawned,
   rememberStarted,
   rememberState,
   type StateSeen,
@@ -479,6 +480,23 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // every one of them a timeout and a reply. The client already knows
         // which start it is waiting on, and this is one frame.
         terminals.retryByStart(frame.replyTo);
+        return;
+      }
+      // News for the start, not an answer to it: `session-started` already
+      // settled the frame, so no answer is remembered or settled here.
+      case 'session-named': {
+        // The start becomes the session's start before the name is
+        // published: a pane or row that rebinds off the name with no terminal
+        // open on the start would otherwise find a session nothing here
+        // started, and resume it.
+        const resumes = rememberSpawned(
+          snapshot.resumes,
+          { storeId: frame.storeId, sessionId: frame.sessionId },
+          frame.replyTo,
+          stateSeen,
+        );
+        if (resumes !== snapshot.resumes) update({ resumes });
+        sessions.named(frame);
         return;
       }
       // Answers and nothing more: the screen that sent the frame reads its own

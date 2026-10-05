@@ -2665,6 +2665,38 @@ describe('a pane on a session nothing holds', () => {
     expect(action()?.textContent).toBe('Try again');
   });
 
+  it('never resumes a spawn named by the hub alone, with no pane ever open on its start', async () => {
+    const connected = await connectedTo(hubFrames.machineState);
+    const { store } = connected.hub;
+    // The captured start, frame 2, which nothing watches: its pending pane is
+    // never opened. The hub's naming is the only word of what it became, and
+    // the agent quits at its first prompt before any state shows it held.
+    const start = store.sendCommand({
+      type: 'session-start',
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: null,
+      provider: providerSchema.parse('claude'),
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    if (!start.accepted) throw new Error(start.reason);
+    expect(start.id).toBe(2);
+    await act(async () => {
+      connected.socket.deliver(hubFrames.sessionStarted);
+      connected.socket.deliver(hubFrames.sessionNamed);
+      connected.socket.deliver(hubFrames.machineStateSpawnExited);
+    });
+
+    // Opened afterwards from its row: a session nothing holds and no process
+    // runs, but one this page started, so it lapses rather than resumes.
+    await mount(pane(connected.hub, 'store-work', 'session-spawned'));
+
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('lapsed');
+    expect(action()?.textContent).toBe('Try again');
+  });
+
   it('shows a spawn lapsed, and sends nothing, when the state of its exit arrives before its name', async () => {
     const connected = await connectedTo(hubFrames.machineState);
     const { store } = connected.hub;

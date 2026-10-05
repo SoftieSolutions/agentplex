@@ -142,18 +142,29 @@ export interface NamedWatch {
 }
 
 /**
- * Every watch by start handle that a frame has since named, as
+ * A spawn this page sent that something has since named, as
  * `rememberStarted`, held to the latest state as `rememberState` would have
  * held it.
  *
  * A socket may carry the state that shows the spawned session's row before
- * the output chunk that names the spawn. That state found no start filed
- * under the row and passed it by, so a start filed by the name afterwards
- * would wait for a holder that state already said was not there -- with
- * nothing to press until another state arrived. Read against `seen`, the
- * start lapses, or is answered by the hold, exactly as it would have had the
- * name come first.
+ * whatever names the spawn. That state found no start filed under the row
+ * and passed it by, so a start filed by the name afterwards would wait for a
+ * holder that state already said was not there -- with nothing to press until
+ * another state arrived. Read against `seen`, the start lapses, or is
+ * answered by the hold, exactly as it would have had the name come first.
  */
+export function rememberSpawned(
+  memories: ResumeMemories,
+  ref: Addressed,
+  start: FrameId,
+  seen: StateSeen | null,
+): ResumeMemories {
+  const filed = rememberStarted(memories, ref, start);
+  if (filed === memories || seen === null) return filed;
+  return rememberRows(filed, seen.state, seen.replies, ref);
+}
+
+/** Every watch by start handle that a terminal frame has since named, as `rememberSpawned`. */
 export function rememberNamed(
   memories: ResumeMemories,
   terminals: ReadonlyMap<string, NamedWatch>,
@@ -162,9 +173,7 @@ export function rememberNamed(
   let next = memories;
   for (const view of terminals.values()) {
     if (view.target.by !== 'start' || view.session === null) continue;
-    const filed = rememberStarted(next, view.session, view.target.startId);
-    if (filed === next) continue;
-    next = seen === null ? filed : rememberRows(filed, seen.state, seen.replies, view.session);
+    next = rememberSpawned(next, view.session, view.target.startId, seen);
   }
   return next;
 }

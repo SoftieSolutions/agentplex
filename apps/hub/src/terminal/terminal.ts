@@ -135,6 +135,12 @@ export interface ClientStart {
   /** The name the hub minted and the server knows the start by. */
   readonly startId: StartId;
   readonly storeId: StoreId;
+  /**
+   * The session the start's own reply named: the id a resume asked for, or
+   * `null` for a spawn. Only a spawn is owed a `session-named` -- a resume's
+   * reply already said which session it is.
+   */
+  readonly sessionId: SessionId | null;
 }
 
 export interface TerminalDependencies {
@@ -185,13 +191,18 @@ export interface Terminal {
    * the sessions feature because the handle is the asking socket's and means
    * nothing off it -- a registry of everybody's handles would be a second thing
    * that has to be told when a socket goes away.
+   *
+   * Called after the start's reply is sent: a spawn the report already named
+   * is told so here, and `session-named` must not reach a client before the
+   * `session-started` it follows.
    */
   noteStart(client: TerminalClient, handle: FrameId, start: ClientStart): void;
   /**
    * A server said which of this hub's starts became which session.
    *
    * Off the store report's `starts`, which is the only exact answer there is,
-   * and the moment a pending pane stops being pending.
+   * and the moment a pending pane stops being pending. The socket that spawned
+   * the start is sent `session-named` the first time, watching or not.
    */
   noteStarts(
     registrationId: ServerRegistrationId,
@@ -328,6 +339,36 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
     const held = starts.get(client) ?? new Map<FrameId, ClientStart>();
     starts.set(client, held);
     return held;
+  };
+
+  /** The socket that spawned this start, and its own handle for it, or `undefined`. */
+  const spawnerOf = (
+    startId: StartId,
+  ): { readonly client: TerminalClient; readonly handle: FrameId } | undefined => {
+    for (const [client, made] of starts) {
+      for (const [handle, start] of made) {
+        if (start.startId === startId) {
+          return start.sessionId === null ? { client, handle } : undefined;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  /**
+   * Tells the socket that made a start which session it became.
+   *
+   * To that socket alone and whether or not it is watching: the frame binds
+   * the client's own handle, which means nothing on any other connection, and
+   * a client with no pane open on the spawn is the one that most needs telling.
+   */
+  const sendNamed = (
+    client: TerminalClient,
+    handle: FrameId,
+    storeId: StoreId,
+    sessionId: SessionId,
+  ): void => {
+    client.send({ type: 'session-named', replyTo: handle, storeId, sessionId });
   };
 
   /**
@@ -684,6 +725,10 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
 
     noteStart(client: TerminalClient, handle: FrameId, start: ClientStart): void {
       startsOf(client).set(handle, start);
+      // The report can arrive before the start is written down here, and the
+      // naming it carried was owed to this socket all the same.
+      const became = start.sessionId === null ? named.get(start.startId) : undefined;
+      if (became !== undefined) sendNamed(client, handle, became.storeId, became.sessionId);
     },
 
     noteStarts(
@@ -693,7 +738,15 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
     ): void {
       for (const tag of reported) {
         if (tag.sessionId === null) continue;
-        named.set(tag.startId, { storeId, sessionId: tag.sessionId });
+        const known = named.get(tag.startId);
+        // A report repeats its starts every scan and a redial replays it whole:
+        // a naming already sent is not news to its owner. The rebind below
+        // still runs on a repeat, for a pane opened by its start since.
+        if (known?.storeId !== storeId || known.sessionId !== tag.sessionId) {
+          named.set(tag.startId, { storeId, sessionId: tag.sessionId });
+          const owner = spawnerOf(tag.startId);
+          if (owner !== undefined) sendNamed(owner.client, owner.handle, storeId, tag.sessionId);
+        }
 
         const upstream = upstreams.get(
           upstreamKeyOf(registrationId, { by: 'start', startId: tag.startId }),
