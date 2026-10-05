@@ -2,6 +2,8 @@ import type {
   PauseOutcome,
   PauseSessionRequest,
   ResumeOutcome,
+  RetakeOutcome,
+  RetakeSessionRequest,
   Sessions,
   SessionOutcome,
   StartOutcome,
@@ -48,6 +50,10 @@ export interface FakeSessions extends Sessions {
    * every test sets one.
    */
   answerWith(outcome: StartOutcome): void;
+  /** Every retake it was asked for, in order. */
+  readonly retakes: readonly RetakeSessionRequest[];
+  /** What every later retake answers with: where it landed, or a refusal. */
+  answerRetakeWith(outcome: RetakeOutcome): void;
   /** Every transcript it was asked for, in order. */
   readonly transcripts: readonly TranscriptRequest[];
   /**
@@ -76,6 +82,14 @@ export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessi
   const pauses: PauseSessionRequest[] = [];
   const resumes: PauseSessionRequest[] = [];
   const transcripts: TranscriptRequest[] = [];
+  const retakes: RetakeSessionRequest[] = [];
+
+  let retake: RetakeOutcome = {
+    ok: false,
+    code: 'refused',
+    problem: 'this fake control was given no retake answer',
+    holder: null,
+  };
 
   let pause: PauseOutcome = {
     ok: false,
@@ -136,6 +150,19 @@ export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessi
     async resume(request: PauseSessionRequest): Promise<ResumeOutcome> {
       resumes.push(request);
       return resume;
+    },
+
+    async retake(request: RetakeSessionRequest): Promise<RetakeOutcome> {
+      retakes.push(request);
+      return retake;
+    },
+
+    answerRetakeWith(next: RetakeOutcome): void {
+      retake = next;
+    },
+
+    get retakes(): readonly RetakeSessionRequest[] {
+      return retakes;
     },
 
     answerPauseWith(next: PauseOutcome): void {

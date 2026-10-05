@@ -86,6 +86,41 @@ export function answerStop(
 }
 
 /**
+ * Retakes a session an outside process was running, and answers the client
+ * that asked as a start is answered.
+ *
+ * `session-started` naming the session, because that is what happened: the
+ * session now runs under agentplex, on the machine named. Unlike a start's
+ * answer, nothing is noted with the relay: a retake mints no start handle,
+ * since the session it resumes already has a name a pane can subscribe by.
+ * A refusal is relayed in the words of whichever side said no -- the server's,
+ * when it was the server, since only it saw the process.
+ */
+export function answerRetake(
+  ctx: ReplyContext,
+  sessions: Sessions,
+  replyTo: FrameId,
+  request: Parameters<Sessions['retake']>[0],
+): Promise<void> {
+  return reply(
+    ctx,
+    replyTo,
+    { doing: 'could not retake a session', failure: 'the hub could not retake that session' },
+    () => sessions.retake(request),
+    (outcome) => {
+      if (!outcome.ok) return refusal(replyTo, outcome.code, outcome.problem, outcome.holder);
+      return {
+        type: 'session-started',
+        replyTo,
+        storeId: outcome.storeId,
+        sessionId: outcome.sessionId,
+        server: outcome.server,
+      };
+    },
+  );
+}
+
+/**
  * Pauses or resumes a session and answers the client that asked.
  *
  * The receipt carries the server's own pause word for a pause, because the

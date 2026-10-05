@@ -15,7 +15,13 @@ import { missingProvider, readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type HubStateSnapshot } from '../fleet-state/fleet-state.js';
-import { routePause, routeSessionRead, routeStart, routeStop } from './session-routing.js';
+import {
+  routePause,
+  routeRetake,
+  routeSessionRead,
+  routeStart,
+  routeStop,
+} from './session-routing.js';
 
 /**
  * The scheduling decision, against real reduced state.
@@ -967,6 +973,145 @@ describe('routeSessionRead', () => {
       code: 'refused',
       problem: 'no server with that store mounted is connected right now',
       holder: null,
+    });
+  });
+});
+
+/**
+ * Where a retake goes: to the machine whose reading shows an outside process
+ * on the session, and only when that reading is the whole truth about it.
+ */
+describe('routeRetake', () => {
+  const SESSION = sessionId('session-1');
+
+  /** A session a process outside agentplex is running, seen by the one machine with the store. */
+  function running(
+    provider: 'claude' | 'codex' = 'claude',
+    process: SessionDescriptor['process'] = 'running',
+  ): SessionDescriptor {
+    return { ...session('session-1'), provider, process };
+  }
+
+  function alone(
+    descriptor: SessionDescriptor,
+    machine: Partial<Machine> = {},
+    holding: readonly SessionHold[] = [],
+  ): HubStateSnapshot {
+    return fleet([
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        reports: [{ storeId: WORK, sessions: [descriptor], holding }],
+        ...machine,
+      },
+    ]);
+  }
+
+  it('sends a retake to the machine that sees the process, with the provider off the row', () => {
+    const state = alone(running('codex'), { providers: [readyProvider('codex')] });
+
+    const routed = routeRetake(state, { storeId: WORK, sessionId: SESSION });
+
+    expect(routed.ok).toBe(true);
+    if (!routed.ok) return;
+    expect(routed.server.label).toBe('workshop');
+    expect(routed.provider).toBe('codex');
+  });
+
+  it('refuses a session the hub has no row for, in a store it knows and one it does not', () => {
+    const state = alone(running());
+
+    expect(routeRetake(state, { storeId: WORK, sessionId: sessionId('session-2') })).toMatchObject(
+      { ok: false, code: 'refused', holder: null },
+    );
+    expect(routeRetake(state, { storeId: SPARE, sessionId: SESSION })).toMatchObject({
+      ok: false,
+      code: 'refused',
+      holder: null,
+    });
+  });
+
+  it('refuses a session agentplex already holds, names the holder, and says to stop it', () => {
+    const state = alone(running(), {}, [{ sessionId: SESSION, stoppable: true, pause: 'none' }]);
+
+    const routed = routeRetake(state, { storeId: WORK, sessionId: SESSION });
+
+    expect(routed).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'agentplex already holds it; stop it instead',
+      holder: { server: registration('workshop'), stoppable: true, pause: 'none' },
+    });
+  });
+
+  it.each(['none', 'unknown'] as const)(
+    'refuses a session whose process reads %s: there is nothing seen to end',
+    (process) => {
+      const routed = routeRetake(alone(running('claude', process)), {
+        storeId: WORK,
+        sessionId: SESSION,
+      });
+
+      expect(routed).toMatchObject({ ok: false, code: 'refused', holder: null });
+    },
+  );
+
+  it('refuses when the machine that saw the process is unreachable, and names it', () => {
+    const state = alone(running(), { phase: 'stale' });
+
+    const routed = routeRetake(state, { storeId: WORK, sessionId: SESSION });
+
+    expect(routed.ok).toBe(false);
+    if (routed.ok) return;
+    expect(routed.problem).toContain('workshop');
+    expect(routed.holder).toBeNull();
+  });
+
+  it('refuses a store more than one server mounts, and routes nothing', () => {
+    // Robert's decision 10b. The process one machine names may be another
+    // machine's to end, or a second one may be running beside it: on a shared
+    // volume no single reading is the fleet's, and a retake ends a process.
+    const state = fleet([
+      { label: 'attic', phase: 'connected', stores: [WORK] },
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        reports: [{ storeId: WORK, sessions: [running()] }],
+      },
+    ]);
+
+    const routed = routeRetake(state, { storeId: WORK, sessionId: SESSION });
+
+    expect(routed.ok).toBe(false);
+    if (routed.ok) return;
+    expect(routed.problem).toContain('shared');
+    expect(routed.problem).toContain('cannot be sure which process runs');
+    expect(routed.holder).toBeNull();
+  });
+
+  it('refuses when the machine is shutting down, in the words a start gets', () => {
+    const state = alone(running(), {
+      draining: { since: START, graceMs: 15_000, sessions: [] },
+    });
+
+    const routed = routeRetake(state, { storeId: WORK, sessionId: SESSION });
+
+    expect(routed).toMatchObject({
+      ok: false,
+      problem: 'workshop is shutting down and is not taking new sessions',
+    });
+  });
+
+  it('refuses when the machine cannot run the provider the resume would need', () => {
+    const state = alone(running(), { providers: [missingProvider()] });
+
+    const routed = routeRetake(state, { storeId: WORK, sessionId: SESSION });
+
+    expect(routed).toMatchObject({
+      ok: false,
+      problem: 'workshop cannot run claude: no directory this server searches holds claude',
     });
   });
 });

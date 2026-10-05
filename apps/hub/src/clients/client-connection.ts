@@ -52,6 +52,7 @@ import {
 import {
   answerAttention,
   answerPause,
+  answerRetake,
   answerStart,
   answerStop,
   answerTranscript,
@@ -390,6 +391,16 @@ export function serveClientConnection(
 
       case 'session-stop':
         void answerStop(ctx, sessions, frame.id, {
+          storeId: frame.storeId,
+          sessionId: frame.sessionId,
+        });
+        return;
+
+      case 'session-retake':
+        // Not awaited, for the reason a start is not: the server ends a
+        // process, waits to see it gone and resumes the session before it
+        // answers, and every later frame on this socket must not wait on that.
+        void answerRetake(ctx, sessions, frame.id, {
           storeId: frame.storeId,
           sessionId: frame.sessionId,
         });

@@ -365,6 +365,98 @@ export type SessionReadRouting =
   | { readonly ok: true; readonly server: ServerConnectionReport; readonly provider: Provider }
   | Extract<Routing, { ok: false }>;
 
+/**
+ * Which server to tell to retake a session, and which agent runs it.
+ *
+ * A retake ends a process agentplex did not start, so every refusal here errs
+ * towards ending nothing. The machine is the one whose reading of the row says
+ * a process is running -- the only machine that looked and saw one -- and the
+ * provider is read off that row for the reason a transcript read's is: it
+ * chooses whose registry the server consults, and a client must not.
+ *
+ * In order, each a different thing for a person to do:
+ *
+ * - no row: there is no session here to take over;
+ * - a holder: agentplex is already running it, and the way to move it is to
+ *   stop it, not to end a process the hub started;
+ * - a store more than one server mounts: the process one machine names may be
+ *   another machine's, or a second may be running beside it, and no single
+ *   reading speaks for the fleet (Robert's decision 10b on AGX-376);
+ * - a process that does not read `running`: `none` has nothing to end, and
+ *   `unknown` is a machine that could not look, which is no licence to signal;
+ * - the machine that saw it is unreachable, named;
+ * - and what a start would be refused on, since a retake ends in a resume on
+ *   that same machine: a drain, or a provider it cannot run.
+ *
+ * The server checks again what it alone can see -- that the process is the one
+ * its registry meant, and that it sits at its prompt -- and its refusal is
+ * relayed in its own words.
+ */
+export function routeRetake(
+  state: HubStateSnapshot,
+  session: { readonly storeId: StoreId; readonly sessionId: SessionId },
+): SessionReadRouting {
+  const store = state.stores.find((view) => view.storeId === session.storeId);
+  const row = store?.sessions.find((candidate) => candidate.ref.sessionId === session.sessionId);
+  if (store === undefined || row === undefined) {
+    return {
+      ok: false,
+      code: 'refused',
+      problem: 'the hub has no record of that session in that store',
+      holder: null,
+    };
+  }
+
+  if (row.holder !== null) {
+    return {
+      ok: false,
+      code: 'refused',
+      problem: 'agentplex already holds it; stop it instead',
+      holder: row.holder,
+    };
+  }
+
+  if (store.servers.length > 1) {
+    return {
+      ok: false,
+      code: 'refused',
+      problem:
+        'that store is shared by more than one server, so agentplex cannot be sure ' +
+        'which process runs that session',
+      holder: null,
+    };
+  }
+
+  if (row.descriptor.process !== 'running') {
+    return {
+      ok: false,
+      code: 'refused',
+      problem:
+        row.descriptor.process === 'none'
+          ? 'nothing is running that session, so there is nothing to retake; resume it instead'
+          : 'no server could tell what is running that session, so the hub retakes nothing',
+      holder: null,
+    };
+  }
+
+  const server = store.servers.find((candidate) => candidate.registrationId === row.source);
+  if (server === undefined || !countsTowardAttention(server)) {
+    return {
+      ok: false,
+      code: 'refused',
+      problem: `the hub cannot reach ${labelOf(state, row.source)} right now`,
+      holder: null,
+    };
+  }
+
+  const unusable = cannotStart(server, row.descriptor.provider);
+  if (unusable !== null) {
+    return { ok: false, code: 'refused', problem: unusable, holder: null };
+  }
+
+  return { ok: true, server, provider: row.descriptor.provider };
+}
+
 function holderOf(store: StoreView, sessionId: SessionId): SessionHolder | null {
   return store.sessions.find((row) => row.ref.sessionId === sessionId)?.holder ?? null;
 }
