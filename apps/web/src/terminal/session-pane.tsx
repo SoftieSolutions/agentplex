@@ -11,6 +11,7 @@ import {
 import {
   assertNever,
   type ClientTerminalTarget,
+  type FrameId,
   type PendingApproval,
   type Provider,
   type SessionRef,
@@ -80,6 +81,7 @@ import {
   paneState,
   resumeCommand,
   resumeFollowUp,
+  retakeCommand,
   retakeFollowUp,
   type PaneState,
 } from './pane-state-model.js';
@@ -320,6 +322,8 @@ interface PaneStateNoticeProps {
   readonly autoResume: (node: HTMLElement | null) => void;
   /** A press of the state's control: a resume, either way. */
   readonly onAction: () => void;
+  /** A press of the offer to take over a session run outside agentplex. */
+  readonly onRetake: () => void;
   /** Whether a press can go now. A start is intent about now, so it is never queued. */
   readonly canAct: boolean;
 }
@@ -337,6 +341,7 @@ function PaneStateNotice({
   scheme,
   autoResume,
   onAction,
+  onRetake,
   canAct,
 }: PaneStateNoticeProps): JSX.Element | null {
   if (pane.kind === 'held' || pane.kind === 'unknown-row') return null;
@@ -372,6 +377,9 @@ function PaneStateNotice({
           ))}
         </Stack>
       )}
+      {pane.kind === 'outside' && (
+        <RetakeControl pane={pane} scheme={scheme} onRetake={onRetake} canAct={canAct} />
+      )}
       {pane.kind === 'starting' && pane.send && <span ref={autoResume} hidden />}
       {pane.action !== null && (
         <Group>
@@ -380,6 +388,57 @@ function PaneStateNotice({
           </Button>
         </Group>
       )}
+    </Stack>
+  );
+}
+
+interface RetakeControlProps {
+  readonly pane: Extract<PaneState, { kind: 'outside' }>;
+  readonly scheme: Scheme;
+  readonly onRetake: () => void;
+  readonly canAct: boolean;
+}
+
+/**
+ * The offer to end the claude running a session outside agentplex and run it
+ * here, under the sentence that says where it runs.
+ *
+ * One button in every state of the offer, disabled rather than removed while
+ * the outside claude works or the retake is in flight: the session reaching
+ * its prompt is the same button becoming pressable, not a control appearing
+ * under the pointer. The reason it cannot be pressed is said beside it, and a
+ * refusal is said in the refusing side's own words, with the button left
+ * pressable because the reason may have passed by the time somebody reads it.
+ */
+function RetakeControl({ pane, scheme, onRetake, canAct }: RetakeControlProps): JSX.Element {
+  const { retake } = pane;
+  const busy = retake.kind === 'working-elsewhere' || retake.kind === 'retaking';
+  return (
+    <Stack gap={6}>
+      {retake.kind === 'working-elsewhere' && (
+        <Text fz={12} c="dimmed" data-pane-retake-reason>
+          {retake.words}
+        </Text>
+      )}
+      {retake.kind === 'refused' && (
+        <Text
+          fz={12}
+          data-pane-retake-refusal
+          style={{ color: colorForToneText('blocked', scheme) }}
+        >
+          {`this session was not taken over: ${retake.words}`}
+        </Text>
+      )}
+      <Group>
+        <Button
+          size="xs"
+          data-pane-retake={retake.kind}
+          disabled={busy || !canAct}
+          onClick={onRetake}
+        >
+          {pane.retakeLabel}
+        </Button>
+      </Group>
     </Stack>
   );
 }
@@ -529,6 +588,24 @@ export function SessionPane({
       resumeCommand({ storeId: sessionRef.storeId, sessionId: sessionRef.sessionId, provider }),
     );
   }, [hub, sessionRef, provider]);
+  /**
+   * The retake this pane last sent, kept only so the press re-renders it.
+   *
+   * The store files a sent command in resume memory without telling anybody,
+   * and a resume is drawn at once only because a start also notifies through
+   * the starts it tracks; a retake has none. What the pane state reads is the
+   * memory, not this, so a pane mounted again mid-retake still says so.
+   */
+  const [, setRetakeSent] = useState<FrameId | null>(null);
+  /**
+   * A take-over somebody pressed for. Filed by the store as this session's
+   * start, so what became of it is read back out of resume memory like a
+   * resume's; the hold it ends in is what re-subscribes the pane.
+   */
+  const pressRetake = useCallback((): void => {
+    const outcome = hub.sendCommand(retakeCommand(sessionRef));
+    if (outcome.accepted) setRetakeSent(outcome.id);
+  }, [hub, sessionRef]);
   /**
    * Tells the store this pane saw the session run, so that no later mount of
    * a pane on it resumes it on its own. The same callback-ref event as the
@@ -1020,6 +1097,7 @@ export function SessionPane({
       scheme={scheme}
       autoResume={autoResume}
       onAction={pressResume}
+      onRetake={pressRetake}
       canAct={snapshot.phase === 'connected'}
     />
   );

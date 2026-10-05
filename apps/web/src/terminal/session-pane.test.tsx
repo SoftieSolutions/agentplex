@@ -2773,10 +2773,148 @@ describe('a pane on a session nothing holds', () => {
     expect(container.querySelector('[data-status]')?.textContent).toBe('not running');
   });
 
+  describe('taking over a session run outside agentplex', () => {
+    const CLI_RUN = {
+      by: 'session' as const,
+      storeId: 'store-agentplex',
+      sessionId: 'session-cli-run',
+    };
+    const LABEL = 'Stop the claude on mbp-robert and run this session here';
+
+    function retakeButton(): HTMLButtonElement {
+      const button = container.querySelector<HTMLButtonElement>('button[data-pane-retake]');
+      if (button === null) throw new Error('no retake control');
+      return button;
+    }
+
+    async function pressedOn(state: string): Promise<{ connected: Connected; id: number }> {
+      const connected = await connectedTo(state);
+      await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));
+      await click(retakeButton());
+      const [retake] = ofType(sentSince(connected), 'session-retake');
+      if (retake === undefined) throw new Error('no retake was sent');
+      return { connected, id: retake.id };
+    }
+
+    it('sends exactly one retake for the row, and subscribes only once it is held', async () => {
+      const connected = await connectedTo(hubFrames.machineStateRetakeable);
+      await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));
+      expect(shown()?.getAttribute('data-pane-state')).toBe('outside');
+      expect(retakeButton().textContent).toBe(LABEL);
+      expect(retakeButton().disabled).toBe(false);
+      expect(sentSince(connected)).toEqual([]);
+
+      await click(retakeButton());
+
+      expect(sentSince(connected)).toEqual([
+        {
+          type: 'session-retake',
+          id: expect.any(Number) as number,
+          storeId: 'store-agentplex',
+          sessionId: 'session-cli-run',
+        },
+      ]);
+      expect(retakeButton().textContent).toBe('stopping it, then starting here');
+      expect(retakeButton().disabled).toBe(true);
+      const [retake] = ofType(sentSince(connected), 'session-retake');
+      if (retake === undefined) throw new Error('no retake was sent');
+
+      // The same state again: still retaking, and nothing sent.
+      await deliver(connected.socket, hubFrames.machineStateRetakeable);
+      expect(retakeButton().disabled).toBe(true);
+      await deliver(connected.socket, addressedTo(hubFrames.sessionStartedRetaken, retake.id));
+      expect(ofType(sentSince(connected), 'session-subscribe')).toEqual([]);
+      expect(shown()?.getAttribute('data-pane-state')).toBe('starting');
+
+      await deliver(connected.socket, hubFrames.machineStateRetaken);
+
+      expect(ofType(sentSince(connected), 'session-subscribe')).toEqual([
+        { type: 'session-subscribe', id: expect.any(Number) as number, target: CLI_RUN },
+      ]);
+      expect(ofType(sentSince(connected), 'session-retake')).toHaveLength(1);
+      expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+      expect(shown()).toBeNull();
+      expect(emulators.created).toHaveLength(1);
+    });
+
+    it('subscribes once when the hold is reported before the answer, as a machine sends them', async () => {
+      const { connected, id } = await pressedOn(hubFrames.machineStateRetakeable);
+
+      await deliver(connected.socket, hubFrames.machineStateRetaken);
+      await deliver(connected.socket, addressedTo(hubFrames.sessionStartedRetaken, id));
+
+      expect(ofType(sentSince(connected), 'session-subscribe')).toEqual([
+        { type: 'session-subscribe', id: expect.any(Number) as number, target: CLI_RUN },
+      ]);
+      expect(shown()).toBeNull();
+    });
+
+    it('is disabled with the reason while the claude works, and enabled at its prompt in place', async () => {
+      const connected = await connectedTo(hubFrames.machineStateResumable);
+      await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));
+      const button = retakeButton();
+      expect(button.textContent).toBe(LABEL);
+      expect(button.disabled).toBe(true);
+      const reason = container.querySelector<HTMLElement>('[data-pane-retake-reason]');
+      expect(reason?.textContent).toContain('is working');
+
+      await click(button);
+      expect(sentSince(connected)).toEqual([]);
+
+      // The same claude reaches its prompt: the same button, now pressable.
+      await deliver(connected.socket, hubFrames.machineStateRetakeable);
+
+      expect(retakeButton()).toBe(button);
+      expect(button.disabled).toBe(false);
+      expect(container.querySelector('[data-pane-retake-reason]')).toBeNull();
+    });
+
+    it('draws a refusal in the blocked tone, in the hub’s words, and can be pressed again', async () => {
+      const { connected, id } = await pressedOn(hubFrames.machineStateRetakeable);
+
+      await deliver(connected.socket, addressedTo(hubFrames.refusalRetake, id));
+
+      expect(shown()?.getAttribute('data-pane-state')).toBe('outside');
+      const words = container.querySelector<HTMLElement>('[data-pane-retake-refusal]');
+      expect(words?.textContent).toContain(
+        'nothing is running that session, so there is nothing to retake; resume it instead',
+      );
+      expect(words?.style.color).toBe(rgb(colorForToneText('blocked', 'dark')));
+      expect(retakeButton().textContent).toBe(LABEL);
+      expect(retakeButton().disabled).toBe(false);
+      expect(action()).toBeNull();
+
+      await click(retakeButton());
+
+      expect(ofType(sentSince(connected), 'session-retake')).toHaveLength(2);
+      expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+      expect(container.querySelector('[data-pane-retake-refusal]')).toBeNull();
+    });
+
+    it('offers no retake for a row nothing can tell about, nor one held, nor one out of reach', async () => {
+      const cases: readonly [string, string, string][] = [
+        [hubFrames.machineStateResumable, 'store-shared', 'session-shared-notes'],
+        [hubFrames.machineStateRetaken, 'store-agentplex', 'session-cli-run'],
+        [hubFrames.machineStateStale, 'store-universe', 'session-bench-tokenizer'],
+        [hubFrames.machineStateRetakeable, 'store-agentplex', 'session-spike-wasm'],
+      ];
+      for (const [state, storeId, sessionId] of cases) {
+        const connected = await connectedTo(state);
+        await mount(pane(connected.hub, storeId, sessionId));
+        expect(container.querySelector('[data-pane-retake]')).toBeNull();
+        await act(async () => {
+          root?.unmount();
+        });
+        root = null;
+      }
+    });
+  });
+
   it('subscribes to nothing in any state but held', async () => {
     const cases: readonly [string, string, string][] = [
       [hubFrames.machineStateResumable, 'store-agentplex', 'session-spike-wasm'],
       [hubFrames.machineStateResumable, 'store-agentplex', 'session-cli-run'],
+      [hubFrames.machineStateRetakeable, 'store-agentplex', 'session-cli-run'],
       [hubFrames.machineStateResumable, 'store-shared', 'session-shared-notes'],
       [hubFrames.machineStatePopulated, 'store-universe', 'session-docs-sweep'],
       [hubFrames.machineStateStale, 'store-universe', 'session-bench-tokenizer'],
