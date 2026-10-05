@@ -1660,6 +1660,21 @@ describe('a retake of a session a claude outside agentplex is running', () => {
     expect(signaller.sent).toEqual([]);
   });
 
+  it('refuses a claude whose transcript holds no turn yet, and signals nothing', async () => {
+    // A file with no turn in it is no more a conversation to resume than no
+    // file at all.
+    const { sessions, signaller } = await outsideClaude(
+      { status: 'idle' },
+      {
+        transcript: false,
+        files: { [TRANSCRIPT]: await readProviderFixture('claude-no-turns.jsonl') },
+      },
+    );
+
+    expect(refusal(await retake(sessions))).toContain('no transcript');
+    expect(signaller.sent).toEqual([]);
+  });
+
   describe('while a retake waits for the process it signalled to go', () => {
     // The signalled claude has dropped its entry and its pid may already be
     // dead while it flushes, so a scan in that window sees nothing running the

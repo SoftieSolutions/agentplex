@@ -1135,14 +1135,20 @@ export function createSessionController(
     }
   }
 
-  /** Whether the adapter can read this session's transcript, which a resume continues. */
+  /**
+   * Whether this session's transcript holds a turn, which is what a resume
+   * continues. A readable answer is not enough: the adapter reads a live
+   * claude with no file yet as an empty transcript, and a file with no turn
+   * in it reads the same.
+   */
   async function transcriptOf(
     store: StoreDescriptor,
     adapter: ProviderAdapter,
     session: SessionRef,
   ): Promise<boolean> {
     try {
-      return (await adapter.transcript({ store, session, limit: 1 })).ok;
+      const read = await adapter.transcript({ store, session, limit: 1 });
+      return read.ok && (read.transcript.activities.length > 0 || read.transcript.olderExist);
     } catch {
       return false;
     }
