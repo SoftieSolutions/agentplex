@@ -16,8 +16,8 @@ import { terminalKey } from '../store/terminals.js';
 import type { RefusalView, StartedView, StartView } from '../store/views.js';
 import {
   NAMING_BOUND_MS,
-  type NamedTerminal,
   type StartMoment,
+  type WatchedStart,
 } from '../terminal/pending-pane-model.js';
 import { pendingRows, withPendingRows, type PendingRow } from './pending-rows-model.js';
 import { listSessions, orderByActivity, partitionNeedsYou } from './session-list-model.js';
@@ -100,7 +100,14 @@ function startsOf(entries: readonly (readonly [FrameId, StartView])[]) {
   return new Map(entries);
 }
 
-const NO_TERMINALS = new Map<string, NamedTerminal>();
+const NO_TERMINALS = new Map<string, WatchedStart>();
+
+/** The start's terminal as its pane holds it: being fed, not ended, not named. */
+const RELAYED: WatchedStart = { session: null, attached: true, ended: null };
+
+function watching(terminal: WatchedStart): ReadonlyMap<string, WatchedStart> {
+  return new Map([[terminalKey({ by: 'start', startId: START }), terminal]]);
+}
 
 describe('pendingRows', () => {
   it('draws nothing for a start the hub has not answered', () => {
@@ -127,9 +134,7 @@ describe('pendingRows', () => {
     // reached the store: a row beside the session's own would be one agent
     // listed twice.
     const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
-    const terminals = new Map<string, NamedTerminal>([
-      [terminalKey({ by: 'start', startId: START }), { session: NAMED }],
-    ]);
+    const terminals = watching({ ...RELAYED, session: NAMED });
     expect(pendingRows(starts, terminals, populated, layout, null, NOW)).toEqual([]);
   });
 
@@ -210,6 +215,26 @@ describe('pendingRows', () => {
     const past = { ...NOW, now: ANSWERED_AT + NAMING_BOUND_MS };
     expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, inside)).toHaveLength(1);
     expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, past)).toEqual([]);
+  });
+
+  it('keeps a start past the bound while its terminal is relayed on this connection', () => {
+    // A spawn given no prompt -- or codex, which names nothing until a first
+    // turn -- can sit unnamed with somebody typing into it. Its pane keeps the
+    // address, so its row keeps the way back to that pane.
+    const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
+    const late = { ...NOW, now: ANSWERED_AT + 70_000 };
+    expect(pendingRows(starts, watching(RELAYED), populated, layout, null, late)).toHaveLength(1);
+  });
+
+  it('drops a relayed start past the bound once its terminal ends or it is named', () => {
+    const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
+    const late = { ...NOW, now: ANSWERED_AT + 70_000 };
+    const ended = watching({ ...RELAYED, attached: false, ended: 'session-ended' });
+    expect(pendingRows(starts, ended, populated, layout, null, late)).toEqual([]);
+    const named = startsOf([[START, { asked, started, refusal: null, named: NAMED, sentOn: 1 }]]);
+    expect(pendingRows(named, watching(RELAYED), populated, layout, null, late)).toEqual([]);
+    const down = { ...late, phase: 'reconnecting' } as const;
+    expect(pendingRows(starts, watching(RELAYED), populated, layout, null, down)).toEqual([]);
   });
 
   it('puts the start asked most recently first', () => {

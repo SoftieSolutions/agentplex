@@ -122,10 +122,42 @@ function onCarrier(start: StartView, moment: StartMoment): boolean {
   return start.sentOn === moment.connection && moment.phase === 'connected';
 }
 
-/** The slice of a watched terminal `startShown` reads: its name, and whether it is being fed. */
+/** The slice of a watched terminal `startLive` reads: its name, and whether it is being fed. */
 export interface WatchedStart extends NamedTerminal {
   readonly attached: boolean;
   readonly ended: SubscriptionEndReason | null;
+}
+
+/**
+ * Whether a start that has not become a session is still something this client
+ * can draw as live: awaited, or past the bound with its terminal relayed by the
+ * hub right now on the connection that carried it.
+ *
+ * The second half is the case the bound cannot see. A spawn given no prompt
+ * writes no session until somebody types into it, and codex, which has no
+ * registry to name it from, waits for a first turn; the pane somebody is
+ * typing into is live, not a promise. Past the bound with nothing relaying it
+ * -- the terminal ended, detached, or was never watched -- or with the
+ * connection gone, it is neither, and nothing more about it is coming.
+ *
+ * One predicate for the start's sidebar row and its address, so the two never
+ * disagree: a row dropped while its pane is still live would leave the pane
+ * with no way back to it once somebody navigates away, and a row kept for a
+ * pane the address no longer draws would open the list.
+ */
+export function startLive(
+  start: StartView,
+  terminal: WatchedStart | null,
+  moment: StartMoment,
+): boolean {
+  if (startAwaited(start, moment)) return true;
+  return (
+    start.refusal === null &&
+    onCarrier(start, moment) &&
+    terminal !== null &&
+    terminal.attached &&
+    terminal.ended === null
+  );
 }
 
 /**
@@ -134,12 +166,9 @@ export interface WatchedStart extends NamedTerminal {
  *
  * Yes for a start that became a session, since the panes show that session;
  * yes for a refused one, whose pane says so in the hub's words; yes while the
- * start is awaited. And yes for one past the bound whose terminal the hub is
- * relaying right now on this connection: a spawn given no prompt writes no
- * session until somebody types into it, and the pane they are typing into is
- * live, not a promise. Otherwise no -- a start from an earlier connection or
- * past the bound with nothing relaying it would open a pane that can only say
- * "starting" forever or be refused, so the address falls to the list.
+ * start is live (`startLive`). Otherwise no -- a start whose connection has
+ * gone, or past the bound with nothing relaying it, would open a pane that can
+ * only say "starting" forever or be refused, so the address falls to the list.
  */
 export function startShown(
   start: StartView | null,
@@ -149,10 +178,7 @@ export function startShown(
   if (start === null) return false;
   if (pendingSession(start, terminal) !== null) return true;
   if (start.refusal !== null) return true;
-  if (startAwaited(start, moment)) return true;
-  return (
-    onCarrier(start, moment) && terminal !== null && terminal.attached && terminal.ended === null
-  );
+  return startLive(start, terminal, moment);
 }
 
 /** What the pane says about a start that has not become a session yet. */

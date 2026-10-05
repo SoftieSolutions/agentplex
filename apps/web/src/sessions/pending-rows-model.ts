@@ -10,9 +10,9 @@ import { terminalKey } from '../store/terminals.js';
 import type { StartView } from '../store/views.js';
 import {
   pendingSession,
-  startAwaited,
-  type NamedTerminal,
+  startLive,
   type StartMoment,
+  type WatchedStart,
 } from '../terminal/pending-pane-model.js';
 import { serverLabel, type SessionListItem } from './session-list-model.js';
 
@@ -34,11 +34,15 @@ import { serverLabel, type SessionListItem } from './session-list-model.js';
  *     the socket that made it and forgets that socket's starts when it closes,
  *     and a provider that exits before writing an id is never named at all.
  *     So a start whose connection has closed -- redialled or not -- or one
- *     unnamed `NAMING_BOUND_MS` after its yes, is not drawn -- dropped rather than drawn as failed,
- *     because "did not start" is a guess about a process this client cannot
- *     see, and if it did write an id after all the scan lists it in its own
- *     row. `startAwaited` decides it, the same reading the start's address
- *     uses, so a row and the pane it opens agree.
+ *     unnamed `NAMING_BOUND_MS` after its yes with nothing relaying its
+ *     terminal, is not drawn -- dropped rather than drawn as failed, because
+ *     "did not start" is a guess about a process this client cannot see, and
+ *     if it did write an id after all the scan lists it in its own row. One
+ *     past the bound whose terminal the hub is still relaying on this
+ *     connection keeps its row: a prompt-less spawn somebody may be typing
+ *     into is live, and its row is the way back to its pane. `startLive`
+ *     decides it, the same predicate the start's address uses, so a row and
+ *     the pane it opens agree.
  *   * Not after the naming. From then on the session has an id, so the scan
  *     will list it under its own row, and two rows would be one agent drawn
  *     twice. "Named" is decided by `pendingSession`, the same function that
@@ -86,7 +90,7 @@ export type SidebarEntry =
  */
 export function pendingRows(
   starts: ReadonlyMap<FrameId, StartView>,
-  terminals: ReadonlyMap<string, NamedTerminal>,
+  terminals: ReadonlyMap<string, WatchedStart>,
   state: MachineState | null,
   layout: Layout | null,
   machine: ServerRegistrationId | null,
@@ -96,8 +100,8 @@ export function pendingRows(
   for (const [startId, start] of starts) {
     const { started, refusal } = start;
     if (started === null || refusal !== null) continue;
-    if (!startAwaited(start, moment)) continue;
     const terminal = terminals.get(terminalKey({ by: 'start', startId })) ?? null;
+    if (!startLive(start, terminal, moment)) continue;
     if (pendingSession(start, terminal) !== null) continue;
     if (machine !== null && started.server !== machine) continue;
     rows.push({

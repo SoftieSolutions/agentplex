@@ -876,6 +876,89 @@ describe('the shell', () => {
     expect(container.querySelector('main')?.textContent).not.toContain('starting on');
   });
 
+  /**
+   * Has the hub answer the pane's subscribe by start handle: the captured
+   * pending reply, re-addressed to the subscribe this store sent and to this
+   * test's start.
+   */
+  async function relayStart(socket: FakeSocket, startId: number): Promise<void> {
+    const subscribe = socket.sent
+      .map((text): unknown => JSON.parse(text))
+      .filter(
+        (frame): frame is { id: number; type: string } =>
+          typeof frame === 'object' &&
+          frame !== null &&
+          'type' in frame &&
+          frame.type === 'session-subscribe',
+      )
+      .at(-1);
+    if (subscribe === undefined) throw new Error('the pending pane sent no subscribe');
+    const parsed: unknown = JSON.parse(hubFrames.sessionSubscribedPending);
+    if (typeof parsed !== 'object' || parsed === null) throw new Error('not a frame');
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...parsed, replyTo: subscribe.id, startId }));
+    });
+  }
+
+  it('keeps listing an unnamed start past the bound while its terminal is relayed, until it ends', async () => {
+    let clock = 1_000_000;
+    storeOn(() => clock);
+    const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
+    const socket = await mount(() => clock, layoutStore);
+    await chooseSessionsTab();
+    const id = await placedStart(socket);
+    await relayStart(socket, id);
+
+    // Seventy seconds unnamed: a spawn with no prompt that somebody may be
+    // typing into. The pane keeps its address, so the row keeps the way back.
+    clock += 70_000;
+    await act(() => {
+      socket.deliver(hubFrames.machineStatePopulated);
+    });
+    expect(pendingRowNames()).toHaveLength(1);
+    expect(window.location.hash).toBe(startHash(id));
+    expect(container.querySelector('main')?.textContent).toContain('starting on mbp-robert');
+
+    // The terminal ends: nothing is relaying it, and past the bound nothing
+    // more is owed, so the row goes and the address falls to the list.
+    const ended: unknown = JSON.parse(hubFrames.sessionSubscriptionEnded);
+    if (typeof ended !== 'object' || ended === null) throw new Error('not a frame');
+    await act(() => {
+      socket.deliver(
+        JSON.stringify({
+          ...ended,
+          target: { by: 'start', startId: id },
+          reason: 'session-ended',
+        }),
+      );
+    });
+    expect(pendingRowNames()).toEqual([]);
+    expect(container.querySelector('main')?.textContent).not.toContain('starting on');
+  });
+
+  it('stops listing a relayed start past the bound once the hub names it', async () => {
+    let clock = 1_000_000;
+    storeOn(() => clock);
+    const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
+    const socket = await mount(() => clock, layoutStore);
+    await chooseSessionsTab();
+    const id = await placedStart(socket);
+    await relayStart(socket, id);
+    clock += 70_000;
+    await act(() => {
+      socket.deliver(hubFrames.machineStatePopulated);
+    });
+    expect(pendingRowNames()).toHaveLength(1);
+
+    await act(() => {
+      socket.deliver(addressedTo(hubFrames.sessionNamed, id));
+    });
+
+    // Named, so the scan lists it under its own row: a second would be one
+    // agent drawn twice.
+    expect(pendingRowNames()).toEqual([]);
+  });
+
   it('keeps showing the session a start was named in time, past the bound', async () => {
     let clock = 1_000_000;
     storeOn(() => clock);

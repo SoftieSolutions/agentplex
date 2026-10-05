@@ -13,6 +13,7 @@ import {
   pendingSession,
   pendingWords,
   startAwaited,
+  startLive,
   startShown,
   type StartMoment,
 } from './pending-pane-model.js';
@@ -228,6 +229,35 @@ describe('startAwaited', () => {
   it('is awaited while queued and the connection is down, because it goes out on the next', () => {
     const down: StartMoment = { ...soon, phase: 'reconnecting' };
     expect(startAwaited({ ...placed, started: null, sentOn: null }, down)).toBe(true);
+  });
+});
+
+describe('startLive', () => {
+  const soon: StartMoment = { connection: 1, phase: 'connected', now: ANSWERED_AT + 1_000 };
+  const late: StartMoment = { ...soon, now: ANSWERED_AT + NAMING_BOUND_MS + 10_000 };
+  const placed: StartView = { asked, started, refusal: null, named: null, sentOn: 1 };
+  const relayed = { session: null, attached: true, ended: null };
+
+  it('is live while awaited, terminal or none', () => {
+    expect(startLive(placed, null, soon)).toBe(true);
+  });
+
+  it('stays live past the bound while its terminal is relayed on the connection that carried it', () => {
+    expect(startLive(placed, relayed, late)).toBe(true);
+  });
+
+  it('is not live past the bound once its terminal ends, detaches, or its connection goes', () => {
+    expect(startLive(placed, null, late)).toBe(false);
+    expect(startLive(placed, { ...relayed, attached: false, ended: 'session-ended' }, late)).toBe(
+      false,
+    );
+    expect(startLive(placed, { ...relayed, attached: false }, late)).toBe(false);
+    expect(startLive(placed, relayed, { ...late, phase: 'reconnecting' })).toBe(false);
+    expect(startLive(placed, relayed, { ...late, connection: 2 })).toBe(false);
+  });
+
+  it('is not live once refused, whatever a terminal says', () => {
+    expect(startLive({ ...placed, started: null, refusal: refused }, relayed, soon)).toBe(false);
   });
 });
 
