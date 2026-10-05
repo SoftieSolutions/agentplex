@@ -7,7 +7,7 @@ import {
   type StoreDescriptor,
   type UncommittedDiff,
 } from '@agentplex/protocol';
-import { createLogger } from '@agentplex/node-shared';
+import { createLogger, type LogRecord, type Logger } from '@agentplex/node-shared';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
@@ -15,6 +15,7 @@ import {
   createFakeProcessProbe,
   createFakeProviderAdapter,
   createFakeProviderFiles,
+  readProviderFixture,
 } from '@agentplex/providers/testing';
 import {
   createClaudeAdapter,
@@ -115,6 +116,14 @@ interface MachineOptions {
    * the real planner applies to that cwd is invisible behind it.
    */
   readonly realAdapter?: boolean;
+  /**
+   * The processes the real adapter's probe finds alive, by pid, each with the
+   * epoch ms it started at. Fixed at construction, as the fake probe's table
+   * is, so a test registers its spawn's pid up front.
+   */
+  readonly processes?: Readonly<Record<number, number>>;
+  /** Where this machine logs, in place of a sink that drops everything. */
+  readonly logger?: Logger;
 }
 
 /**
@@ -191,7 +200,9 @@ function machine(options: MachineOptions = {}): Machine {
     options.realAdapter === true
       ? createClaudeAdapter({
           files,
-          probe: createFakeProcessProbe(),
+          probe: createFakeProcessProbe(
+            options.processes === undefined ? {} : { processes: options.processes },
+          ),
           // The controller's home, so the two answer for one account.
           homeDirectory: options.homeDirectory ?? HOME,
         })
@@ -220,7 +231,7 @@ function machine(options: MachineOptions = {}): Machine {
       // the holder and the cap.
       approvals: null,
       clock,
-      logger,
+      logger: options.logger ?? logger,
     }),
   };
 }
@@ -896,6 +907,66 @@ describe('binding a spawned terminal', () => {
       storeId: WORK,
       sessionId: 'session-ours',
     });
+  });
+
+  it('binds a prompt-less claude to the id it registered, before any turn is written', async () => {
+    // The real adapter over a store with no transcript at all. Claude Code
+    // registers `sessions/<pid>.json` before anyone types (2.1.287, checked
+    // at the origin for AGX-373), and the pid in it is the process the pty
+    // forked, because the launch execs claude with no shell between.
+    const CLAUDE_HOME: StoreDescriptor = {
+      storeId: storeIdSchema.parse('store-home'),
+      path: `${HOME}/.claude`,
+    };
+    const PID = 4242;
+    const SESSION = '5df6a5a1-1c69-4713-9c09-e05a0dbbee62';
+    const records: LogRecord[] = [];
+    const { sessions, terminals, transcripts } = machine({
+      realAdapter: true,
+      store: CLAUDE_HOME,
+      pids: [PID],
+      processes: { [PID]: START },
+      logger: createLogger('debug', (record) => records.push(record)),
+    });
+
+    const outcome = await sessions.start({
+      storeId: CLAUDE_HOME.storeId,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      directory: null,
+    });
+    if (!outcome.ok) throw new Error(`the spawn was refused: ${outcome.problem}`);
+
+    // What the forked claude writes a beat after it starts: the captured
+    // entry, with only the pid, the id and the dates bent to this spawn.
+    transcripts[`${CLAUDE_HOME.path}/sessions/${PID}.json`] = JSON.stringify({
+      ...JSON.parse(await readProviderFixture('claude-session-registry.json')),
+      pid: PID,
+      sessionId: SESSION,
+      cwd: HOME,
+      startedAt: START + 1_302,
+      status: 'idle',
+      statusUpdatedAt: START + 1_302,
+    });
+
+    const report = await sessions.report(CLAUDE_HOME.storeId);
+
+    expect(terminals.terminal(outcome.terminalId)?.session).toEqual({
+      storeId: CLAUDE_HOME.storeId,
+      sessionId: SESSION,
+    });
+    expect(report?.sessions.map((one) => [one.sessionId, one.cwd])).toEqual([[SESSION, HOME]]);
+    expect(report?.holding.map((hold) => hold.sessionId)).toEqual([SESSION]);
+    expect(records.map((record) => record.message)).not.toContain(
+      'a spawned terminal has no session id yet',
+    );
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        message: 'spawned terminal bound to its session',
+        fields: expect.objectContaining({ sessionId: SESSION, by: 'pid' }),
+      }),
+    );
   });
 
   it('never binds a session another verified process is running, however its dates fit', async () => {
