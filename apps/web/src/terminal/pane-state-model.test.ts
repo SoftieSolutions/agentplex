@@ -25,6 +25,7 @@ import {
   resumeFollowUp,
   retakeCommand,
   retakeFollowUp,
+  retakeOutstanding,
   type PaneStateInput,
 } from './pane-state-model.js';
 
@@ -448,6 +449,28 @@ describe('the start a pane reads out of resume memory', () => {
     const none = { ran: false, start: null, lapsed: false, retake: false };
     expect(resumeFollowUp(none, answers)).toBeNull();
     expect(retakeFollowUp(none, answers)).toBeNull();
+  });
+});
+
+describe('whether a retake is still out', () => {
+  const owed = { replies: new Map(), outstanding: new Set([ASKED]) };
+  const retake = { ran: true, start: ASKED, lapsed: false, retake: true };
+
+  it('is while it is owed an answer, and while its answer waits for the hold', () => {
+    expect(retakeOutstanding(retake, owed)).toBe(true);
+    expect(retakeOutstanding(retake, answered(hubFrames.sessionStartedRetaken))).toBe(true);
+  });
+
+  it('is not once it lapsed, was refused, or will never be answered', () => {
+    const yes = answered(hubFrames.sessionStartedRetaken);
+    expect(retakeOutstanding({ ...retake, lapsed: true }, yes)).toBe(false);
+    expect(retakeOutstanding(retake, answered(hubFrames.refusalRetake))).toBe(false);
+    expect(retakeOutstanding(retake, NO_ANSWERS)).toBe(false);
+  });
+
+  it('is not when the start out is a resume, or none is', () => {
+    expect(retakeOutstanding({ ...retake, retake: false }, owed)).toBe(false);
+    expect(retakeOutstanding({ ...retake, start: null }, owed)).toBe(false);
   });
 });
 

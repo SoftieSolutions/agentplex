@@ -2868,6 +2868,53 @@ describe('a pane on a session nothing holds', () => {
       expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
     });
 
+    it('says retaking in every pane on the session once one pane pressed, and sends one', async () => {
+      const connected = await connectedTo(hubFrames.machineStateRetakeable);
+      await mount(
+        <Fragment>
+          {pane(connected.hub, 'store-agentplex', 'session-cli-run')}
+          {pane(connected.hub, 'store-agentplex', 'session-cli-run')}
+        </Fragment>,
+      );
+      const [first, second] = [
+        ...container.querySelectorAll<HTMLButtonElement>('button[data-pane-retake]'),
+      ];
+      if (first === undefined || second === undefined) throw new Error('two panes, two offers');
+
+      await click(first);
+
+      expect(second.getAttribute('data-pane-retake')).toBe('retaking');
+      expect(second.textContent).toBe('stopping it, then starting here');
+      expect(second.disabled).toBe(true);
+      expect(ofType(sentSince(connected), 'session-retake')).toHaveLength(1);
+    });
+
+    it('sends one retake when two panes are pressed before either draws the first', async () => {
+      // Both presses land on what each pane drew before the first went out:
+      // the second press reads the store, not its render, and finds the
+      // retake already out.
+      const connected = await connectedTo(hubFrames.machineStateRetakeable);
+      await mount(
+        <Fragment>
+          {pane(connected.hub, 'store-agentplex', 'session-cli-run')}
+          {pane(connected.hub, 'store-agentplex', 'session-cli-run')}
+        </Fragment>,
+      );
+      const buttons = [
+        ...container.querySelectorAll<HTMLButtonElement>('button[data-pane-retake]'),
+      ];
+      expect(buttons).toHaveLength(2);
+
+      await act(async () => {
+        for (const button of buttons) {
+          button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        }
+      });
+      await act(settle);
+
+      expect(ofType(sentSince(connected), 'session-retake')).toHaveLength(1);
+    });
+
     it('is disabled with the reason while the claude works, and enabled at its prompt in place', async () => {
       const connected = await connectedTo(hubFrames.machineStateResumable);
       await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));

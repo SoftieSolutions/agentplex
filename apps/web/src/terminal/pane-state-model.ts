@@ -477,6 +477,20 @@ export function retakeFollowUp(
   return followUp(memory.start, answers, 'session-started');
 }
 
+/**
+ * Whether this page has a retake of the session out that has not come to
+ * anything yet: owed its answer, or answered and waiting for the hold.
+ *
+ * What a press of the offer reads from the store as it is now, rather than
+ * the render's copy, so a second pane pressed before it drew the first one's
+ * retake sends nothing.
+ */
+export function retakeOutstanding(memory: ResumeMemory, answers: Answers): boolean {
+  const retake = retakeFollowUp(memory, answers);
+  if (retake === null) return false;
+  return retake.kind === 'waiting' || (retake.kind === 'answered' && !memory.lapsed);
+}
+
 /** Whether the header should say that nothing is running this row. */
 function notRunning(row: SessionRow | null): boolean {
   return row !== null && row.holder === null && row.descriptor.process !== 'running';

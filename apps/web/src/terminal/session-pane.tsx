@@ -83,6 +83,7 @@ import {
   resumeFollowUp,
   retakeCommand,
   retakeFollowUp,
+  retakeOutstanding,
   type PaneState,
 } from './pane-state-model.js';
 
@@ -601,8 +602,15 @@ export function SessionPane({
    * A take-over somebody pressed for. Filed by the store as this session's
    * start, so what became of it is read back out of resume memory like a
    * resume's; the hold it ends in is what re-subscribes the pane.
+   *
+   * Guarded, unlike a resume's press, and against the store as it is now
+   * rather than this render: a second pane on the session pressed before it
+   * drew the first one's retake would otherwise send a second, and the
+   * offer it pressed was already gone.
    */
   const pressRetake = useCallback((): void => {
+    const now = hub.getSnapshot();
+    if (retakeOutstanding(resumeMemoryOf(now.resumes, sessionRef), now.answers)) return;
     const outcome = hub.sendCommand(retakeCommand(sessionRef));
     if (outcome.accepted) setRetakeSent(outcome.id);
   }, [hub, sessionRef]);
