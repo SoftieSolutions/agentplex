@@ -182,7 +182,7 @@ describe('pendingSession', () => {
 
 describe('startAwaited', () => {
   /** On the connection the start went out on, a second after its yes. */
-  const soon: StartMoment = { connection: 1, now: ANSWERED_AT + 1_000 };
+  const soon: StartMoment = { connection: 1, phase: 'connected', now: ANSWERED_AT + 1_000 };
   const placed: StartView = { asked, started, refusal: null, named: null, sentOn: 1 };
 
   it('is awaited while the hub has not answered, on the connection that carried it', () => {
@@ -213,12 +213,30 @@ describe('startAwaited', () => {
   it('is not awaited once refused: the answer it was owed has arrived', () => {
     expect(startAwaited({ ...placed, started: null, refusal: refused }, soon)).toBe(false);
   });
+
+  it('is not awaited once the connection that carried it is down, before any redial', () => {
+    // The hub forgets a socket's start handles at the close, not at the next
+    // welcome: a store backing off through a long outage, or one stopped by a
+    // protocol-version refusal, never counts another welcome, and the start
+    // is beyond naming all the same.
+    for (const phase of ['reconnecting', 'connecting', 'failed'] as const) {
+      expect(startAwaited(placed, { ...soon, phase })).toBe(false);
+      expect(startAwaited({ ...placed, started: null }, { ...soon, phase })).toBe(false);
+    }
+  });
+
+  it('is awaited while queued and the connection is down, because it goes out on the next', () => {
+    const down: StartMoment = { ...soon, phase: 'reconnecting' };
+    expect(startAwaited({ ...placed, started: null, sentOn: null }, down)).toBe(true);
+  });
 });
 
 describe('startShown', () => {
-  const soon: StartMoment = { connection: 1, now: ANSWERED_AT + 1_000 };
-  const late: StartMoment = { connection: 1, now: ANSWERED_AT + NAMING_BOUND_MS };
-  const later: StartMoment = { connection: 2, now: ANSWERED_AT + 1_000 };
+  const soon: StartMoment = { connection: 1, phase: 'connected', now: ANSWERED_AT + 1_000 };
+  const late: StartMoment = { ...soon, now: ANSWERED_AT + NAMING_BOUND_MS };
+  const later: StartMoment = { ...soon, connection: 2 };
+  /** The connection that carried the start, dropped and not yet replaced. */
+  const down: StartMoment = { ...soon, phase: 'reconnecting' };
   const placed: StartView = { asked, started, refusal: null, named: null, sentOn: 1 };
   const quiet = { session: null, attached: false, ended: null };
 
@@ -242,6 +260,11 @@ describe('startShown', () => {
 
   it('shows no pane for a start from an earlier connection, which can only be refused', () => {
     expect(startShown(placed, quiet, later)).toBe(false);
+  });
+
+  it('shows no pane for a placed start once the connection that carried it is down', () => {
+    expect(startShown(placed, quiet, down)).toBe(false);
+    expect(startShown(placed, quiet, { ...down, phase: 'failed' })).toBe(false);
   });
 
   it('shows no pane for a start past the bound with nothing relaying it', () => {

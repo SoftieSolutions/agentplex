@@ -167,9 +167,14 @@ export function Sidebar({
   const held = useSyncExternalStore(filters.subscribe, filters.getSnapshot);
   const projects = tab === 'projects';
   const moment = now();
-  const { starts, terminals, connection } = useHubSelector(store, startsAndTerminals, shallowEqual);
+  const { starts, terminals, connection, phase } = useHubSelector(
+    store,
+    startsAndTerminals,
+    shallowEqual,
+  );
   const pending = pendingRows(starts, terminals, state, layout, machine, {
     connection,
+    phase,
     now: moment,
   });
   if (destination === 'settings') {
@@ -314,11 +319,12 @@ function readTab(value: string): SidebarTab {
 /** What a start's row is read off -- its two maps and which connection is up -- and nothing else. */
 function startsAndTerminals(
   snapshot: HubSnapshot,
-): Pick<HubSnapshot, 'starts' | 'terminals' | 'connection'> {
+): Pick<HubSnapshot, 'starts' | 'terminals' | 'connection' | 'phase'> {
   return {
     starts: snapshot.starts,
     terminals: snapshot.terminals,
     connection: snapshot.connection,
+    phase: snapshot.phase,
   };
 }
 

@@ -815,6 +815,48 @@ describe('the shell', () => {
     expect(main?.textContent).not.toContain('starting on');
   });
 
+  it('lists no start and draws no pane for it while the connection that carried it is down', async () => {
+    const timers = storeOn(Date.now);
+    const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
+    const socket = await mount(Date.now, layoutStore);
+    await chooseSessionsTab();
+    const id = await placedStart(socket);
+    expect(pendingRowNames()).toHaveLength(1);
+
+    // The hub forgets this socket's start handles at the close, not at the next
+    // welcome: through a long outage the store is backing off and counts no
+    // welcome at all, and the name still cannot come.
+    await act(() => {
+      socket.drop();
+    });
+
+    expect(pendingRowNames()).toEqual([]);
+    const main = container.querySelector('main');
+    expect(main?.textContent).toContain('Sessions');
+    expect(main?.textContent).not.toContain('starting on');
+
+    // A redial the hub refuses on the protocol version stops the store
+    // redialling for good, so no welcome ever comes to count; the start stays
+    // gone rather than coming back as "starting" over a failed connection.
+    await act(() => {
+      timers.fireAll();
+    });
+    await act(settle);
+    const next = sockets.sockets.at(-1);
+    if (next === undefined || next === socket) throw new Error('the store did not redial');
+    await act(() => {
+      next.open();
+      next.deliver(hubFrames.refusalProtocolVersion);
+    });
+    expect(store.getSnapshot().phase).toBe('failed');
+
+    await follow('#/');
+    await follow(startHash(id));
+    expect(pendingRowNames()).toEqual([]);
+    expect(container.querySelector('main')?.textContent).not.toContain('starting on');
+    expect(container.querySelector('main')?.textContent).toContain('Sessions');
+  });
+
   it('stops listing a start, and drawing its pane, once its name is overdue', async () => {
     let clock = 1_000_000;
     storeOn(() => clock);

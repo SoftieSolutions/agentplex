@@ -423,9 +423,11 @@ export interface HubSnapshot {
    * has had, `0` before the first.
    *
    * A count rather than the phase, because what a start needs to know is not
-   * whether a connection is up but whether it is the same one the start went
-   * out on. A drop and a redial between two readings is a different
-   * connection with the phase looking exactly as it did.
+   * only whether a connection is up but whether it is the same one the start
+   * went out on. A drop and a redial between two readings is a different
+   * connection with the phase looking exactly as it did. Not a count of drops
+   * as well: the start reads the phase beside it for that (`StartMoment`), and
+   * this number stays the one every sent start was filed under.
    */
   readonly connection: number;
   /** Every project's standing policy this client has been answered, by node. */

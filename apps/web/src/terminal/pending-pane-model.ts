@@ -1,5 +1,5 @@
 import type { MachineState, SessionRef, SubscriptionEndReason } from '@agentplex/protocol';
-import type { StartView } from '../store/views.js';
+import type { ConnectionPhase, StartView } from '../store/views.js';
 import { serverLabel } from '../sessions/session-list-model.js';
 
 /**
@@ -76,13 +76,22 @@ export const NAMING_BOUND_MS = 60_000;
 
 /**
  * Where this client stands when it judges a start: which connection it is on
- * (`HubSnapshot.connection`) and what its clock reads.
+ * or last was (`HubSnapshot.connection`), whether that connection is still up
+ * (`HubSnapshot.phase`), and what its clock reads.
+ *
+ * The count and the phase answer different halves of one question -- is the
+ * socket that carried this start still open -- and neither answers it alone.
+ * The count tells a redialled connection from the one before it even when the
+ * phase reads `connected` both times; the phase tells a dropped connection
+ * from a live one before any welcome is counted, which through a backoff or
+ * after a refusal that stops redialling is never.
  *
  * Passed in rather than read, so the functions stay pure and the clock is the
  * caller's injected one -- the same reading as every age drawn beside them.
  */
 export interface StartMoment {
   readonly connection: number;
+  readonly phase: ConnectionPhase;
   readonly now: number;
 }
 
@@ -91,10 +100,11 @@ export interface StartMoment {
  * once placed, its name.
  *
  * Queued is expected, because it goes out on the next connection. Sent is
- * expected only on the connection that carried it, because the hub answers and
- * names a start down that socket alone and forgets its handles when it closes.
- * Placed is expected for `NAMING_BOUND_MS` after the yes and not after. A
- * refusal is the answer it was owed, so nothing more is coming.
+ * expected only while the connection that carried it is up, because the hub
+ * answers and names a start down that socket alone and forgets its handles the
+ * moment it closes -- at the drop, not at the next welcome. Placed is expected
+ * for `NAMING_BOUND_MS` after the yes and not after. A refusal is the answer it
+ * was owed, so nothing more is coming.
  *
  * Says nothing about whether the start became a session; `pendingSession` is
  * that, and a caller asks both.
@@ -102,9 +112,14 @@ export interface StartMoment {
 export function startAwaited(start: StartView, moment: StartMoment): boolean {
   if (start.refusal !== null) return false;
   if (start.sentOn === null) return true;
-  if (start.sentOn !== moment.connection) return false;
+  if (!onCarrier(start, moment)) return false;
   if (start.started === null) return true;
   return moment.now - start.started.receivedAt < NAMING_BOUND_MS;
+}
+
+/** Whether the socket that carried a sent start is the one open now. */
+function onCarrier(start: StartView, moment: StartMoment): boolean {
+  return start.sentOn === moment.connection && moment.phase === 'connected';
 }
 
 /** The slice of a watched terminal `startShown` reads: its name, and whether it is being fed. */
@@ -136,10 +151,7 @@ export function startShown(
   if (start.refusal !== null) return true;
   if (startAwaited(start, moment)) return true;
   return (
-    start.sentOn === moment.connection &&
-    terminal !== null &&
-    terminal.attached &&
-    terminal.ended === null
+    onCarrier(start, moment) && terminal !== null && terminal.attached && terminal.ended === null
   );
 }
 

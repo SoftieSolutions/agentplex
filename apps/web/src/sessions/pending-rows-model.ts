@@ -33,8 +33,8 @@ import { serverLabel, type SessionListItem } from './session-list-model.js';
  *   * Not once the name can no longer come. The hub names a start only down
  *     the socket that made it and forgets that socket's starts when it closes,
  *     and a provider that exits before writing an id is never named at all.
- *     So a start from an earlier connection, or one unnamed `NAMING_BOUND_MS`
- *     after its yes, is not drawn -- dropped rather than drawn as failed,
+ *     So a start whose connection has closed -- redialled or not -- or one
+ *     unnamed `NAMING_BOUND_MS` after its yes, is not drawn -- dropped rather than drawn as failed,
  *     because "did not start" is a guess about a process this client cannot
  *     see, and if it did write an id after all the scan lists it in its own
  *     row. `startAwaited` decides it, the same reading the start's address

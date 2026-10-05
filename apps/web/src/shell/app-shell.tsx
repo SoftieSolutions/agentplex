@@ -153,8 +153,8 @@ export function AppShell({
   const graph = useGraphRoute();
   // Read only when this tab holds the start and has something true to show
   // for it: the id is this tab's own name for it, so a reloaded or pasted
-  // address names nothing, and a start from an earlier connection or long
-  // unnamed is one the hub can no longer answer. Each falls to the list rather
+  // address names nothing, and a start whose connection has closed or that is
+  // long unnamed is one the hub can no longer answer. Each falls to the list rather
   // than to a pane that would wait on an answer nobody owes it.
   const start = useStartRoute();
   const pending =
@@ -162,7 +162,7 @@ export function AppShell({
     startShown(
       snapshot.starts.get(start) ?? null,
       snapshot.terminals.get(terminalKey({ by: 'start', startId: start })) ?? null,
-      { connection: snapshot.connection, now: now() },
+      { connection: snapshot.connection, phase: snapshot.phase, now: now() },
     )
       ? start
       : null;

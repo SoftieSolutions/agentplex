@@ -39,7 +39,7 @@ function frameOf(text: string) {
 /** When the captured yes was read, by the client's clock. */
 const ANSWERED_AT = 1_000_000;
 /** On the first connection, which carried every start below, a second after the yes. */
-const NOW: StartMoment = { connection: 1, now: ANSWERED_AT + 1_000 };
+const NOW: StartMoment = { connection: 1, phase: 'connected', now: ANSWERED_AT + 1_000 };
 
 function startedFrom(text: string): StartedView {
   const frame = frameOf(text);
@@ -191,6 +191,17 @@ describe('pendingRows', () => {
     const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
     const reconnected = { ...NOW, connection: 2 };
     expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, reconnected)).toEqual([]);
+  });
+
+  it('draws nothing for a placed start once the connection that carried it is down', () => {
+    // No welcome has been counted, so the connection number still matches;
+    // the socket that could have carried the name is closed all the same.
+    const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
+    for (const phase of ['reconnecting', 'failed'] as const) {
+      expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, { ...NOW, phase })).toEqual(
+        [],
+      );
+    }
   });
 
   it('stops drawing a start as starting once the bound passes without a name', () => {
