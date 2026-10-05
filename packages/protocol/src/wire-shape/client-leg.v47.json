@@ -224,6 +224,36 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "session-retake"
+            },
+            "id": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "storeId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "storeId",
+            "sessionId"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "session-pause"
             },
             "id": {

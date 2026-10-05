@@ -171,6 +171,28 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     sessionId: sessionIdSchema,
   }),
   /**
+   * Asks the hub to take over a session a provider process outside agentplex
+   * is running: end that process at its prompt, then resume the session under
+   * agentplex on the same machine.
+   *
+   * Addressed like a stop, by `{ storeId, sessionId }` and nothing else. The
+   * hub routes it to the machine whose reading shows the process and reads the
+   * provider off the row it holds; the server finds the process in the
+   * provider's own registry and verifies it at the moment it signals. A pid
+   * here would be a client naming a process on a machine it cannot see, and a
+   * provider here would be a client choosing which adapter's registry is read,
+   * so neither has a field and the parser drops both.
+   *
+   * Answered as a start is, `session-started` naming the same session, or a
+   * refusal in the words of whichever side said no.
+   */
+  z.object({
+    type: z.literal('session-retake'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+  }),
+  /**
    * Asks the hub to pause a session at its next turn boundary, or to resume
    * one it paused. Neither kills anything; `session.ts` carries the argument.
    * Addressed like a stop, routed like a stop, and answered by the holder.

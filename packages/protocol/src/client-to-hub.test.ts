@@ -111,6 +111,19 @@ describe('parseClientFrame on the session frames', () => {
     expect(parseClientFrame({ type: 'session-stop', id: 2, storeId: 'store-work' }).ok).toBe(false);
   });
 
+  it('takes a retake addressed by session alone, and drops a pid and a provider off it', () => {
+    // A retake ends a process the hub did not start, so the fields that would
+    // let a client aim it are the ones it cannot carry: the server finds the
+    // process, and the hub reads the provider off the row it holds.
+    const retake = { type: 'session-retake', id: 2, storeId: 'store-work', sessionId: 'session-1' };
+    expect(parseClientFrame(retake)).toEqual({ ok: true, value: retake });
+    const named = parseClientFrame({ ...retake, pid: 4321, provider: 'codex', signal: 'SIGKILL' });
+    expect(named).toEqual({ ok: true, value: retake });
+    expect(parseClientFrame({ type: 'session-retake', id: 2, storeId: 'store-work' }).ok).toBe(
+      false,
+    );
+  });
+
   it('takes a pause and a resume shaped exactly like a stop', () => {
     for (const type of ['session-pause', 'session-resume']) {
       const frame = { type, id: 2, storeId: 'store-work', sessionId: 'session-1' };
@@ -394,6 +407,12 @@ describe('client and hub round trips', () => {
     {
       type: 'session-stop',
       id: 6,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+    },
+    {
+      type: 'session-retake',
+      id: 42,
       storeId: storeIdSchema.parse('store-work'),
       sessionId: sessionIdSchema.parse('session-1'),
     },
