@@ -11,7 +11,6 @@ import {
 import {
   assertNever,
   type ClientTerminalTarget,
-  type FrameId,
   type PendingApproval,
   type Provider,
   type SessionRef,
@@ -590,15 +589,6 @@ export function SessionPane({
     );
   }, [hub, sessionRef, provider]);
   /**
-   * The retake this pane last sent, kept only so the press re-renders it.
-   *
-   * The store files a sent command in resume memory without telling anybody,
-   * and a resume is drawn at once only because a start also notifies through
-   * the starts it tracks; a retake has none. What the pane state reads is the
-   * memory, not this, so a pane mounted again mid-retake still says so.
-   */
-  const [, setRetakeSent] = useState<FrameId | null>(null);
-  /**
    * A take-over somebody pressed for. Filed by the store as this session's
    * start, so what became of it is read back out of resume memory like a
    * resume's; the hold it ends in is what re-subscribes the pane.
@@ -611,8 +601,7 @@ export function SessionPane({
   const pressRetake = useCallback((): void => {
     const now = hub.getSnapshot();
     if (retakeOutstanding(resumeMemoryOf(now.resumes, sessionRef), now.answers)) return;
-    const outcome = hub.sendCommand(retakeCommand(sessionRef));
-    if (outcome.accepted) setRetakeSent(outcome.id);
+    hub.sendCommand(retakeCommand(sessionRef));
   }, [hub, sessionRef]);
   /**
    * Tells the store this pane saw the session run, so that no later mount of
