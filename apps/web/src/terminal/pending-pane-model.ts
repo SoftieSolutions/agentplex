@@ -1,4 +1,4 @@
-import type { MachineState, SessionRef } from '@agentplex/protocol';
+import type { MachineState, SessionRef, SubscriptionEndReason } from '@agentplex/protocol';
 import type { StartView } from '../store/views.js';
 import { serverLabel } from '../sessions/session-list-model.js';
 
@@ -56,6 +56,91 @@ export function pendingSession(
   // carries both names -- which is the server's reading of its own store
   // report, relayed. Provenance, not proximity.
   return terminal?.session ?? null;
+}
+
+/**
+ * How long after its yes a spawn may go unnamed before this client stops
+ * expecting the name: one minute.
+ *
+ * A provider given a prompt writes its session file on its first turn, which
+ * is seconds after the fork; the naming is one store report and one frame after
+ * that. A minute is an order of magnitude past the slow end of that and still
+ * short enough that a provider which exited before writing anything stops
+ * being listed as starting while the person who started it is still looking.
+ * Past it, nothing is drawn as starting: whether the start is slow, dead, or
+ * waiting for a first message is something this client cannot tell, and a row
+ * guessing at it would be a claim the scans may contradict a moment later. If
+ * the provider does write an id, the scan lists the session under its own row.
+ */
+export const NAMING_BOUND_MS = 60_000;
+
+/**
+ * Where this client stands when it judges a start: which connection it is on
+ * (`HubSnapshot.connection`) and what its clock reads.
+ *
+ * Passed in rather than read, so the functions stay pure and the clock is the
+ * caller's injected one -- the same reading as every age drawn beside them.
+ */
+export interface StartMoment {
+  readonly connection: number;
+  readonly now: number;
+}
+
+/**
+ * Whether this client can still expect to hear about a start: its answer, or,
+ * once placed, its name.
+ *
+ * Queued is expected, because it goes out on the next connection. Sent is
+ * expected only on the connection that carried it, because the hub answers and
+ * names a start down that socket alone and forgets its handles when it closes.
+ * Placed is expected for `NAMING_BOUND_MS` after the yes and not after. A
+ * refusal is the answer it was owed, so nothing more is coming.
+ *
+ * Says nothing about whether the start became a session; `pendingSession` is
+ * that, and a caller asks both.
+ */
+export function startAwaited(start: StartView, moment: StartMoment): boolean {
+  if (start.refusal !== null) return false;
+  if (start.sentOn === null) return true;
+  if (start.sentOn !== moment.connection) return false;
+  if (start.started === null) return true;
+  return moment.now - start.started.receivedAt < NAMING_BOUND_MS;
+}
+
+/** The slice of a watched terminal `startShown` reads: its name, and whether it is being fed. */
+export interface WatchedStart extends NamedTerminal {
+  readonly attached: boolean;
+  readonly ended: SubscriptionEndReason | null;
+}
+
+/**
+ * Whether a start's address, `#/start/<id>`, draws the panes rather than the
+ * list.
+ *
+ * Yes for a start that became a session, since the panes show that session;
+ * yes for a refused one, whose pane says so in the hub's words; yes while the
+ * start is awaited. And yes for one past the bound whose terminal the hub is
+ * relaying right now on this connection: a spawn given no prompt writes no
+ * session until somebody types into it, and the pane they are typing into is
+ * live, not a promise. Otherwise no -- a start from an earlier connection or
+ * past the bound with nothing relaying it would open a pane that can only say
+ * "starting" forever or be refused, so the address falls to the list.
+ */
+export function startShown(
+  start: StartView | null,
+  terminal: WatchedStart | null,
+  moment: StartMoment,
+): boolean {
+  if (start === null) return false;
+  if (pendingSession(start, terminal) !== null) return true;
+  if (start.refusal !== null) return true;
+  if (startAwaited(start, moment)) return true;
+  return (
+    start.sentOn === moment.connection &&
+    terminal !== null &&
+    terminal.attached &&
+    terminal.ended === null
+  );
 }
 
 /** What the pane says about a start that has not become a session yet. */

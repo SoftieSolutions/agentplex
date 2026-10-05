@@ -14,7 +14,11 @@ import {
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { terminalKey } from '../store/terminals.js';
 import type { RefusalView, StartedView, StartView } from '../store/views.js';
-import type { NamedTerminal } from '../terminal/pending-pane-model.js';
+import {
+  NAMING_BOUND_MS,
+  type NamedTerminal,
+  type StartMoment,
+} from '../terminal/pending-pane-model.js';
 import { pendingRows, withPendingRows, type PendingRow } from './pending-rows-model.js';
 import { listSessions, orderByActivity, partitionNeedsYou } from './session-list-model.js';
 
@@ -32,6 +36,11 @@ function frameOf(text: string) {
   return parsed.value;
 }
 
+/** When the captured yes was read, by the client's clock. */
+const ANSWERED_AT = 1_000_000;
+/** On the first connection, which carried every start below, a second after the yes. */
+const NOW: StartMoment = { connection: 1, now: ANSWERED_AT + 1_000 };
+
 function startedFrom(text: string): StartedView {
   const frame = frameOf(text);
   if (frame.type !== 'session-started')
@@ -41,6 +50,7 @@ function startedFrom(text: string): StartedView {
     storeId: frame.storeId,
     sessionId: frame.sessionId,
     server: frame.server,
+    receivedAt: ANSWERED_AT,
   };
 }
 
@@ -94,33 +104,37 @@ const NO_TERMINALS = new Map<string, NamedTerminal>();
 
 describe('pendingRows', () => {
   it('draws nothing for a start the hub has not answered', () => {
-    const starts = startsOf([[START, { asked, started: null, refusal: null, named: null }]]);
-    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null)).toEqual([]);
+    const starts = startsOf([
+      [START, { asked, started: null, refusal: null, named: null, sentOn: 1 }],
+    ]);
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, NOW)).toEqual([]);
   });
 
   it('draws nothing for a start the hub refused', () => {
-    const starts = startsOf([[START, { asked, started: null, refusal: refused, named: null }]]);
-    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null)).toEqual([]);
+    const starts = startsOf([
+      [START, { asked, started: null, refusal: refused, named: null, sentOn: 1 }],
+    ]);
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, NOW)).toEqual([]);
   });
 
   it('draws nothing for a start the hub has named', () => {
-    const starts = startsOf([[START, { asked, started, refusal: null, named: NAMED }]]);
-    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null)).toEqual([]);
+    const starts = startsOf([[START, { asked, started, refusal: null, named: NAMED, sentOn: 1 }]]);
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, NOW)).toEqual([]);
   });
 
   it('draws nothing for a start a pane watching it has named', () => {
     // The pane's subscription learnt the session before any naming frame
     // reached the store: a row beside the session's own would be one agent
     // listed twice.
-    const starts = startsOf([[START, { asked, started, refusal: null, named: null }]]);
+    const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
     const terminals = new Map<string, NamedTerminal>([
       [terminalKey({ by: 'start', startId: START }), { session: NAMED }],
     ]);
-    expect(pendingRows(starts, terminals, populated, layout, null)).toEqual([]);
+    expect(pendingRows(starts, terminals, populated, layout, null, NOW)).toEqual([]);
   });
 
   it('draws an accepted start the provider has not named, off what it asked for', () => {
-    const starts = startsOf([[START, { asked, started, refusal: null, named: null }]]);
+    const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
     const expected: PendingRow = {
       startId: START,
       provider: 'claude',
@@ -129,14 +143,17 @@ describe('pendingRows', () => {
       machine: 'mbp-robert',
       words: 'starting',
     };
-    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null)).toEqual([expected]);
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, NOW)).toEqual([expected]);
   });
 
   it('names no project for a start filed under none, or under one the tree no longer has', () => {
     const none = startsOf([
-      [START, { asked: { ...asked, project: null }, started, refusal: null, named: null }],
+      [
+        START,
+        { asked: { ...asked, project: null }, started, refusal: null, named: null, sentOn: 1 },
+      ],
     ]);
-    expect(pendingRows(none, NO_TERMINALS, populated, layout, null)[0]?.project).toBeNull();
+    expect(pendingRows(none, NO_TERMINALS, populated, layout, null, NOW)[0]?.project).toBeNull();
     const gone = startsOf([
       [
         START,
@@ -145,34 +162,56 @@ describe('pendingRows', () => {
           started,
           refusal: null,
           named: null,
+          sentOn: 1,
         },
       ],
     ]);
-    expect(pendingRows(gone, NO_TERMINALS, populated, layout, null)[0]?.project).toBeNull();
+    expect(pendingRows(gone, NO_TERMINALS, populated, layout, null, NOW)[0]?.project).toBeNull();
     // And before the tree has been answered at all.
-    const starts = startsOf([[START, { asked, started, refusal: null, named: null }]]);
-    expect(pendingRows(starts, NO_TERMINALS, populated, null, null)[0]?.project).toBeNull();
+    const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
+    expect(pendingRows(starts, NO_TERMINALS, populated, null, null, NOW)[0]?.project).toBeNull();
   });
 
   it('spells the machine as the registration id while there is no fleet to look it up in', () => {
-    const starts = startsOf([[START, { asked, started, refusal: null, named: null }]]);
-    expect(pendingRows(starts, NO_TERMINALS, null, layout, null)[0]?.machine).toBe(MBP);
+    const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
+    expect(pendingRows(starts, NO_TERMINALS, null, layout, null, NOW)[0]?.machine).toBe(MBP);
   });
 
   it('keeps a start on the chosen machine and drops one on another', () => {
-    const starts = startsOf([[START, { asked, started, refusal: null, named: null }]]);
-    expect(pendingRows(starts, NO_TERMINALS, populated, layout, MBP)).toHaveLength(1);
-    expect(pendingRows(starts, NO_TERMINALS, populated, layout, GPU)).toEqual([]);
+    const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, MBP, NOW)).toHaveLength(1);
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, GPU, NOW)).toEqual([]);
+  });
+
+  it('draws nothing on a fresh connection for a start the last one carried', () => {
+    // The connection dropped between the yes and the naming. The hub sends the
+    // name only down the socket that made the start, and forgot that socket's
+    // handles when it closed, so the row would say "starting" for good beside
+    // the session's own row once the scan finds it.
+    const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
+    const reconnected = { ...NOW, connection: 2 };
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, reconnected)).toEqual([]);
+  });
+
+  it('stops drawing a start as starting once the bound passes without a name', () => {
+    const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
+    const inside = { ...NOW, now: ANSWERED_AT + NAMING_BOUND_MS - 1 };
+    const past = { ...NOW, now: ANSWERED_AT + NAMING_BOUND_MS };
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, inside)).toHaveLength(1);
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, past)).toEqual([]);
   });
 
   it('puts the start asked most recently first', () => {
     const later = frameIdSchema.parse(9);
     const starts = startsOf([
-      [START, { asked, started, refusal: null, named: null }],
-      [later, { asked, started: { ...started, replyTo: later }, refusal: null, named: null }],
+      [START, { asked, started, refusal: null, named: null, sentOn: 1 }],
+      [
+        later,
+        { asked, started: { ...started, replyTo: later }, refusal: null, named: null, sentOn: 1 },
+      ],
     ]);
     expect(
-      pendingRows(starts, NO_TERMINALS, populated, layout, null).map((row) => row.startId),
+      pendingRows(starts, NO_TERMINALS, populated, layout, null, NOW).map((row) => row.startId),
     ).toEqual([later, START]);
   });
 });

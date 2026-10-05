@@ -15,6 +15,7 @@ import type { HubCommand } from '../store/commands.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createLayoutStore, type LayoutStore } from '../layout/layout-store.js';
 import { panes } from '../layout/operations.js';
+import { NAMING_BOUND_MS } from '../terminal/pending-pane-model.js';
 import { startHash } from '../terminal/start-route.js';
 import { createFakeTimers } from '../store/timers.js';
 import { installFlowMocks } from '../graphs/flow-test-setup.js';
@@ -738,6 +739,120 @@ describe('the shell', () => {
       .map(({ leaf }) => leaf.content)
       .filter((content) => content.type !== 'empty');
     expect(showing).toEqual([{ type: 'session', session: named }]);
+  });
+
+  /**
+   * Builds this test's store again on a clock and timers it holds, so it can
+   * drop the connection and redial, or move time past the naming bound, and the
+   * shell reads the same clock the store stamped the yes with.
+   */
+  function storeOn(now: () => number): ReturnType<typeof createFakeTimers> {
+    const timers = createFakeTimers();
+    store = createHubStore({
+      fetchTicket: () => Promise.resolve('ticket-1'),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers,
+      frameIds: createFrameIds(),
+      now,
+    });
+    return timers;
+  }
+
+  /** The sidebar's rows for starts with no session yet, by their accessible names. */
+  function pendingRowNames(): string[] {
+    return [...container.querySelectorAll('aside button[aria-label*=" starting on "]')].map(
+      (button) => button.getAttribute('aria-label') ?? '',
+    );
+  }
+
+  /** Sends the start, opens its address, and has the hub place it. */
+  async function placedStart(socket: FakeSocket): Promise<number> {
+    const sent = await act(() => store.sendCommand(START));
+    if (!sent.accepted) throw new Error(sent.reason);
+    await follow(startHash(sent.id));
+    await act(() => {
+      socket.deliver(hubFrames.paneLayoutEmpty);
+      socket.deliver(addressedTo(hubFrames.sessionStarted, sent.id));
+    });
+    return sent.id;
+  }
+
+  it('lists no start and draws no pane for it on a connection after the one that carried it', async () => {
+    const timers = storeOn(Date.now);
+    const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
+    const socket = await mount(Date.now, layoutStore);
+    await chooseSessionsTab();
+    await placedStart(socket);
+    expect(pendingRowNames()).toHaveLength(1);
+    expect(container.querySelector('main')?.textContent).toContain('starting on mbp-robert');
+
+    // The connection drops between the yes and the naming. The hub forgot this
+    // socket's start handles when it closed, so the name cannot come now.
+    await act(() => {
+      socket.drop();
+    });
+    await act(() => {
+      timers.fireAll();
+    });
+    await act(settle);
+    // The newest socket rather than the second: what dialled in between is
+    // the redial's business, and the one that will be welcomed is the last.
+    const next = sockets.sockets.at(-1);
+    if (next === undefined || next === socket) throw new Error('the store did not redial');
+    await act(() => {
+      next.open();
+      next.deliver(hubFrames.welcome);
+      next.deliver(hubFrames.machineStatePopulated);
+    });
+
+    expect(pendingRowNames()).toEqual([]);
+    const main = container.querySelector('main');
+    expect(main?.textContent).toContain('Sessions');
+    expect(main?.textContent).not.toContain('starting on');
+  });
+
+  it('stops listing a start, and drawing its pane, once its name is overdue', async () => {
+    let clock = 1_000_000;
+    storeOn(() => clock);
+    const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
+    const socket = await mount(() => clock, layoutStore);
+    await chooseSessionsTab();
+    await placedStart(socket);
+    expect(pendingRowNames()).toHaveLength(1);
+
+    clock += NAMING_BOUND_MS;
+    // Any frame draws the shell again; the bound is read when it does.
+    await act(() => {
+      socket.deliver(hubFrames.machineStatePopulated);
+    });
+
+    expect(pendingRowNames()).toEqual([]);
+    expect(container.querySelector('main')?.textContent).not.toContain('starting on');
+  });
+
+  it('keeps showing the session a start was named in time, past the bound', async () => {
+    let clock = 1_000_000;
+    storeOn(() => clock);
+    const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
+    const socket = await mount(() => clock, layoutStore);
+    await chooseSessionsTab();
+    const id = await placedStart(socket);
+    clock += 1_000;
+    await act(() => {
+      socket.deliver(addressedTo(hubFrames.sessionNamed, id));
+    });
+
+    clock += NAMING_BOUND_MS;
+    await follow('#/');
+    await follow(startHash(id));
+
+    expect(pendingRowNames()).toEqual([]);
+    const named = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-spawned' });
+    const showing = panes(layoutStore.getSnapshot().tree)
+      .map(({ leaf }) => leaf.content)
+      .filter((content) => content.type !== 'empty');
+    expect(showing).toEqual([{ type: 'session', session: named }]);
+    expect(container.querySelector('main')?.textContent).not.toContain('Sessions');
   });
 
   it('keeps the sidebar when the address names a graph, and draws the graph in the content region', async () => {

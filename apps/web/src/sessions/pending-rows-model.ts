@@ -8,7 +8,12 @@ import type {
 } from '@agentplex/protocol';
 import { terminalKey } from '../store/terminals.js';
 import type { StartView } from '../store/views.js';
-import { pendingSession, type NamedTerminal } from '../terminal/pending-pane-model.js';
+import {
+  pendingSession,
+  startAwaited,
+  type NamedTerminal,
+  type StartMoment,
+} from '../terminal/pending-pane-model.js';
 import { serverLabel, type SessionListItem } from './session-list-model.js';
 
 /**
@@ -25,6 +30,15 @@ import { serverLabel, type SessionListItem } from './session-list-model.js';
  *     took back.
  *   * Never after a no. A refused start is not a slow one; the form that asked
  *     says so in the hub's words.
+ *   * Not once the name can no longer come. The hub names a start only down
+ *     the socket that made it and forgets that socket's starts when it closes,
+ *     and a provider that exits before writing an id is never named at all.
+ *     So a start from an earlier connection, or one unnamed `NAMING_BOUND_MS`
+ *     after its yes, is not drawn -- dropped rather than drawn as failed,
+ *     because "did not start" is a guess about a process this client cannot
+ *     see, and if it did write an id after all the scan lists it in its own
+ *     row. `startAwaited` decides it, the same reading the start's address
+ *     uses, so a row and the pane it opens agree.
  *   * Not after the naming. From then on the session has an id, so the scan
  *     will list it under its own row, and two rows would be one agent drawn
  *     twice. "Named" is decided by `pendingSession`, the same function that
@@ -76,11 +90,13 @@ export function pendingRows(
   state: MachineState | null,
   layout: Layout | null,
   machine: ServerRegistrationId | null,
+  moment: StartMoment,
 ): readonly PendingRow[] {
   const rows: PendingRow[] = [];
   for (const [startId, start] of starts) {
     const { started, refusal } = start;
     if (started === null || refusal !== null) continue;
+    if (!startAwaited(start, moment)) continue;
     const terminal = terminals.get(terminalKey({ by: 'start', startId })) ?? null;
     if (pendingSession(start, terminal) !== null) continue;
     if (machine !== null && started.server !== machine) continue;

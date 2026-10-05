@@ -46,11 +46,18 @@ export const MAX_REMEMBERED_TRANSCRIPTS = 16;
 
 export interface SessionRepliesDependencies {
   update(changes: Partial<Pick<HubSnapshot, 'starts' | 'transcripts'>>): void;
+  /** The clock a start's yes is stamped with; the store's own, injected. */
+  now(): number;
 }
 
 export interface SessionReplies {
-  /** A command was accepted, sent or queued; a start gets an entry now. */
-  asked(command: HubCommand, id: FrameId): void;
+  /**
+   * A command was accepted, sent or queued; a start gets an entry now, filed
+   * under the connection it went out on, or `null` when it was queued.
+   */
+  asked(command: HubCommand, id: FrameId, sentOn: number | null): void;
+  /** Queued frames went out on a connection; a start among them is now on it. */
+  sent(ids: readonly FrameId[], sentOn: number): void;
   /** The hub's yes to a start. */
   started(frame: Frame<'session-started'>): void;
   /** The hub's no to a frame; filed against the start it answers, if it answers one. */
@@ -63,7 +70,7 @@ export interface SessionReplies {
   forget(): void;
 }
 
-export function createSessionReplies({ update }: SessionRepliesDependencies): SessionReplies {
+export function createSessionReplies({ update, now }: SessionRepliesDependencies): SessionReplies {
   /**
    * What the hub has said about each start, by the frame that asked.
    *
@@ -144,16 +151,29 @@ export function createSessionReplies({ update }: SessionRepliesDependencies): Se
      * exists. An entry with two nulls on it is that something: asked, and not
      * yet answered.
      */
-    asked(command: HubCommand, id: FrameId): void {
+    asked(command: HubCommand, id: FrameId, sentOn: number | null): void {
       if (command.type !== 'session-start') return;
       const asked = {
         storeId: command.storeId,
         provider: command.provider,
         project: command.project,
       };
-      starts.set(id, { asked, started: null, refusal: null, named: null });
+      starts.set(id, { asked, started: null, refusal: null, named: null, sentOn });
       evictOldestStarts();
       update({ starts: new Map(starts) });
+    },
+
+    sent(ids: readonly FrameId[], sentOn: number): void {
+      // One publication for the whole flush, and none when no start was in it:
+      // most queued frames are not starts.
+      let changed = false;
+      for (const id of ids) {
+        const entry = starts.get(id);
+        if (entry === undefined) continue;
+        starts.set(id, { ...entry, sentOn });
+        changed = true;
+      }
+      if (changed) update({ starts: new Map(starts) });
     },
 
     started(frame: Frame<'session-started'>): void {
@@ -162,6 +182,7 @@ export function createSessionReplies({ update }: SessionRepliesDependencies): Se
         storeId: frame.storeId,
         sessionId: frame.sessionId,
         server: frame.server,
+        receivedAt: now(),
       };
       noteStartAnswer(frame.replyTo, { started });
     },

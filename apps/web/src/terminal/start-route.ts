@@ -11,7 +11,8 @@ import { useMemo, useSyncExternalStore } from 'react';
  * route is what says so, the same way it says so for a session. The frame id
  * is this tab's own name for the start, so the address means nothing in
  * another tab or after a reload -- and the shell reads it only when this
- * store holds the start, falling back to the list otherwise.
+ * store holds the start and `startShown` says there is still something true to
+ * draw for it, falling back to the list otherwise.
  *
  * Parsed, never cast: the segment has to be digits and nothing else before it
  * reaches the schema, because `Number` would read `7.0`, ` 7` and `1e1` as

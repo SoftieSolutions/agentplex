@@ -167,8 +167,11 @@ export function Sidebar({
   const held = useSyncExternalStore(filters.subscribe, filters.getSnapshot);
   const projects = tab === 'projects';
   const moment = now();
-  const { starts, terminals } = useHubSelector(store, startsAndTerminals, shallowEqual);
-  const pending = pendingRows(starts, terminals, state, layout, machine);
+  const { starts, terminals, connection } = useHubSelector(store, startsAndTerminals, shallowEqual);
+  const pending = pendingRows(starts, terminals, state, layout, machine, {
+    connection,
+    now: moment,
+  });
   if (destination === 'settings') {
     return (
       <Stack gap={10} p={10} style={{ height: '100%', minHeight: 0 }}>
@@ -308,9 +311,15 @@ function readTab(value: string): SidebarTab {
   return value === 'sessions' ? 'sessions' : 'projects';
 }
 
-/** The two maps a start's row is read off, and nothing else of the hub's. */
-function startsAndTerminals(snapshot: HubSnapshot): Pick<HubSnapshot, 'starts' | 'terminals'> {
-  return { starts: snapshot.starts, terminals: snapshot.terminals };
+/** What a start's row is read off -- its two maps and which connection is up -- and nothing else. */
+function startsAndTerminals(
+  snapshot: HubSnapshot,
+): Pick<HubSnapshot, 'starts' | 'terminals' | 'connection'> {
+  return {
+    starts: snapshot.starts,
+    terminals: snapshot.terminals,
+    connection: snapshot.connection,
+  };
 }
 
 /**

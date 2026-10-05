@@ -187,6 +187,15 @@ export interface StartedView {
   readonly sessionId: SessionId | null;
   /** The machine the hub picked (or the override it honoured). */
   readonly server: ServerRegistrationId;
+  /**
+   * When this client read the yes, in milliseconds by the store's injected
+   * clock -- not the hub's, which stamps nothing on this frame.
+   *
+   * What a spawn's wait for its name is measured from: a start can only be
+   * named after it was placed, and the client's own clock is the one every
+   * reading of that wait is made against, so the two cannot disagree.
+   */
+  readonly receivedAt: number;
 }
 
 /**
@@ -235,6 +244,16 @@ export interface StartView {
    * session with no terminal open on it. It may arrive before `started`.
    */
   readonly named: SessionRef | null;
+  /**
+   * The connection the start went out on, numbered as `HubSnapshot.connection`
+   * numbers them, or `null` while it waits in the queue.
+   *
+   * The hub answers and names a start only down the socket that carried it,
+   * and forgets that socket's start handles when it closes. A start sent on an
+   * earlier connection is one nothing more will ever be heard about, and this
+   * is how a reader tells.
+   */
+  readonly sentOn: number | null;
 }
 
 /**
@@ -399,6 +418,16 @@ export interface HubSnapshot {
    * pane opened on a start reads its own answer and not the newest one.
    */
   readonly starts: ReadonlyMap<FrameId, StartView>;
+  /**
+   * Which connection this store is on, or last was: the number of welcomes it
+   * has had, `0` before the first.
+   *
+   * A count rather than the phase, because what a start needs to know is not
+   * whether a connection is up but whether it is the same one the start went
+   * out on. A drop and a redial between two readings is a different
+   * connection with the phase looking exactly as it did.
+   */
+  readonly connection: number;
   /** Every project's standing policy this client has been answered, by node. */
   readonly approvalPolicies: ReadonlyMap<NodeId, ApprovalPolicyView>;
   /**

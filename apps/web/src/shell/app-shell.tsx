@@ -28,7 +28,9 @@ import { listSessions } from '../sessions/session-list-model.js';
 import { SessionListScreen } from '../sessions/session-list-screen.js';
 import { SettingsRoute } from '../settings/settings-route.js';
 import type { HubStore } from '../store/hub-store.js';
+import { terminalKey } from '../store/terminals.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
+import { startShown } from '../terminal/pending-pane-model.js';
 import { useSessionRoute } from '../terminal/session-route.js';
 import { useStartRoute } from '../terminal/start-route.js';
 import { Box, useComputedColorScheme } from '../ui/components.js';
@@ -104,7 +106,8 @@ export interface AppShellProps {
   readonly tokens: TokenStore;
   /**
    * The clock, injected so a test can pin what the bell's panel says about how
-   * long a session has been waiting. The same seam `SessionListScreen` takes
+   * long a session has been waiting, and when a start's address stops drawing
+   * a pane for a start whose name is overdue. The same seam `SessionListScreen` takes
    * for its own ages, for the same reason: a wall clock is the one thing in
    * here a test cannot supply, and every other reading the shell draws comes
    * off a frame.
@@ -148,11 +151,21 @@ export function AppShell({
   const sessionRef = useSessionRoute();
   const doc = useDocRoute();
   const graph = useGraphRoute();
-  // Read only when this tab holds the start: the id is this tab's own name for
-  // it, so a reloaded or pasted address names nothing and falls to the list
-  // rather than to a pane that would wait on an answer nobody owes it.
+  // Read only when this tab holds the start and has something true to show
+  // for it: the id is this tab's own name for it, so a reloaded or pasted
+  // address names nothing, and a start from an earlier connection or long
+  // unnamed is one the hub can no longer answer. Each falls to the list rather
+  // than to a pane that would wait on an answer nobody owes it.
   const start = useStartRoute();
-  const pending = start !== null && snapshot.starts.has(start) ? start : null;
+  const pending =
+    start !== null &&
+    startShown(
+      snapshot.starts.get(start) ?? null,
+      snapshot.terminals.get(terminalKey({ by: 'start', startId: start })) ?? null,
+      { connection: snapshot.connection, now: now() },
+    )
+      ? start
+      : null;
   const arrangement = layoutStore ?? appLayoutStore(hub);
   const destination = useDestination();
   const form = useShellForm();
@@ -390,6 +403,9 @@ export function AppShell({
             section={section}
             sections={sections}
             scheme={scheme}
+            // The shell's clock, so a start's row and the pane its address
+            // draws are judged against one reading of the naming bound.
+            now={now}
             layoutStore={arrangement}
           />
         </SidebarFrame>

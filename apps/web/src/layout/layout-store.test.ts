@@ -88,6 +88,7 @@ function fakeHub() {
         started: null,
         refusal: null,
         named: null,
+        sentOn: 1,
       };
       starts = new Map([...starts, [view.replyTo, { ...entry, started: view }]]);
       notify();
@@ -99,6 +100,7 @@ function fakeHub() {
         started: null,
         refusal: null,
         named: null,
+        sentOn: 1,
       };
       starts = new Map([...starts, [startId, { ...entry, named: session }]]);
       notify();
@@ -512,6 +514,7 @@ describe('a pending pane', () => {
       storeId: storeIdSchema.parse('store-work'),
       sessionId: sessionIdSchema.parse('session-1'),
       server: serverRegistrationIdSchema.parse('registration-1'),
+      receivedAt: 0,
     });
 
     // A start that named a session is answered with it, so the pane can stop
@@ -541,6 +544,7 @@ describe('a pending pane', () => {
       storeId: storeIdSchema.parse('store-work'),
       sessionId: sessionIdSchema.parse('session-2'),
       server: serverRegistrationIdSchema.parse('registration-1'),
+      receivedAt: 0,
     });
 
     expect(h.store.getSnapshot().tree).toEqual(pendingPane(7));
