@@ -150,6 +150,7 @@ The server:
 | `--tz`                   | `AGENTPLEX_TZ`                   | inherited                      | Zone a spawned session reports times in; IANA name                                         |
 | `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`                            | Terminals held at once; at least 1                                                         |
 | `--drain-seconds`        | `AGENTPLEX_SERVER_DRAIN_SECONDS` | `15`                           | Seconds shutdown waits for turns to end                                                    |
+| `--idle-stop-minutes`    | `AGENTPLEX_IDLE_STOP_MINUTES`    | `15`                           | Minutes a held claude may sit idle at its prompt before it is stopped; at least 1          |
 | `--announce`             | `AGENTPLEX_ANNOUNCE`             | `false`                        | `true` or `false`; broadcast a beacon so discovery on the LAN pre-fills its address        |
 | `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`                         | `debug`, `info`, `warn`, `error`                                                           |
 
@@ -251,8 +252,15 @@ is why the hub refuses to dial anything but `wss://`.
 A server holds at most `--terminal-cap` terminals. Reaching the cap closes the
 one whose last watcher left longest ago, never one somebody is watching; the
 session itself is untouched, because its transcript is on disk and resuming it
-starts a new terminal. Nothing else closes a terminal — there is no idle timer,
-and a session outlives the tab that opened it — except stopping the server.
+starts a new terminal. A session outlives the tab that opened it, and nothing
+else ends one except stopping the server and the idle stop: a claude the server
+holds whose own registry has said `idle` (its turn over, sat at its prompt) for
+`--idle-stop-minutes` is stopped the way a person's stop would, and the session
+stays resumable. A turn in progress, a `!` command and a question waiting on an
+answer never count, and keys typed through agentplex start the clock again,
+because Claude Code says `idle` while a prompt is still being typed. A provider
+that keeps no such registry, like codex, is never stopped this way, and neither
+is a claude somebody runs outside agentplex.
 
 A store is identified by an `agentplex-store.json` file at its root, minted the
 first time a server mounts it. Two servers mounting the same volume report the

@@ -17,6 +17,7 @@ import {
 import { createProviderRegistry } from '@agentplex/providers';
 import {
   DEFAULT_DRAIN_MS,
+  DEFAULT_IDLE_STOP_MINUTES,
   createLogger,
   createWebSocketDialer,
   randomTokenMinter,
@@ -122,6 +123,7 @@ async function startServer({
     // for and git is never asked anything; the default budget and the fakes
     // are here because a server carries them, not because this test uses them.
     drainMs: DEFAULT_DRAIN_MS,
+    idleStopMs: DEFAULT_IDLE_STOP_MINUTES * 60_000,
     workingTree: createFakeWorkingTree(),
     machineLoad: createFakeMachineLoadReader(),
     about: { os: null, daemonVersion: null },
