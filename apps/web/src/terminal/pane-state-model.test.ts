@@ -59,6 +59,7 @@ const resumable = stateFrom(hubFrames.machineStateResumable);
 const resumed = stateFrom(hubFrames.machineStateResumed);
 const retakeable = stateFrom(hubFrames.machineStateRetakeable);
 const retaken = stateFrom(hubFrames.machineStateRetaken);
+const outsideQuit = stateFrom(hubFrames.machineStateOutsideQuit);
 
 function rowIn(state: MachineState, storeId: string, sessionId: string): SessionRow {
   const row = findSessionRow(state, sessionRefSchema.parse({ storeId, sessionId }));
@@ -75,6 +76,8 @@ const staleBench = rowIn(stale, 'store-universe', 'session-bench-tokenizer');
 /** Run outside agentplex at its prompt, rather than working as `cliRun` is. */
 const cliAtPrompt = rowIn(retakeable, 'store-agentplex', 'session-cli-run');
 const cliRetaken = rowIn(retaken, 'store-agentplex', 'session-cli-run');
+/** The same session once the claude outside agentplex quit, and nothing runs it. */
+const cliQuit = rowIn(outsideQuit, 'store-agentplex', 'session-cli-run');
 
 const ASKED = 7 as FrameId;
 
@@ -173,6 +176,33 @@ describe('paneState', () => {
     expect(paneState(input({ row, state: resumed, start: yes, startLapsed: true })).kind).toBe(
       'held',
     );
+  });
+
+  it('lets the row decide what a lapsed start offers once it says anything but none', () => {
+    // A resume that exited before it was held, and then somebody ran the
+    // session in their own terminal: trying the resume again would put a
+    // second process on its transcript, so what runs it now is what is said.
+    const yes = followUp(ASKED, answered(hubFrames.sessionStartedResumed), 'session-started');
+    const lapsed = { start: yes, startLapsed: true };
+    expect(paneState(input({ ...lapsed, row: cliAtPrompt, state: retakeable }))).toMatchObject({
+      kind: 'outside',
+      action: null,
+      retake: { kind: 'available' },
+    });
+    expect(paneState(input({ ...lapsed, row: cliRun }))).toMatchObject({
+      kind: 'outside',
+      retake: { kind: 'working-elsewhere' },
+    });
+    expect(paneState(input({ ...lapsed, row: sharedNotes, state: shared }))).toMatchObject({
+      kind: 'cannot-tell',
+      action: 'resume',
+      warning: expect.stringContaining('two processes') as string,
+    });
+    expect(paneState(input({ ...lapsed, row: staleBench, state: stale }))).toMatchObject({
+      kind: 'unreachable',
+      machine: 'gpu-box-01',
+      action: null,
+    });
   });
 
   it('repeats the hub’s own words when the start was refused, with a way to try again', () => {
@@ -296,15 +326,57 @@ describe('taking over a session run outside agentplex', () => {
     expect(paneState(input({ row: cliRetaken, state: retaken, retake: yes })).kind).toBe('held');
   });
 
-  it('waits for the hold once answered, and gives a way out if none comes', () => {
+  it('waits for the hold once answered', () => {
     const yes = followUp(ASKED, answered(hubFrames.sessionStartedRetaken), 'session-started');
     const waiting = paneState(input({ row: cliAtPrompt, state: retakeable, retake: yes }));
     expect(waiting).toMatchObject({ kind: 'starting', send: false });
     if (waiting.kind !== 'starting') return;
     expect(waiting.words).toContain('mbp-robert');
-    expect(
-      paneState(input({ row: cliAtPrompt, state: retakeable, retake: yes, startLapsed: true })),
-    ).toMatchObject({ kind: 'lapsed', action: 'try-again' });
+  });
+
+  describe('once the retake lapsed, what the row says decides', () => {
+    // The claude the retake started exited before its machine reported it
+    // held. A lapse says nothing about what runs the session now, and the
+    // try-again a resume's lapse offers is a resume: over a process somebody
+    // started since, that is a second claude on one transcript.
+    const yes = followUp(ASKED, answered(hubFrames.sessionStartedRetaken), 'session-started');
+    const lapsed = { retake: yes, startLapsed: true, ran: true };
+
+    it('offers the retake again when a claude outside agentplex runs it again', () => {
+      expect(paneState(input({ ...lapsed, row: cliAtPrompt, state: retakeable }))).toMatchObject({
+        kind: 'outside',
+        action: null,
+        retake: { kind: 'available' },
+        retakeLabel: 'Stop the claude on mbp-robert and run this session here',
+      });
+      expect(paneState(input({ ...lapsed, row: cliRun }))).toMatchObject({
+        kind: 'outside',
+        retake: { kind: 'working-elsewhere' },
+      });
+    });
+
+    it('says it stopped, with Resume, when nothing runs it', () => {
+      const state = paneState(input({ ...lapsed, row: cliQuit, state: outsideQuit }));
+      expect(state).toMatchObject({ kind: 'ended', action: 'resume' });
+      if (state.kind !== 'ended') return;
+      expect(state.words).toContain('mbp-robert');
+    });
+
+    it('cannot tell, with the warning, when nothing can say whether it runs', () => {
+      expect(paneState(input({ ...lapsed, row: sharedNotes, state: shared }))).toMatchObject({
+        kind: 'cannot-tell',
+        action: 'resume',
+        warning: expect.stringContaining('two processes') as string,
+      });
+    });
+
+    it('offers nothing when its machine is out of reach', () => {
+      expect(paneState(input({ ...lapsed, row: staleBench, state: stale }))).toMatchObject({
+        kind: 'unreachable',
+        machine: 'gpu-box-01',
+        action: null,
+      });
+    });
   });
 
   it('is not an ending while the outside claude has gone and the retake is still owed', () => {

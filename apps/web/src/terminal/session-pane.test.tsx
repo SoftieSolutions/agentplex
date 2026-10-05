@@ -2849,6 +2849,25 @@ describe('a pane on a session nothing holds', () => {
       expect(shown()).toBeNull();
     });
 
+    it('offers the retake, never a resume, when its claude exited and one runs outside again', async () => {
+      // The claude the retake started quit before it was held, and somebody
+      // ran the session in their own terminal again: a Try again here would
+      // be a resume, and a second claude on the transcript.
+      const { connected, id } = await pressedOn(hubFrames.machineStateRetakeable);
+      await deliver(connected.socket, addressedTo(hubFrames.sessionStartedRetaken, id));
+      await deliver(connected.socket, hubFrames.machineStateRetakeable);
+
+      expect(shown()?.getAttribute('data-pane-state')).toBe('outside');
+      expect(action()).toBeNull();
+      expect(retakeButton().disabled).toBe(false);
+
+      // And with nothing running it at all, it is a session that stopped.
+      await deliver(connected.socket, hubFrames.machineStateOutsideQuit);
+      expect(shown()?.getAttribute('data-pane-state')).toBe('ended');
+      expect(action()?.textContent).toBe('Resume');
+      expect(ofType(sentSince(connected), 'session-start')).toEqual([]);
+    });
+
     it('is disabled with the reason while the claude works, and enabled at its prompt in place', async () => {
       const connected = await connectedTo(hubFrames.machineStateResumable);
       await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));
