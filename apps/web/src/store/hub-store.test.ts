@@ -1795,7 +1795,10 @@ describe('terminal frames from the hub', () => {
 
 describe('a start the hub named', () => {
   /** The captured naming says which session the start on frame 2 became. */
-  const NAMED = { storeId: 'store-work', sessionId: 'session-spawned' };
+  const NAMED = {
+    storeId: storeIdSchema.parse('store-work'),
+    sessionId: sessionIdSchema.parse('session-spawned'),
+  };
 
   /** One start, sent first, so it carries the id the capture's spawn did. */
   async function spawned(): Promise<{ h: Harness; socket: FakeSocket; id: FrameId }> {
@@ -1851,6 +1854,49 @@ describe('a start the hub named', () => {
 
     socket.deliver(hubFrames.sessionStarted);
     expect(h.store.getSnapshot().answers.outstanding.has(id)).toBe(false);
+  });
+
+  it('files the start in resume memory as the session it became, with no terminal watching it', async () => {
+    const { h, socket, id } = await spawned();
+
+    socket.deliver(hubFrames.sessionStarted);
+    socket.deliver(hubFrames.sessionNamed);
+
+    expect(resumeMemoryOf(h.store.getSnapshot().resumes, NAMED)).toEqual({
+      ran: false,
+      start: id,
+      lapsed: false,
+    });
+  });
+
+  it('never publishes the name before the start is filed under it', async () => {
+    const { h, socket, id } = await spawned();
+    socket.deliver(hubFrames.sessionStarted);
+    const seen: (FrameId | null)[] = [];
+    h.store.subscribe(() => {
+      const snapshot = h.store.getSnapshot();
+      if ((snapshot.starts.get(id)?.named ?? null) === null) return;
+      seen.push(resumeMemoryOf(snapshot.resumes, NAMED).start);
+    });
+
+    socket.deliver(hubFrames.sessionNamed);
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((start) => start === id)).toBe(true);
+  });
+
+  it('lapses the start at once when the state showing its row unheld came before the name', async () => {
+    const { h, socket, id } = await spawned();
+
+    socket.deliver(hubFrames.sessionStarted);
+    socket.deliver(hubFrames.machineStateSpawnExited);
+    socket.deliver(hubFrames.sessionNamed);
+
+    expect(resumeMemoryOf(h.store.getSnapshot().resumes, NAMED)).toEqual({
+      ran: false,
+      start: id,
+      lapsed: true,
+    });
   });
 });
 
