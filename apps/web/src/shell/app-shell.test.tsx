@@ -700,7 +700,9 @@ describe('the shell', () => {
   it('draws the pane waiting on a start this tab sent, at its address', async () => {
     const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
     const socket = await mount(Date.now, null, layoutStore);
-    const sent = store.sendCommand(START);
+    // In act: the start is filed in the snapshot the shell is subscribed to,
+    // so sending it renders.
+    const sent = await act(() => store.sendCommand(START));
     if (!sent.accepted) throw new Error(sent.reason);
 
     await follow(startHash(sent.id));
@@ -714,8 +716,10 @@ describe('the shell', () => {
 
   it('shows the session a named start became when its address is visited again', async () => {
     const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
-    const socket = await mount(Date.now, layoutStore);
-    const sent = store.sendCommand(START);
+    const socket = await mount(Date.now, null, layoutStore);
+    // In act: the start is filed in the snapshot the shell is subscribed to,
+    // so sending it renders.
+    const sent = await act(() => store.sendCommand(START));
     if (!sent.accepted) throw new Error(sent.reason);
 
     await follow(startHash(sent.id));
@@ -780,7 +784,7 @@ describe('the shell', () => {
   it('lists no start and draws no pane for it on a connection after the one that carried it', async () => {
     const timers = storeOn(Date.now);
     const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
-    const socket = await mount(Date.now, layoutStore);
+    const socket = await mount(Date.now, null, layoutStore);
     await chooseSessionsTab();
     await placedStart(socket);
     expect(pendingRowNames()).toHaveLength(1);
