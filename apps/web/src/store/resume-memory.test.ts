@@ -120,6 +120,24 @@ describe('resume memory', () => {
     expect(resumeMemoryOf(lapsed, OTHER)).toMatchObject({ start: FIRST, lapsed: true });
   });
 
+  it("files a retake as that session's start, owed its hold and lapsing without one", () => {
+    // A session run outside agentplex has been seen running, so it reads as
+    // ran. A retake of it is a start of that session: it waits for the hold,
+    // a state before the answer that still shows the outside process does not
+    // lapse it, and the answer followed by no hold does.
+    const seen = rememberState(NONE, stateFrom(hubFrames.machineStateResumable), NO_REPLIES);
+    const retake = { type: 'session-retake' as const, ...OTHER };
+    const asked = rememberCommand(seen, retake, FIRST);
+    expect(resumeMemoryOf(asked, OTHER)).toEqual({ ran: true, start: FIRST, lapsed: false });
+
+    const owed = rememberState(asked, stateFrom(hubFrames.machineStateResumable), NO_REPLIES);
+    expect(resumeMemoryOf(owed, OTHER)).toEqual({ ran: true, start: FIRST, lapsed: false });
+
+    const replies = rememberAnswer(NO_REPLIES, replyFrom(hubFrames.sessionStartedResumed, FIRST));
+    const lapsed = rememberState(asked, stateFrom(hubFrames.machineStateResumable), replies);
+    expect(resumeMemoryOf(lapsed, OTHER)).toEqual({ ran: true, start: FIRST, lapsed: true });
+  });
+
   it('counts every session any state shows held or running as one that ran, pane or no pane', () => {
     const seen = rememberState(NONE, stateFrom(hubFrames.machineStateResumable), NO_REPLIES);
     // Run outside agentplex.

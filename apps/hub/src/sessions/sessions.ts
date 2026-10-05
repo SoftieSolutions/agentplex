@@ -16,7 +16,13 @@ import type { IdGenerator, Logger } from '@agentplex/node-shared';
 import type { Projects } from '../projects/projects.js';
 import type { InstructionOutcome, ServerAnswer, ServerInstruction } from '../servers/servers.js';
 import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
-import { routePause, routeSessionRead, routeStart, routeStop } from './session-routing.js';
+import {
+  routePause,
+  routeRetake,
+  routeSessionRead,
+  routeStart,
+  routeStop,
+} from './session-routing.js';
 
 /**
  * Starting sessions, stopping them, and reading one's transcript, from the
@@ -257,6 +263,26 @@ export interface SessionResumed {
   readonly server: ServerRegistrationId;
 }
 
+/** A retake addresses a session exactly as a stop does: no machine, no process, no provider. */
+export type RetakeSessionRequest = StopSessionRequest;
+
+/**
+ * A session an outside process was running is now run under agentplex, and
+ * here is where.
+ *
+ * No start id: a retake resumes a session that already has a name, so there is
+ * nothing for a relay to bind by handle, and no prompt either, so nothing is
+ * recorded as a task. The session reads as held once the server reports it.
+ */
+export interface SessionRetaken {
+  readonly ok: true;
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
+  readonly server: ServerRegistrationId;
+}
+
+export type RetakeOutcome = SessionRetaken | SessionRefused;
+
 export type PauseOutcome = SessionPaused | SessionRefused;
 export type ResumeOutcome = SessionResumed | SessionRefused;
 
@@ -276,6 +302,12 @@ export interface Sessions {
   /** Picks a paused session up again. A server that cannot answers with a refusal. */
   resume(request: PauseSessionRequest): Promise<ResumeOutcome>;
   /**
+   * Takes over a session a provider process outside agentplex is running: the
+   * machine that sees the process ends it at its prompt and resumes it there.
+   * Claims the session as a start naming it does, so the two never overlap.
+   */
+  retake(request: RetakeSessionRequest): Promise<RetakeOutcome>;
+  /**
    * The tail of one session's work, read on the machine that has the file.
    *
    * Here rather than in a feature of its own because it is routed by session,
@@ -293,12 +325,39 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
   const logger = dependencies.logger.child({ part: 'sessions' });
 
   /**
-   * The sessions a start naming them is on its way for, as `store/session`.
+   * The sessions a start naming them or a retake is on its way for, as
+   * `store/session`, with which of the two it is.
    *
    * Only starts that name a session: a fresh spawn has no id for a second
-   * spawn to collide with, and two of them are two sessions.
+   * spawn to collide with, and two of them are two sessions. A retake is in
+   * here because its last step is a resume on the server: a start of the same
+   * session in that window would be a second process on one transcript, and
+   * neither shows as a holder until the server has answered and reported.
    */
-  const startsInFlight = new Set<string>();
+  const inFlight = new Map<string, 'start' | 'retake'>();
+
+  /**
+   * Claims a session for one start or retake, or says what already holds the
+   * claim. Checked and taken in one synchronous stretch -- no await between the
+   * two -- so two that arrive together cannot both pass.
+   */
+  function claim(
+    request: { readonly storeId: StoreId; readonly sessionId: SessionId },
+    by: 'start' | 'retake',
+  ): { readonly ok: true; readonly release: () => void } | SessionRefused {
+    const key = `${request.storeId}/${request.sessionId}`;
+    const holding = inFlight.get(key);
+    if (holding !== undefined) {
+      const problem =
+        holding === 'start'
+          ? 'that session is already being started'
+          : 'that session is already being retaken';
+      logger.info(`${by} refused`, { ...request, problem });
+      return { ok: false, code: 'refused', problem, holder: null };
+    }
+    inFlight.set(key, by);
+    return { ok: true, release: () => inFlight.delete(key) };
+  }
 
   /**
    * Route a start and put it to the machine chosen, once the directory is
@@ -397,6 +456,55 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
       sessionId: answered.answer.sessionId,
       server: registrationId,
       startId,
+    };
+  }
+
+  /** Route a retake and put it to the machine that sees the process. */
+  async function retakeOn(request: RetakeSessionRequest): Promise<RetakeOutcome> {
+    const routed = routeRetake(state.snapshot(), request);
+    if (!routed.ok) {
+      logger.info('retake refused', { ...request, problem: routed.problem });
+      return routed;
+    }
+
+    const { registrationId } = routed.server;
+    const answered = await connections.ask(registrationId, {
+      type: 'session-retake',
+      storeId: request.storeId,
+      sessionId: request.sessionId,
+      // The hub's own row, as a transcript read's is: it chooses whose
+      // registry the server reads for the process, and a client must not.
+      provider: routed.provider,
+    });
+
+    if (!answered.ok) {
+      // In the server's words, which are the ones that can say why: it alone
+      // saw the process, its phase and its registry entry.
+      logger.info('the server refused a retake', { registrationId, problem: answered.problem });
+      return refusal(answered, registrationId);
+    }
+
+    // Narrowed on the frame that arrived, as a start's is: a retake that
+    // answered with anything else has not told the hub the session is running.
+    if (answered.answer.type !== 'session-started' || answered.answer.sessionId === null) {
+      logger.error('the server answered a retake with something else', {
+        registrationId,
+        answered: answered.answer.type,
+      });
+      return {
+        ok: false,
+        code: 'internal',
+        problem: 'the server answered a retake with something else',
+        holder: null,
+      };
+    }
+
+    logger.info('session retaken', { registrationId, ...request });
+    return {
+      ok: true,
+      storeId: answered.answer.storeId,
+      sessionId: answered.answer.sessionId,
+      server: registrationId,
     };
   }
 
@@ -518,27 +626,27 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
       // synchronous stretch -- no await between the two -- so two starts that
       // arrive together cannot both pass, and released whatever the machine
       // answered, so a refusal or a dropped socket does not wedge the session.
-      const claim = request.sessionId === null ? null : `${request.storeId}/${request.sessionId}`;
-      if (claim !== null) {
-        if (startsInFlight.has(claim)) {
-          logger.info('start refused', {
-            storeId: request.storeId,
-            sessionId: request.sessionId,
-            problem: 'already being started',
-          });
-          return {
-            ok: false,
-            code: 'refused',
-            problem: 'that session is already being started',
-            holder: null,
-          };
-        }
-        startsInFlight.add(claim);
-      }
+      if (request.sessionId === null) return await launch(request, directory);
+      const claimed = claim({ storeId: request.storeId, sessionId: request.sessionId }, 'start');
+      if (!claimed.ok) return claimed;
       try {
         return await launch(request, directory);
       } finally {
-        if (claim !== null) startsInFlight.delete(claim);
+        claimed.release();
+      }
+    },
+
+    async retake(request: RetakeSessionRequest): Promise<RetakeOutcome> {
+      // Claimed before the routing, as a start is, and for as long as the
+      // server takes: the signal, the wait for the process to go and the
+      // resume all happen inside this one answer, so the claim covers the
+      // resume a start of the same session would otherwise race.
+      const claimed = claim(request, 'retake');
+      if (!claimed.ok) return claimed;
+      try {
+        return await retakeOn(request);
+      } finally {
+        claimed.release();
       }
     },
 

@@ -28,6 +28,10 @@ import type { ClientFrame, FrameId, HubFrame } from '@agentplex/protocol';
  * a capability for reaching that browser, minted by its own push service, and
  * it is what the hub stores rather than a secret the user typed -- and turning
  * notifications on while the connection blinks is still turning them on.
+ * `session-retake` queues as a start does: it is something a person did once,
+ * and the hub and the machine both check again whether the session is still
+ * at its prompt before anything is ended, so a retake held over a blink cannot
+ * end work that began in the meantime.
  *
  * The three policy frames are commands for the plainest reason too: reading a
  * project's rules is a question asked once by somebody who opened a panel, and
@@ -55,6 +59,7 @@ type CommandFrame = Extract<
       | 'session-stop'
       | 'session-pause'
       | 'session-resume'
+      | 'session-retake'
       | 'session-acknowledge'
       | 'session-mute'
       | 'approval-decide'

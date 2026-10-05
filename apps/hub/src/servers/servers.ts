@@ -209,7 +209,8 @@ export function countsTowardAttention(report: ServerConnectionReport): boolean {
  * decision somebody takes. The three document frames are the second such
  * addition, and the name has earned itself twice over. `session-transcript` is
  * the third, and it is about a session again -- one read of one session's own
- * file, answered and not stored.
+ * file, answered and not stored. `session-retake` is answered as a start is,
+ * with `session-started`, so it adds nothing to the answers below.
  */
 type WithoutFrameId<Frame> = Frame extends { id: FrameId } ? Omit<Frame, 'id'> : never;
 
@@ -222,6 +223,7 @@ export type ServerInstruction = WithoutFrameId<
         | 'session-stop'
         | 'session-pause'
         | 'session-resume'
+        | 'session-retake'
         | 'session-transcript'
         | 'directory-list'
         | 'doc-write'

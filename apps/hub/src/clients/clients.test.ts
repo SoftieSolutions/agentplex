@@ -960,6 +960,58 @@ describe('starting and stopping a session', () => {
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 1 });
   });
 
+  it('takes a retake that names a session, and answers with where it now runs', async () => {
+    const sessions = createFakeSessions();
+    sessions.answerRetakeWith({
+      ok: true,
+      storeId: store(STORE),
+      sessionId: sessionIdSchema.parse(SESSION),
+      server: 'registration-workshop' as ServerRegistrationId,
+    });
+    const { broadcast, terminal } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'session-retake', id: 2, storeId: STORE, sessionId: SESSION });
+
+    expect(sessions.retakes).toEqual([{ storeId: STORE, sessionId: SESSION }]);
+    // A start's answer, naming the session it already had: the asker reads it
+    // as that session's start, and finds it held in the next state.
+    expect(client.received.at(-1)).toEqual({
+      type: 'session-started',
+      replyTo: 2,
+      storeId: STORE,
+      sessionId: SESSION,
+      server: 'registration-workshop',
+    });
+    // No start handle: a retake resumes a session that has a name already, so
+    // there is nothing for the relay to bind by handle.
+    expect(terminal.noted).toEqual([]);
+  });
+
+  it("passes a retake's refusal back in the words it was refused in", async () => {
+    const sessions = createFakeSessions();
+    sessions.answerRetakeWith({
+      ok: false,
+      code: 'refused',
+      problem: 'that session is working elsewhere; retake it when it is idle or waiting',
+      holder: null,
+    });
+    const { broadcast } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'session-retake', id: 2, storeId: STORE, sessionId: SESSION });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'refused',
+      message: 'that session is working elsewhere; retake it when it is idle or waiting',
+      holder: null,
+    });
+  });
+
   it('refuses a start that arrives before hello, and starts nothing', async () => {
     const sessions = createFakeSessions();
     const { broadcast } = harness(async () => [], sessions);
@@ -2897,6 +2949,12 @@ describe('every frame but a hello, before one', () => {
       server: null,
       project: null,
     }),
+    'session-retake': clientFrame({
+      type: 'session-retake',
+      id: 1,
+      storeId: STORE,
+      sessionId: SESSION,
+    }),
     'session-stop': clientFrame({
       type: 'session-stop',
       id: 1,
@@ -3166,6 +3224,7 @@ describe('every frame but a hello, before one', () => {
       starts: sessions.starts,
       placements: sessions.placements,
       stops: sessions.stops,
+      retakes: sessions.retakes,
       pauses: sessions.pauses,
       resumes: sessions.resumes,
       transcripts: sessions.transcripts,
