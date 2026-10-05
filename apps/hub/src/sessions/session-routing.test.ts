@@ -1022,9 +1022,11 @@ describe('routeRetake', () => {
   it('refuses a session the hub has no row for, in a store it knows and one it does not', () => {
     const state = alone(running());
 
-    expect(routeRetake(state, { storeId: WORK, sessionId: sessionId('session-2') })).toMatchObject(
-      { ok: false, code: 'refused', holder: null },
-    );
+    expect(routeRetake(state, { storeId: WORK, sessionId: sessionId('session-2') })).toMatchObject({
+      ok: false,
+      code: 'refused',
+      holder: null,
+    });
     expect(routeRetake(state, { storeId: SPARE, sessionId: SESSION })).toMatchObject({
       ok: false,
       code: 'refused',

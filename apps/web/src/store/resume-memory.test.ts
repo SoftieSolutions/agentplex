@@ -120,7 +120,7 @@ describe('resume memory', () => {
     expect(resumeMemoryOf(lapsed, OTHER)).toMatchObject({ start: FIRST, lapsed: true });
   });
 
-  it('files a retake as that session\'s start, owed its hold and lapsing without one', () => {
+  it("files a retake as that session's start, owed its hold and lapsing without one", () => {
     // A session run outside agentplex has been seen running, so it reads as
     // ran. A retake of it is a start of that session: it waits for the hold,
     // a state before the answer that still shows the outside process does not
