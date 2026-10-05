@@ -31,18 +31,25 @@ import { machineLabel } from './presentation.js';
  * The holder comes first and beats everything, including this pane's own
  * refusal: a pane that was told "already being started" because a second
  * pane got there first is answered by the holder appearing, and has nothing
- * left to say. Then this pane's own start, because a person who pressed
+ * left to say. Then this pane's own start while it is still in flight -- owed
+ * its answer, or answered and not lapsed -- because a person who pressed
  * Resume is owed what became of that press over anything the row said before
- * it. Then the session ending, which never resumes on its own -- a session
- * somebody just stopped is not one to restart behind their back. That covers
- * every session this page has seen run since it loaded, held or not, in a
- * pane or only in the sidebar: a pane resumes on its own only a session no
- * state has shown held or running the whole time, and one that stopped at any
- * point before or while it watched -- somebody quitting their own claude in
- * another terminal -- is said to have stopped, with Resume to press. Then what
- * the row says about a process, degrading towards not acting: `running` and
- * unheld is somebody else's process, `unknown` is a question only a person
- * can answer, and only `none` is permission to start one.
+ * it. Then, with nothing of this pane's in flight, a reachable row that reads
+ * a process running that agentplex does not hold: that is somebody else's
+ * process, offered for a retake, whatever this pane's last start came to and
+ * whatever ended before -- a refusal, a lost start, a lapse or an ending is
+ * history once a claude runs the session in somebody's own terminal, and the
+ * Resume or Try again each of them offers would be a second process on its
+ * transcript. Then what became of this pane's last start. Then the session
+ * ending, which never resumes on its own -- a session somebody just stopped
+ * is not one to restart behind their back. That covers every session this
+ * page has seen run since it loaded, held or not, in a pane or only in the
+ * sidebar: a pane resumes on its own only a session no state has shown held
+ * or running the whole time, and one that stopped at any point before or
+ * while it watched -- somebody quitting their own claude in another terminal
+ * -- is said to have stopped, with Resume to press. Then what the row says
+ * about a process, degrading towards not acting: `unknown` is a question only
+ * a person can answer, and only `none` is permission to start one.
  *
  * A retake -- ending the claude somebody runs outside agentplex, at its
  * prompt, and resuming the session here -- is this page's start too, filed in
@@ -191,38 +198,33 @@ export function paneState(input: PaneStateInput): PaneState {
   if (row === null) return { kind: 'unknown-row' };
   if (row.holder !== null) return { kind: 'held' };
 
-  let retakeRefusal: string | null = null;
-  if (retake !== null) {
-    switch (retake.kind) {
-      case 'waiting':
-        return retakeOwed(row, state);
-      case 'answered':
-        return startLapsed
-          ? afterLapse(row, state, retake.answer, 'retake')
-          : awaitingHold(retake.answer, state);
-      case 'refused':
-        retakeRefusal = retake.words;
-        break;
-      case 'idle':
-        // No answer will come: the row says whether there is still a
-        // process to offer it for.
-        break;
-    }
+  // A start or retake this pane sent that has not come to anything yet --
+  // owed its answer, or answered and not lapsed -- is owed to whoever
+  // pressed, over anything the row said before it.
+  if (retake?.kind === 'waiting') return retakeOwed(row, state);
+  if (retake?.kind === 'answered' && !startLapsed) return awaitingHold(retake.answer, state);
+  if (start?.kind === 'waiting') {
+    return {
+      kind: 'starting',
+      send: false,
+      words: 'nothing was running this session, so it is being resumed',
+      action: null,
+    };
   }
+  if (start?.kind === 'answered' && !startLapsed) return awaitingHold(start.answer, state);
 
+  // Nothing of this pane's is in flight, so a process outside agentplex
+  // running it now beats whatever this pane's last start came to and
+  // whatever ended before: Resume or Try again over it is a second process.
+  const process = row.descriptor.process;
+  const retakeRefusal = retake?.kind === 'refused' ? retake.words : null;
+  if (row.reachable && process === 'running') return runningOutside(row, state, retakeRefusal);
+
+  if (retake?.kind === 'answered') return afterLapse(row, state, retake.answer, 'retake');
   if (start !== null) {
     switch (start.kind) {
-      case 'waiting':
-        return {
-          kind: 'starting',
-          send: false,
-          words: 'nothing was running this session, so it is being resumed',
-          action: null,
-        };
       case 'answered':
-        return startLapsed
-          ? afterLapse(row, state, start.answer, 'resume')
-          : awaitingHold(start.answer, state);
+        return afterLapse(row, state, start.answer, 'resume');
       case 'refused':
         return { kind: 'refused', words: start.words, action: 'try-again' };
       case 'idle':
@@ -236,10 +238,6 @@ export function paneState(input: PaneStateInput): PaneState {
     }
   }
 
-  const process = row.descriptor.process;
-  // A process outside agentplex runs it now, whatever ended before: the
-  // ending is history, and its Resume would be a second process.
-  if (row.reachable && process === 'running') return runningOutside(row, state, retakeRefusal);
   if (terminal?.ended === 'session-ended' || (ran && process === 'none')) {
     return {
       kind: 'ended',
@@ -337,6 +335,9 @@ function awaitingHold(answer: Answer<'session-started'>, state: MachineState | n
  * runs it is the lapse itself: a resume is offered to try again, and a retake
  * -- whose outside process is gone too -- is a session that stopped, to
  * resume, because trying a retake again has nothing left to end.
+ *
+ * `paneState` reads a reachable row's outside process before any lapse, so
+ * the running case here is that same rule, kept so the lapse is whole alone.
  */
 function afterLapse(
   row: SessionRow,

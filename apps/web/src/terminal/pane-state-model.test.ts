@@ -222,6 +222,43 @@ describe('paneState', () => {
     expect(paneState(input({ start: idle }))).toMatchObject({ kind: 'lost', action: 'try-again' });
   });
 
+  it('offers the retake, not Try again, once a refused or lost start meets an outside claude', () => {
+    // A refusal such as "that session is running outside agentplex on this
+    // machine", or a start no answer will come for, then a state that reads
+    // the session running unheld: Try again is a resume over that process.
+    const refused = followUp(ASKED, answered(hubFrames.refusal), 'session-started');
+    const idle = followUp(ASKED, NO_ANSWERS, 'session-started');
+    for (const start of [refused, idle]) {
+      expect(paneState(input({ start, row: cliAtPrompt, state: retakeable }))).toMatchObject({
+        kind: 'outside',
+        action: null,
+        retake: { kind: 'available' },
+      });
+      expect(paneState(input({ start, row: cliRun }))).toMatchObject({
+        kind: 'outside',
+        retake: { kind: 'working-elsewhere' },
+      });
+    }
+  });
+
+  it('keeps a start still in flight over a row that reads running', () => {
+    // The start this pane sent has not come to anything yet: what it becomes
+    // is owed to the person who pressed, not the row's word from before it.
+    const waiting = followUp(
+      ASKED,
+      { replies: new Map(), outstanding: new Set([ASKED]) },
+      'session-started',
+    );
+    const yes = followUp(ASKED, answered(hubFrames.sessionStartedResumed), 'session-started');
+    for (const start of [waiting, yes]) {
+      expect(paneState(input({ start, row: cliAtPrompt, state: retakeable }))).toMatchObject({
+        kind: 'starting',
+        send: false,
+        action: null,
+      });
+    }
+  });
+
   it('is ended when the hub said the session ended, and never resumes on its own', () => {
     expect(paneState(input({ terminal: { ended: 'session-ended' } }))).toMatchObject({
       kind: 'ended',
