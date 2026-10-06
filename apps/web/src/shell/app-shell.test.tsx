@@ -12,6 +12,7 @@ import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.j
 import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import type { HubCommand } from '../store/commands.js';
+import { mintClientInstance } from '../store/client-instance.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createLayoutStore, type LayoutStore } from '../layout/layout-store.js';
 import { panes } from '../layout/operations.js';
@@ -183,6 +184,7 @@ describe('the shell', () => {
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });
@@ -634,6 +636,7 @@ describe('the shell', () => {
     store = createHubStore({
       fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });
@@ -657,6 +660,7 @@ describe('the shell', () => {
     store = createHubStore({
       fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });
@@ -755,6 +759,7 @@ describe('the shell', () => {
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers,
       frameIds: createFrameIds(),
       now,
@@ -781,17 +786,17 @@ describe('the shell', () => {
     return sent.id;
   }
 
-  it('lists no start and draws no pane for it on a connection after the one that carried it', async () => {
+  it('keeps listing a placed start across a redial, and takes the name the new socket brings', async () => {
     const timers = storeOn(Date.now);
     const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
     const socket = await mount(Date.now, null, layoutStore);
     await chooseSessionsTab();
-    await placedStart(socket);
+    const id = await placedStart(socket);
     expect(pendingRowNames()).toHaveLength(1);
     expect(container.querySelector('main')?.textContent).toContain('starting on mbp-robert');
 
-    // The connection drops between the yes and the naming. The hub forgot this
-    // socket's start handles when it closed, so the name cannot come now.
+    // The connection drops between the yes and the naming. The hub keeps the
+    // start for this page and names it on the page's next socket.
     await act(() => {
       socket.drop();
     });
@@ -809,13 +814,18 @@ describe('the shell', () => {
       next.deliver(hubFrames.machineStatePopulated);
     });
 
+    expect(pendingRowNames()).toHaveLength(1);
+    expect(container.querySelector('main')?.textContent).toContain('starting on mbp-robert');
+
+    await act(() => {
+      next.deliver(addressedTo(hubFrames.sessionNamed, id));
+    });
+
+    expect(store.getSnapshot().starts.get(id)?.named).not.toBeNull();
     expect(pendingRowNames()).toEqual([]);
-    const main = container.querySelector('main');
-    expect(main?.textContent).toContain('Sessions');
-    expect(main?.textContent).not.toContain('starting on');
   });
 
-  it('lists no start and draws no pane for it while the connection that carried it is down', async () => {
+  it('keeps listing a placed start while the store redials, and not once it stops', async () => {
     const timers = storeOn(Date.now);
     const layoutStore = createLayoutStore({ hub: store, timers: createFakeTimers() });
     const socket = await mount(Date.now, null, layoutStore);
@@ -823,17 +833,13 @@ describe('the shell', () => {
     const id = await placedStart(socket);
     expect(pendingRowNames()).toHaveLength(1);
 
-    // The hub forgets this socket's start handles at the close, not at the next
-    // welcome: through a long outage the store is backing off and counts no
-    // welcome at all, and the name still cannot come.
+    // Through an outage the store backs off and counts no welcome, and the hub
+    // holds the start for this page all the while: it is still coming.
     await act(() => {
       socket.drop();
     });
 
-    expect(pendingRowNames()).toEqual([]);
-    const main = container.querySelector('main');
-    expect(main?.textContent).toContain('Sessions');
-    expect(main?.textContent).not.toContain('starting on');
+    expect(pendingRowNames()).toHaveLength(1);
 
     // A redial the hub refuses on the protocol version stops the store
     // redialling for good, so no welcome ever comes to count; the start stays
@@ -1014,6 +1020,7 @@ describe('the shell', () => {
     store = createHubStore({
       fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });
@@ -1243,6 +1250,7 @@ describe('the shell on a phone', () => {
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });

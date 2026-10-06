@@ -198,6 +198,11 @@ export function createSessionReplies({ update, now }: SessionRepliesDependencies
     },
 
     named(frame: Frame<'session-named'>): void {
+      // A page that redials is told every naming the hub still holds for it,
+      // including ones the old socket already delivered: a repeat is the same
+      // news, and publishing it again would be a render saying nothing new.
+      const known = starts.get(frame.replyTo)?.named ?? null;
+      if (known?.storeId === frame.storeId && known.sessionId === frame.sessionId) return;
       noteStartAnswer(frame.replyTo, {
         named: { storeId: frame.storeId, sessionId: frame.sessionId },
       });

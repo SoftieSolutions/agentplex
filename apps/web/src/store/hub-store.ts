@@ -3,6 +3,7 @@ import {
   parseHubFrame,
   parseTextFrame,
   type CatalogueQuery,
+  type ClientInstance,
   type ClientTerminalTarget,
   type FrameId,
   type SessionRef,
@@ -206,6 +207,16 @@ export interface HubStoreDependencies {
   createSocket(ticket: string): StoreSocket;
   readonly timers: Timers;
   readonly frameIds: FrameIds;
+  /**
+   * Which page this store is, said on every hello it sends.
+   *
+   * The hub files a start under it rather than under the socket, so a spawn
+   * named while this page was between sockets is named to it on the next one.
+   * Required and never defaulted: a constant would make every tab one page,
+   * and the second tab to dial would take the first's starts over. The app
+   * mints one per store with `mintClientInstance`; a test names its own.
+   */
+  readonly instance: ClientInstance;
   /**
    * How big one watched terminal's buffer may get, in bytes.
    *

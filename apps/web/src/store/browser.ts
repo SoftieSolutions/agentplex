@@ -1,5 +1,6 @@
 import type { ParseResult } from '@agentplex/protocol';
 import type { TokenStore } from '../auth/token.js';
+import { mintClientInstance } from './client-instance.js';
 import { createFrameIds } from './frame-ids.js';
 import type { StoreSocket } from './connection.js';
 import type { HubStoreDependencies } from './hub-store.js';
@@ -102,7 +103,7 @@ export function subscribeWake(fire: () => void): () => void {
 /**
  * The real dependencies for `createHubStore`.
  *
- * Five seams and no more, and the list got shorter rather than longer when the
+ * Five seams and the page's name, and no more, and the list got shorter rather than longer when the
  * terminal frames landed. The store used to take its subscribe and keystroke
  * frames as injected encoders, because the protocol had no frame to put either
  * on and an unfilled seam was the honest way to say so. There are frames now,
@@ -132,6 +133,10 @@ export function createBrowserDependencies(options: BrowserDependencyOptions): Hu
     createSocket: (ticket) => wrapWebSocket(new WebSocket(socketUrl(window.location, ticket))),
     timers: browserTimers,
     frameIds: createFrameIds(),
+    // Minted here, once per store, beside the frame ids it pairs with: the
+    // hub reads a start handle as this page's frame id, and both are unique
+    // across every socket this store opens and to no other page.
+    instance: mintClientInstance(),
     wake: subscribeWake,
   };
 }

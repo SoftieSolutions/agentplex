@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   approvalIdSchema,
+  clientInstanceSchema,
   docNameSchema,
   frameIdSchema,
   nodeIdSchema,
@@ -42,6 +43,9 @@ import { hubFrames } from './hub-frames.fixture.js';
  * test plays the hub on, fake timers for the backoff, and the captured frames
  * a real hub sent (`hub-frames.fixture.ts`) for everything inbound.
  */
+
+/** The page this store says it is, on every hello it sends. */
+const INSTANCE = clientInstanceSchema.parse('3c7a90e1b25f4d68a0c3e9b71d5f2846');
 
 const STORE_ID = storeIdSchema.parse('store-observatory');
 const SESSION = sessionRefSchema.parse({
@@ -106,6 +110,7 @@ function harness(overrides: Partial<HubStoreDependencies> = {}) {
     createSocket: (ticket) => sockets.create(ticket),
     timers,
     frameIds: createFrameIds(),
+    instance: INSTANCE,
     // A clock that never moves unless a test moves it, so a stamp is a number
     // the test can name.
     now: () => 0,
@@ -173,7 +178,7 @@ describe('connection lifecycle', () => {
     const socket = h.sockets.sockets[0];
     socket?.open();
     expect(sentFrames(socket as FakeSocket)).toEqual([
-      { type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION },
+      { type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION, instance: INSTANCE },
     ]);
     unsubscribe();
   });
@@ -605,7 +610,13 @@ describe('commands', () => {
     next.deliver(hubFrames.welcome);
 
     const frames = sentFrames(next);
-    expect(frames[0]).toEqual({ type: 'hello', id: 4, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    // The same page on the new socket: the hub files its starts under it.
+    expect(frames[0]).toEqual({
+      type: 'hello',
+      id: 4,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: INSTANCE,
+    });
     expect(frames.slice(1)).toEqual([
       { ...START, id: 2 },
       { type: 'session-stop', storeId: SESSION.storeId, sessionId: SESSION.sessionId, id: 3 },
@@ -1858,6 +1869,37 @@ describe('a start the hub named', () => {
     expect(start?.started).not.toBeNull();
   });
 
+  it('files a naming that reaches it on the socket a redial opened', async () => {
+    // The spawn was placed on one socket and named while the page was between
+    // sockets: the hub keeps it for the page and says it on the next hello.
+    const { h, socket, id } = await spawned();
+    socket.deliver(hubFrames.sessionStarted);
+    socket.drop();
+
+    const next = await redial(h);
+    next.open();
+    expect(sentFrames(next)[0]).toMatchObject({ type: 'hello', instance: INSTANCE });
+    next.deliver(hubFrames.welcome);
+    next.deliver(hubFrames.sessionNamed);
+
+    expect(h.store.getSnapshot().starts.get(id)?.named).toEqual(NAMED);
+    expect(resumeMemoryOf(h.store.getSnapshot().resumes, NAMED)).toMatchObject({ start: id });
+  });
+
+  it('changes nothing when a naming it already has is said again', async () => {
+    // A redial re-sends every naming the hub holds for the page, and the old
+    // socket may have delivered it already: the repeat is the same news.
+    const { h, socket } = await spawned();
+    socket.deliver(hubFrames.sessionStarted);
+    socket.deliver(hubFrames.sessionNamed);
+    const before = h.store.getSnapshot();
+
+    socket.deliver(hubFrames.sessionNamed);
+
+    expect(h.store.getSnapshot().starts).toBe(before.starts);
+    expect(h.store.getSnapshot().resumes).toBe(before.resumes);
+  });
+
   it('changes nothing for an id no start was sent under', async () => {
     const h = harness();
     const { socket } = await establish(h);
@@ -1948,8 +1990,8 @@ describe('which connection a start can still be heard on', () => {
     if (!sent.accepted) throw new Error(sent.reason);
     expect(h.store.getSnapshot().starts.get(sent.id)?.sentOn).toBe(1);
 
-    // The hub drops a socket's start handles when it closes, so the naming
-    // this start was owed can only ever have come down the first connection.
+    // An answer goes down the socket that asked, so which connection carried
+    // the start is what says whether one can still come for it.
     socket.drop();
     const next = await redial(h);
     next.open();
@@ -2058,7 +2100,7 @@ describe('subscriptions', () => {
     next.open();
     next.deliver(hubFrames.welcome);
     expect(sentFrames(next)).toEqual([
-      { type: 'hello', id: 3, protocolVersion: CLIENT_PROTOCOL_VERSION },
+      { type: 'hello', id: 3, protocolVersion: CLIENT_PROTOCOL_VERSION, instance: INSTANCE },
       { type: 'layout-request', id: 4 },
     ]);
     unsubscribe();

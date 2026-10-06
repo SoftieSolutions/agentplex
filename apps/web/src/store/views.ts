@@ -248,10 +248,12 @@ export interface StartView {
    * The connection the start went out on, numbered as `HubSnapshot.connection`
    * numbers them, or `null` while it waits in the queue.
    *
-   * The hub answers and names a start only down the socket that carried it,
-   * and forgets that socket's start handles when it closes. A start sent on an
-   * earlier connection is one nothing more will ever be heard about, and this
-   * is how a reader tells.
+   * The hub answers a start only down the socket that carried it, and a start
+   * in flight when that socket closed is never written down there. An
+   * unanswered start sent on an earlier connection is one nothing more will
+   * ever be heard about, and this is how a reader tells. A placed one is
+   * different: the hub keeps it for this page and names it on the next
+   * socket, so `pending-pane-model.ts` reads this only while it is unanswered.
    */
   readonly sentOn: number | null;
 }

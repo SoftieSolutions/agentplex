@@ -77,8 +77,8 @@ describe('clientTerminalTargetSchema', () => {
 describe("the two legs' start handles", () => {
   // The one field these frames do not share, and the reason the shapes are
   // written once and instantiated twice. A client's handle is its own frame
-  // id, which is all it ever needs: it dies with the socket, and so does the
-  // pane waiting on it. The hub's handle outlives the socket it was sent on,
+  // id, which is all it ever needs: it is the page's, and so is the pane
+  // waiting on it. The hub's handle outlives the socket it was sent on,
   // because a hub that redialled between the fork and the provider naming the
   // session would otherwise have lost the only name that spawn had.
   it('names a start by a frame id on the client leg and by an opaque id on the server leg', () => {

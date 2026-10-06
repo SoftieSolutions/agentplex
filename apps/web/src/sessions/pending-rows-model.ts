@@ -30,16 +30,17 @@ import { serverLabel, type SessionListItem } from './session-list-model.js';
  *     took back.
  *   * Never after a no. A refused start is not a slow one; the form that asked
  *     says so in the hub's words.
- *   * Not once the name can no longer come. The hub names a start only down
- *     the socket that made it and forgets that socket's starts when it closes,
- *     and a provider that exits before writing an id is never named at all.
- *     So a start whose connection has closed -- redialled or not -- or one
+ *   * Not once the name can no longer come. The hub keeps a placed start for
+ *     this page across a redial and names it on the page's next socket, but a
+ *     provider that exits before writing an id is never named at all, and a
+ *     store that has stopped redialling has no next socket. So a start
  *     unnamed `NAMING_BOUND_MS` after its yes with nothing relaying its
- *     terminal, is not drawn -- dropped rather than drawn as failed, because
- *     "did not start" is a guess about a process this client cannot see, and
- *     if it did write an id after all the scan lists it in its own row. One
- *     past the bound whose terminal the hub is still relaying on this
- *     connection keeps its row: a prompt-less spawn somebody may be typing
+ *     terminal, or one whose store has stopped redialling, is not drawn --
+ *     dropped rather than drawn as failed, because "did not start" is a guess
+ *     about a process this client cannot see, and if it did write an id after
+ *     all the scan lists it in its own row. One past the bound whose terminal
+ *     the hub is still relaying keeps its row: a prompt-less spawn somebody
+ *     may be typing
  *     into is live, and its row is the way back to its pane. `startLive`
  *     decides it, the same predicate the start's address uses, so a row and
  *     the pane it opens agree.

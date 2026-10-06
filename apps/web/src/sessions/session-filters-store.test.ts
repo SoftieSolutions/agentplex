@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { serverRegistrationIdSchema } from '@agentplex/protocol';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
+import { mintClientInstance } from '../store/client-instance.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { appSessionFiltersStore, createSessionFiltersStore } from './session-filters-store.js';
@@ -18,6 +19,7 @@ function hubStore(): HubStore {
   return createHubStore({
     fetchTicket: () => Promise.resolve('ticket-1'),
     createSocket: (ticket) => sockets.create(ticket),
+    instance: mintClientInstance(),
     timers: createFakeTimers(),
     frameIds: createFrameIds(),
   });

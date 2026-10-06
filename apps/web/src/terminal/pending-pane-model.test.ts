@@ -204,26 +204,38 @@ describe('startAwaited', () => {
     expect(startAwaited(placed, late)).toBe(false);
   });
 
-  it('is not awaited on a connection after the one that carried it', () => {
-    // The hub names a start down the socket that made it and drops that
-    // socket's handles on close: nothing more about it can arrive.
-    expect(startAwaited(placed, { ...soon, connection: 2 })).toBe(false);
+  it('is not awaited unanswered on a connection after the one that carried it', () => {
+    // A start in flight when its socket closed is never written down at the
+    // hub, so no answer and no naming for it can arrive on the next one.
     expect(startAwaited({ ...placed, started: null }, { ...soon, connection: 2 })).toBe(false);
+  });
+
+  it('is awaited placed across a redial inside the bound, and not after it', () => {
+    // The hub files a placed start under this page rather than the socket,
+    // and names it to the page's next socket.
+    const redialled: StartMoment = { ...soon, connection: 2 };
+    expect(startAwaited(placed, redialled)).toBe(true);
+    expect(startAwaited(placed, { ...redialled, now: ANSWERED_AT + NAMING_BOUND_MS })).toBe(false);
   });
 
   it('is not awaited once refused: the answer it was owed has arrived', () => {
     expect(startAwaited({ ...placed, started: null, refusal: refused }, soon)).toBe(false);
   });
 
-  it('is not awaited once the connection that carried it is down, before any redial', () => {
-    // The hub forgets a socket's start handles at the close, not at the next
-    // welcome: a store backing off through a long outage, or one stopped by a
-    // protocol-version refusal, never counts another welcome, and the start
-    // is beyond naming all the same.
+  it('is not awaited unanswered once the connection that carried it is down', () => {
+    // The answer goes down the socket that asked, and with that socket gone
+    // nothing can carry it, before any redial counts another welcome.
     for (const phase of ['reconnecting', 'connecting', 'failed'] as const) {
-      expect(startAwaited(placed, { ...soon, phase })).toBe(false);
       expect(startAwaited({ ...placed, started: null }, { ...soon, phase })).toBe(false);
     }
+  });
+
+  it('is awaited placed while the store redials, and not once it has stopped redialling', () => {
+    // A store that gave up on its own -- a protocol-version refusal -- dials
+    // no next socket for the naming to arrive on.
+    expect(startAwaited(placed, { ...soon, phase: 'reconnecting' })).toBe(true);
+    expect(startAwaited(placed, { ...soon, phase: 'connecting' })).toBe(true);
+    expect(startAwaited(placed, { ...soon, phase: 'failed' })).toBe(false);
   });
 
   it('is awaited while queued and the connection is down, because it goes out on the next', () => {
@@ -253,7 +265,29 @@ describe('startLive', () => {
     );
     expect(startLive(placed, { ...relayed, attached: false }, late)).toBe(false);
     expect(startLive(placed, relayed, { ...late, phase: 'reconnecting' })).toBe(false);
-    expect(startLive(placed, relayed, { ...late, connection: 2 })).toBe(false);
+  });
+
+  it('is live across a redial inside the bound, terminal or none, and not after it', () => {
+    const redialled: StartMoment = { ...soon, connection: 2 };
+    expect(startLive(placed, null, redialled)).toBe(true);
+    expect(startLive(placed, null, { ...redialled, now: late.now })).toBe(false);
+  });
+
+  it('stays live past the bound while its terminal is relayed again after a redial', () => {
+    // The pane re-subscribes by its start handle on the new socket, and the
+    // hub routes the handle by the page, not the socket that made it.
+    expect(startLive(placed, relayed, { ...late, connection: 2 })).toBe(true);
+  });
+
+  it('is not live past the bound when the terminal re-attached after a redial has ended', () => {
+    const redialled: StartMoment = { ...late, connection: 2 };
+    expect(startLive(placed, { ...relayed, ended: 'session-ended' }, redialled)).toBe(false);
+  });
+
+  it('needs the connection that carried it while unanswered, whatever a terminal says', () => {
+    const unanswered: StartView = { ...placed, started: null };
+    expect(startLive(unanswered, relayed, soon)).toBe(true);
+    expect(startLive(unanswered, relayed, { ...soon, connection: 2 })).toBe(false);
   });
 
   it('is not live once refused, whatever a terminal says', () => {
@@ -288,12 +322,16 @@ describe('startShown', () => {
     expect(startShown(entry, null, later)).toBe(true);
   });
 
-  it('shows no pane for a start from an earlier connection, which can only be refused', () => {
-    expect(startShown(placed, quiet, later)).toBe(false);
+  it('shows no pane for an unanswered start from an earlier connection, which can only be refused', () => {
+    expect(startShown({ ...placed, started: null }, quiet, later)).toBe(false);
   });
 
-  it('shows no pane for a placed start once the connection that carried it is down', () => {
-    expect(startShown(placed, quiet, down)).toBe(false);
+  it('shows the pane of a placed start across a redial, inside the bound', () => {
+    expect(startShown(placed, quiet, later)).toBe(true);
+    expect(startShown(placed, quiet, down)).toBe(true);
+  });
+
+  it('shows no pane for a placed start once the store has stopped redialling', () => {
     expect(startShown(placed, quiet, { ...down, phase: 'failed' })).toBe(false);
   });
 
