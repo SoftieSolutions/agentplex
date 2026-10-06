@@ -255,7 +255,11 @@ function registrationOf(label: string): ServerRegistrationId {
  * hub that reconnects finds the agents it left running, not a fresh manager
  * that has forgotten them.
  */
-function buildMachine(label: string, providers: readonly ProviderReadiness[]): Machine {
+function buildMachine(
+  label: string,
+  providers: readonly ProviderReadiness[],
+  onDisk: Record<string, string>,
+): Machine {
   const ptys = createFakePtyFactory();
   const supervisor = createPtySupervisor({
     pty: ptys,
@@ -269,7 +273,7 @@ function buildMachine(label: string, providers: readonly ProviderReadiness[]): M
     label,
     terminals,
     ptys,
-    transcripts: transcripts(),
+    transcripts: onDisk,
     providers,
     socket: null,
     sentToHub: [],
@@ -373,9 +377,15 @@ function serveMachine(machine: Machine): DialResult {
  * rather than a constant because the interesting case is a fleet where a box
  * cannot run what it is being asked for, and that has to be true before the
  * handshake -- which is the only moment a server ever states it.
+ *
+ * `transcriptsOf` is what each machine's provider files hold before the first
+ * dial, for the same reason: a write a test makes later is reported only on
+ * that machine's next scan, and a session one machine sees a process on has to
+ * be in the very first report the hub reads.
  */
 async function start(
   preflightOf: (label: string) => readonly ProviderReadiness[] = () => [readyProvider('claude')],
+  transcriptsOf: (label: string) => Record<string, string> = () => transcripts(),
 ): Promise<Harness> {
   suite += 1;
   migrated = await openMigratedSchema(`session-start-${suite}`);
@@ -383,7 +393,7 @@ async function start(
 
   const machines = new Map<string, Machine>();
   for (const label of ['attic', 'workshop']) {
-    machines.set(label, buildMachine(label, preflightOf(label)));
+    machines.set(label, buildMachine(label, preflightOf(label), transcriptsOf(label)));
     await registerServer(
       database,
       { newId: () => registrationOf(label) },
@@ -1412,6 +1422,97 @@ describe('a session start against a machine with no such provider installed', ()
         problem: expect.any(String),
       },
     ]);
+  });
+});
+
+/**
+ * A resume of a session a process outside agentplex is running, on a store two
+ * machines share.
+ *
+ * Only attic's process table has that claude in it, so only attic can refuse
+ * on its own account; workshop sees the same transcript and no pid. The hub is
+ * the one place both readings meet, and the refusal is made there before any
+ * machine is asked -- whether the hub schedules the resume or the user points
+ * it at the machine that cannot see the process.
+ */
+describe('a resume of a session an outside process is running, on a shared store', () => {
+  beforeEach(async () => {
+    harness = await start(
+      () => [readyProvider('claude')],
+      (label) => {
+        const onDisk = transcripts();
+        if (label === 'attic') {
+          // The claude somebody started in a terminal on attic: its registry
+          // entry, verified against attic's own process table.
+          onDisk['/volumes/work/claude/sessions/session-quiet.json'] = JSON.stringify({
+            signal: 'awaiting-input',
+            updatedAt: START - 5_000,
+            cwd: '/volumes/work',
+            running: true,
+            pid: 4242,
+          });
+        }
+        return onDisk;
+      },
+    );
+    await until(
+      () =>
+        held()
+          .connections.snapshot()
+          .every((report) => report.phase === 'connected'),
+      'both servers to be connected',
+    );
+    await until(
+      () =>
+        held()
+          .state.snapshot()
+          .stores[0]?.sessions.find((row) => row.ref.sessionId === 'session-quiet')?.descriptor
+          .process === 'running',
+      'attic to have reported the process it sees',
+    );
+  });
+
+  afterEach(async () => {
+    await harness?.connections.stop();
+    harness?.clients.stop();
+    await migrated?.close();
+    harness = null;
+    migrated = null;
+  });
+
+  it.each([
+    ['the hub schedules it', null],
+    ['the user picks the machine that cannot see the process', registrationOf('workshop')],
+  ] as const)('refuses it when %s, and tells no machine to start it', async (_case, server) => {
+    const client = await attach();
+
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: sessionIdSchema.parse('session-quiet'),
+      provider: 'claude',
+      prompt: null,
+      server,
+      project: null,
+    });
+
+    const answer = client.reply(2);
+    expect(answer).toMatchObject({ type: 'refusal', code: 'refused', holder: null });
+    if (answer.type !== 'refusal') return;
+    expect(answer.message).toBe(
+      'that session is running outside agentplex on attic, and the store is shared by more ' +
+        'than one server; end that claude on attic first',
+    );
+
+    expect(launches(machine('attic'))).toEqual([]);
+    expect(launches(machine('workshop'))).toEqual([]);
+    for (const label of ['attic', 'workshop']) {
+      const instructions = machine(label)
+        .sentToServer.map((text) => parsed<{ type: string }>(parseHubToServerFrame, text))
+        .filter((frame) => frame.type === 'session-start');
+      expect(instructions, `${label} was told to start something`).toEqual([]);
+    }
   });
 });
 

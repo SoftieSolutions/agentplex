@@ -133,6 +133,31 @@ function fleet(machines: readonly Machine[]): HubStateSnapshot {
   return reducer.snapshot();
 }
 
+/** A session a process outside agentplex is running, seen by the one machine with the store. */
+function running(
+  provider: 'claude' | 'codex' = 'claude',
+  process: SessionDescriptor['process'] = 'running',
+): SessionDescriptor {
+  return { ...session('session-1'), provider, process };
+}
+
+/** One connected machine, `workshop`, alone on the store and reporting this one session. */
+function alone(
+  descriptor: SessionDescriptor,
+  machine: Partial<Machine> = {},
+  holding: readonly SessionHold[] = [],
+): HubStateSnapshot {
+  return fleet([
+    {
+      label: 'workshop',
+      phase: 'connected',
+      stores: [WORK],
+      reports: [{ storeId: WORK, sessions: [descriptor], holding }],
+      ...machine,
+    },
+  ]);
+}
+
 describe('routeStart', () => {
   it('sends a start to the one live server attached to the store', () => {
     const state = fleet([{ label: 'workshop', phase: 'connected', stores: [WORK] }]);
@@ -718,6 +743,137 @@ describe('routeStart', () => {
 
     expect(routed.ok && routed.server.label).toBe('workshop');
   });
+
+  /**
+   * A resume of a session a process outside agentplex is running.
+   *
+   * Refused whoever asks and wherever they point it: a second agent on that
+   * transcript is the corruption the holder refusal exists for, and the hub
+   * may be the only one able to see it -- on a shared store the scheduler can
+   * pick a machine that cannot see the other's pid.
+   */
+  describe('a session a process outside agentplex is running', () => {
+    const RESUME = {
+      storeId: WORK,
+      sessionId: sessionId('session-1'),
+      provider: 'claude',
+      server: null,
+    } as const;
+
+    /** `attic` and `workshop` on one store, `workshop` the one that sees the process. */
+    function shared(descriptor: SessionDescriptor): HubStateSnapshot {
+      return fleet([
+        { label: 'attic', phase: 'connected', stores: [WORK] },
+        {
+          label: 'workshop',
+          phase: 'connected',
+          stores: [WORK],
+          reports: [{ storeId: WORK, sessions: [descriptor] }],
+        },
+      ]);
+    }
+
+    it('refuses a resume and offers the takeover when one machine sees it', () => {
+      const routed = routeStart(alone(running()), RESUME);
+
+      expect(routed).toEqual({
+        ok: false,
+        code: 'refused',
+        problem:
+          'that session is running outside agentplex on workshop; take it over instead of resuming it',
+        holder: null,
+      });
+    });
+
+    it('refuses it even when the user picked the machine', () => {
+      const routed = routeStart(alone(running()), { ...RESUME, server: registration('workshop') });
+
+      expect(routed).toEqual({
+        ok: false,
+        code: 'refused',
+        problem:
+          'that session is running outside agentplex on workshop; take it over instead of resuming it',
+        holder: null,
+      });
+    });
+
+    it('refuses on a shared store without offering the takeover, naming the provider', () => {
+      // A retake refuses a shared store (Robert's decision 10b), so the
+      // sentence must not send anybody to it. What is left is ending it there.
+      const state = shared(running('codex'));
+
+      for (const server of [null, registration('attic'), registration('workshop')]) {
+        expect(routeStart(state, { ...RESUME, provider: 'codex', server })).toEqual({
+          ok: false,
+          code: 'refused',
+          problem:
+            'that session is running outside agentplex on workshop, and the store is shared ' +
+            'by more than one server; end that codex on workshop first',
+          holder: null,
+        });
+      }
+    });
+
+    it('refuses when the machine that saw it is unreachable, claiming nothing about whose it is', () => {
+      // A stale machine's holds are dropped, so a stale row reading `running`
+      // may be agentplex's own terminal. The sentence says what was last seen.
+      const state = fleet([
+        { label: 'attic', phase: 'connected', stores: [WORK] },
+        {
+          label: 'workshop',
+          phase: 'stale',
+          stores: [WORK],
+          reports: [{ storeId: WORK, sessions: [running()] }],
+        },
+      ]);
+
+      for (const server of [null, registration('attic')]) {
+        expect(routeStart(state, { ...RESUME, server })).toEqual({
+          ok: false,
+          code: 'refused',
+          problem:
+            'workshop last reported a process running that session, and the hub cannot reach it right now',
+          holder: null,
+        });
+      }
+    });
+
+    it.each(['none', 'unknown'] as const)(
+      'resumes a session whose process reads %s, alone or shared',
+      (process) => {
+        // Robert's decisions 8 and 9: `unknown` is a machine that could not
+        // look, and refusing it would refuse every session on a shared store.
+        expect(routeStart(alone(running('claude', process)), RESUME)).toMatchObject({
+          ok: true,
+          server: { label: 'workshop' },
+        });
+        expect(routeStart(shared(running('claude', process)), RESUME)).toMatchObject({
+          ok: true,
+          server: { label: 'attic' },
+        });
+      },
+    );
+
+    it('routes a new session on that store as before', () => {
+      expect(routeStart(alone(running()), { ...RESUME, sessionId: null })).toMatchObject({
+        ok: true,
+        server: { label: 'workshop' },
+      });
+    });
+
+    it('names the holder rather than an outside process when agentplex holds it', () => {
+      const state = alone(running(), {}, [
+        { sessionId: sessionId('session-1'), stoppable: true, pause: 'none' },
+      ]);
+
+      expect(routeStart(state, RESUME)).toEqual({
+        ok: false,
+        code: 'refused',
+        problem: 'that session is already running on workshop',
+        holder: { server: registration('workshop'), stoppable: true, pause: 'none' },
+      });
+    });
+  });
 });
 
 describe('routeStop', () => {
@@ -983,30 +1139,6 @@ describe('routeSessionRead', () => {
  */
 describe('routeRetake', () => {
   const SESSION = sessionId('session-1');
-
-  /** A session a process outside agentplex is running, seen by the one machine with the store. */
-  function running(
-    provider: 'claude' | 'codex' = 'claude',
-    process: SessionDescriptor['process'] = 'running',
-  ): SessionDescriptor {
-    return { ...session('session-1'), provider, process };
-  }
-
-  function alone(
-    descriptor: SessionDescriptor,
-    machine: Partial<Machine> = {},
-    holding: readonly SessionHold[] = [],
-  ): HubStateSnapshot {
-    return fleet([
-      {
-        label: 'workshop',
-        phase: 'connected',
-        stores: [WORK],
-        reports: [{ storeId: WORK, sessions: [descriptor], holding }],
-        ...machine,
-      },
-    ]);
-  }
 
   it('sends a retake to the machine that sees the process, with the provider off the row', () => {
     const state = alone(running('codex'), { providers: [readyProvider('codex')] });

@@ -17,7 +17,8 @@ import type { HubStateSnapshot, StoreView } from '../fleet-state/fleet-state.js'
  * The scheduling rule from the design, in one pure function of the state: a
  * start names a store, the hub picks the least-loaded live server attached to
  * that store unless the user chose one, and a session that already has a live
- * holder is refused and the holder is named. No server-to-server coordination
+ * holder is refused and the holder is named. So is a resume of a session a
+ * process outside agentplex is running. No server-to-server coordination
  * appears anywhere, because the hub is the only thing that can see every server
  * on a store and therefore the only thing that has to decide.
  *
@@ -29,10 +30,16 @@ import type { HubStateSnapshot, StoreView } from '../fleet-state/fleet-state.js'
  *
  * The one-writer refusal is enforced here *and* again on the server that
  * receives the instruction. This side sees every machine and can therefore
- * refuse the case the server cannot see -- a session held by a different server
- * on the same volume -- and the server can refuse the case this side cannot,
- * which is anything that started in the moment between the hub reading its
- * state and the instruction arriving.
+ * refuse the cases the server cannot see -- a session held by a different
+ * server on the same volume, or run by an outside process whose pid only
+ * another machine can see -- and the server can refuse the case this side
+ * cannot, which is anything that started in the moment between the hub reading
+ * its state and the instruction arriving.
+ *
+ * A start is decided in one order: a holder, then an outside process nobody in
+ * agentplex holds, then the user's override, then the scheduling. Both
+ * refusals come before the override so that no choice of machine reaches past
+ * them.
  */
 
 /** A start, as the hub reads it: a store, a provider, maybe a session, maybe a machine. */
@@ -66,7 +73,12 @@ export type Routing =
       readonly holder: SessionHolder | null;
     };
 
-/** Which server should run this start. */
+/**
+ * Which server should run this start.
+ *
+ * Refused for a session agentplex holds, then for one an outside process is
+ * running; only then is the override honoured or the store scheduled.
+ */
 export function routeStart(state: HubStateSnapshot, request: StartRequest): Routing {
   const store = state.stores.find((view) => view.storeId === request.storeId);
   if (store === undefined) {
@@ -90,6 +102,14 @@ export function routeStart(state: HubStateSnapshot, request: StartRequest): Rout
       problem: `that session is already running on ${labelOf(state, held.server)}`,
       holder: held,
     };
+  }
+
+  // After the holder, so a session agentplex is running is named as that, and
+  // before the override, so no choice of machine reaches past it.
+  const outside =
+    request.sessionId === null ? null : runningOutside(state, store, request.sessionId);
+  if (outside !== null) {
+    return { ok: false, code: 'refused', problem: outside, holder: null };
   }
 
   const live = store.servers.filter(countsTowardAttention);
@@ -455,6 +475,49 @@ export function routeRetake(
   }
 
   return { ok: true, server, provider: row.descriptor.provider };
+}
+
+/**
+ * Why a session nobody in agentplex holds must not be resumed, or `null`.
+ *
+ * A row reading `running` with no holder is a process the hub did not start
+ * on that transcript, and a resume would put a second agent beside it. The
+ * server refuses this too, but only for a pid it can see: on a store more than
+ * one machine mounts, the scheduler can pick the one that cannot, and only the
+ * hub sees both readings.
+ *
+ * `unknown` and `none` are not refused (Robert's decisions 8 and 9): `unknown`
+ * is a machine that could not look -- every session on a shared store reads
+ * it -- and refusing on it would refuse what the hub has no reading against.
+ *
+ * Reachability chooses only the sentence. A reachable reading is a claim about
+ * an outside process, and the way out is a retake on a store one machine
+ * mounts, or ending the process by hand on a shared one, which a retake
+ * refuses. An unreachable reading is refused as firmly but claims less: a
+ * stale machine's holds are dropped, so its `running` may be agentplex's own
+ * terminal, and all the hub can say is what that machine last reported.
+ */
+function runningOutside(
+  state: HubStateSnapshot,
+  store: StoreView,
+  sessionId: SessionId,
+): string | null {
+  const row = store.sessions.find((candidate) => candidate.ref.sessionId === sessionId);
+  if (row === undefined || row.holder !== null || row.descriptor.process !== 'running') {
+    return null;
+  }
+
+  const label = labelOf(state, row.source);
+  if (!row.reachable) {
+    return `${label} last reported a process running that session, and the hub cannot reach it right now`;
+  }
+  if (store.servers.length > 1) {
+    return (
+      `that session is running outside agentplex on ${label}, and the store is shared by ` +
+      `more than one server; end that ${row.descriptor.provider} on ${label} first`
+    );
+  }
+  return `that session is running outside agentplex on ${label}; take it over instead of resuming it`;
 }
 
 function holderOf(store: StoreView, sessionId: SessionId): SessionHolder | null {
