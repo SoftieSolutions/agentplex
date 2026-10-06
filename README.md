@@ -260,7 +260,12 @@ stays resumable. A turn in progress, a `!` command and a question waiting on an
 answer never count, and keys typed through agentplex start the clock again,
 because Claude Code says `idle` while a prompt is still being typed. A provider
 that keeps no such registry, like codex, is never stopped this way, and neither
-is a claude somebody runs outside agentplex.
+is a claude somebody runs outside agentplex. Nor is a held session whose
+registry entry names a pid other than its terminal's: the server warns once per
+terminal (`idle stop cannot reach this session`). Two causes look the same from
+the server, which cannot see a process's parent: the provider launched through
+a wrapper that spawns rather than execs it (volta or asdf may), or another
+claude started on that session outside agentplex.
 
 A store is identified by an `agentplex-store.json` file at its root, minted the
 first time a server mounts it. Two servers mounting the same volume report the
