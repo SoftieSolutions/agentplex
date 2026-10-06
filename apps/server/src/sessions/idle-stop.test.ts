@@ -280,6 +280,9 @@ async function settle(): Promise<void> {
 const idleStops = (records: readonly LogRecord[]): readonly LogRecord[] =>
   records.filter((record) => record.message === 'idle session stopped');
 
+const mismatches = (records: readonly LogRecord[]): readonly LogRecord[] =>
+  records.filter((record) => record.message === 'idle stop cannot reach this session');
+
 describe('createIdleStop', () => {
   it('stops a held claude that has sat at its prompt for the whole setting, and not a minute before', async () => {
     const { sweepAt, held, records, reported } = await world({ status: 'idle' });
@@ -413,6 +416,77 @@ describe('createIdleStop', () => {
     expect(held()).toEqual([]);
     expect(signaller.sent).toEqual([]);
     expect(idleStops(records)).toEqual([]);
+    // Said once, so whoever reads the log learns why this one is never stopped.
+    expect(mismatches(records)).toHaveLength(1);
+  });
+
+  it('says once when the only claude registered on a held session is not the one it holds', async () => {
+    // The held session's one verified entry carries another pid. Either the
+    // provider was launched through a wrapper that spawns rather than execs,
+    // so the registered claude is a child of the pty's process, or somebody
+    // started another claude on the session outside agentplex. The probe has
+    // no parent pid, so the two read alike: nothing is stopped, and the log
+    // says why, once.
+    const { sweepAt, ptys, signaller, records } = await world({ rival: 'idle' });
+
+    for (const minute of [0, 15, 30, 60]) await sweepAt(minute);
+
+    expect(ptys.ptys.every((pty) => pty.signals.length === 0)).toBe(true);
+    expect(signaller.sent).toEqual([]);
+    expect(idleStops(records)).toEqual([]);
+    const lines = mismatches(records);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      level: 'warn',
+      fields: {
+        storeId: WORK,
+        sessionId: SESSION,
+        registryPid: OUTSIDE_PID,
+        terminalPid: HELD_PID,
+      },
+    });
+  });
+
+  it('says it again for a new terminal on the same session, once each', async () => {
+    const { sweepAt, ptys, terminals, records } = await world({ rival: 'idle' });
+
+    await sweepAt(0);
+    expect(mismatches(records)).toHaveLength(1);
+
+    ptys.ptys[0]?.close({ exitCode: 0, signal: null });
+    const reopened = terminals.resume(HELD, launch);
+    if (!reopened.ok) throw new Error(`the held session should have reopened: ${reopened.problem}`);
+
+    await sweepAt(1);
+    await sweepAt(2);
+
+    const lines = mismatches(records);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]?.fields).toMatchObject({ registryPid: OUTSIDE_PID, terminalPid: HELD_PID + 1 });
+  });
+
+  it.each<[string, Parameters<typeof world>[0], boolean]>([
+    ['the registry names the held pid', { status: 'idle' }, false],
+    ['the registry has no entry', {}, false],
+    ['the registry will not read', { status: 'idle' }, true],
+    ['the session is a codex one', { codex: true, outside: 'idle' }, false],
+  ])('says nothing about an unreachable session when %s', async (_, options, broken) => {
+    const { sweepAt, records, breakRegistry } = await world(options);
+    breakRegistry(broken);
+
+    for (const minute of [0, 15, 30, 60]) await sweepAt(minute);
+
+    expect(mismatches(records)).toEqual([]);
+  });
+
+  it('still stops a held claude whose registry names its own pid', async () => {
+    const { sweepAt, held, records } = await world({ status: 'idle' });
+
+    await sweepAt(0);
+    await sweepAt(15);
+
+    expect(held()).toEqual(['SIGHUP']);
+    expect(mismatches(records)).toEqual([]);
   });
 
   it('sweeps with no hub connected, and reports to nobody', async () => {

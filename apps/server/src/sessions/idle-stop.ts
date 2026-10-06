@@ -45,6 +45,15 @@ import type { SessionOutcome } from './session-control.js';
  * answers with; a phase counts only when its pid is the held terminal's own,
  * and any other is "could not tell".
  *
+ * A held session whose registry names another pid is never stopped, and the
+ * log says so once per terminal: the watch that remembers it is dropped with
+ * the terminal, so a new terminal on the session says it again, and one that
+ * has said it stays quiet even if the pids later match and part again. Two
+ * causes read alike, because the process probe knows no parent pid: a
+ * provider launched through a wrapper that spawns it rather than execing it,
+ * so the registered claude is a child of the pty's process, or another claude
+ * started on the session outside agentplex.
+ *
  * It runs whether or not a hub is connected. A session nobody is watching is
  * the one most likely to have been forgotten.
  */
@@ -85,6 +94,8 @@ interface Watch {
   idleSince: number | null;
   /** Set once the stop took, so a later sweep does not stop it again. */
   stopped: boolean;
+  /** Set once the registry was seen naming another pid for this session, so it is said once. */
+  warnedMismatch: boolean;
 }
 
 /** One verified process, or `null`, or a throw that costs this terminal its pass and its clock. */
@@ -144,6 +155,17 @@ export function createIdleStop({
       watch.idleSince = null;
       return;
     }
+    if (asked.process !== null && asked.process.pid !== terminal.run.pid && !watch.warnedMismatch) {
+      watch.warnedMismatch = true;
+      logger.warn('idle stop cannot reach this session', {
+        ...session,
+        registryPid: asked.process.pid,
+        terminalPid: terminal.run.pid,
+        likely:
+          'the provider may be launched through a wrapper that spawns rather than execs it ' +
+          '(volta, asdf), or another claude was started on this session outside agentplex',
+      });
+    }
 
     const now = clock.now();
     // The registry answers for the session, not for this terminal: its newest
@@ -196,7 +218,11 @@ export function createIdleStop({
         if (stopped) return;
         const session = terminal.session;
         if (session === null) continue;
-        const watch = watches.get(terminal.terminalId) ?? { idleSince: null, stopped: false };
+        const watch = watches.get(terminal.terminalId) ?? {
+          idleSince: null,
+          stopped: false,
+          warnedMismatch: false,
+        };
         watches.set(terminal.terminalId, watch);
         if (watch.stopped) continue;
         await look(terminal, session, watch);
