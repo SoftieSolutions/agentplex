@@ -9,6 +9,9 @@ export type { ProtocolLeg } from './version.js';
 
 export { wantsAttention } from './attention.js';
 
+export { clientInstanceSchema } from './client-instance.js';
+export type { ClientInstance } from './client-instance.js';
+
 export { parseTextFrame } from './parse.js';
 export { assertNever } from './exhaustive.js';
 export type { ParseResult } from './parse.js';

@@ -43,9 +43,10 @@ export function answerStart(
       // moment it reads one finds the handle already written; and after it,
       // because a spawn the report has already named is told so here, and a
       // naming must not overtake the reply it follows. The map from this
-      // client's frame id to the name the hub minted lives in the relay and
-      // dies with this socket: it is what lets a pane watch a spawn that has
-      // no session id yet, and it is meaningless on any other connection.
+      // client's frame id to the name the hub minted lives in the relay, filed
+      // under the page this socket said hello as: it is what lets a pane watch
+      // a spawn that has no session id yet, it outlives this socket for the
+      // page's next one, and it is meaningless to any other page.
       terminal.noteStart(watcher, replyTo, {
         registrationId: outcome.server,
         startId: outcome.startId,

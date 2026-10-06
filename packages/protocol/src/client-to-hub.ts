@@ -7,6 +7,7 @@ import {
   approvalSubjectSchema,
 } from './approval.js';
 import { catalogueQuerySchema } from './catalogue.js';
+import { clientInstanceSchema } from './client-instance.js';
 import { directorySchema } from './directory.js';
 import { docContentSchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema } from './frames.js';
@@ -45,6 +46,13 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('hello'),
     id: frameIdSchema,
     protocolVersion: z.int(),
+    /**
+     * Which page this is, the same on every socket one page opens. Starts are
+     * filed under it rather than under the socket, so a page that redials is
+     * still told which session its spawn became; `client-instance.ts` says
+     * why, and why it is required rather than optional.
+     */
+    instance: clientInstanceSchema,
   }),
   z.object({
     type: z.literal('ping'),

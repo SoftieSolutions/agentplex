@@ -183,14 +183,21 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
    * The spawn a start answered with `sessionId: null` now has the id its
    * provider minted.
    *
-   * Sent to the one connection that sent the start, whether or not it ever
-   * subscribed: `replyTo` names that start so the client can bind what it
-   * asked for to the session it became. It is not a reply to a pending
-   * command -- `session-started` already answered that -- and a client owes
-   * nothing on receipt. The hub sends it at most once per start, the first
-   * time a report pairs the start with an id, so a repeat report or a redial
-   * is not news. `sessionId` is never null: until the report has an id there
-   * is nothing to send.
+   * Sent to the page that sent the start, whether or not it ever subscribed:
+   * `replyTo` names that start so the client can bind what it asked for to the
+   * session it became. It is not a reply to a pending command --
+   * `session-started` already answered that -- and a client owes nothing on
+   * receipt.
+   *
+   * The page, not the socket: the hub files a start under the `instance` its
+   * hello carried, and sends the naming to whichever socket that instance holds
+   * now. A report repeating its starts is not news and sends nothing, but a
+   * page that redials is sent the naming of every spawn it made that the hub
+   * still holds, again, on the new socket -- a naming the old socket carried
+   * may have been lost with it, and the page cannot say which. So a client may
+   * be told one start's name more than once and must take a repeat as the same
+   * news. `sessionId` is never null: until the report has an id there is
+   * nothing to send.
    */
   z.object({
     type: z.literal('session-named'),

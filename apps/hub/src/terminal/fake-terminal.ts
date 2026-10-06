@@ -1,4 +1,5 @@
 import type {
+  ClientInstance,
   ClientTerminalTarget,
   FrameId,
   ServerRegistrationId,
@@ -35,6 +36,11 @@ export interface FakeTerminal extends Terminal {
   readonly unsubscribed: readonly FakeTerminalCall[];
   readonly typed: readonly (FakeTerminalCall & { readonly data: string })[];
   readonly resized: readonly (FakeTerminalCall & { readonly size: TerminalSize })[];
+  /** Every hello the relay was handed, in order: which socket, as which page. */
+  readonly greeted: readonly {
+    readonly client: TerminalClient;
+    readonly instance: ClientInstance;
+  }[];
   readonly noted: readonly { readonly handle: FrameId; readonly start: ClientStart }[];
   /** Every client this was told had gone away, in order. */
   readonly forgotten: readonly TerminalClient[];
@@ -45,6 +51,7 @@ export function createFakeTerminal(): FakeTerminal {
   const unsubscribed: FakeTerminalCall[] = [];
   const typed: (FakeTerminalCall & { data: string })[] = [];
   const resized: (FakeTerminalCall & { size: TerminalSize })[] = [];
+  const greeted: { client: TerminalClient; instance: ClientInstance }[] = [];
   const noted: { handle: FrameId; start: ClientStart }[] = [];
   const forgotten: TerminalClient[] = [];
 
@@ -71,6 +78,9 @@ export function createFakeTerminal(): FakeTerminal {
     ): void {
       resized.push({ client, replyTo, target, size });
     },
+    hello(client: TerminalClient, instance: ClientInstance): void {
+      greeted.push({ client, instance });
+    },
     noteStart(_client: TerminalClient, handle: FrameId, start: ClientStart): void {
       noted.push({ handle, start });
     },
@@ -96,6 +106,12 @@ export function createFakeTerminal(): FakeTerminal {
     },
     get resized(): readonly (FakeTerminalCall & { readonly size: TerminalSize })[] {
       return resized;
+    },
+    get greeted(): readonly {
+      readonly client: TerminalClient;
+      readonly instance: ClientInstance;
+    }[] {
+      return greeted;
     },
     get noted(): readonly { readonly handle: FrameId; readonly start: ClientStart }[] {
       return noted;

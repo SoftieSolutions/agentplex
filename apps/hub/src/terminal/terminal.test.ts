@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
   encodeTerminalChunk,
   parseHubFrame,
   serverAddressSchema,
   sessionIdSchema,
   startIdSchema,
   storeIdSchema,
+  type ClientInstance,
   type ClientTerminalTarget,
   type HubFrame,
   type ServerRegistrationId,
@@ -29,6 +31,8 @@ import type { HubStateSnapshot, SessionRow, StoreView } from '../fleet-state/fle
 import {
   createTerminal,
   MAX_BUFFERED_CLIENT_BYTES,
+  MAX_CLOSED_INSTANCES,
+  MAX_STARTS_PER_INSTANCE,
   type Terminal,
   type TerminalClient,
 } from './terminal.js';
@@ -62,6 +66,15 @@ const QUIET = sessionIdSchema.parse('session-quiet');
 const ATTIC = 'registration-attic' as ServerRegistrationId;
 const WORKSHOP = 'registration-workshop' as ServerRegistrationId;
 const START = startIdSchema.parse('start-2f9c');
+
+/** The page every case below starts from, and another page beside it. */
+const PAGE = clientInstanceSchema.parse('5f0c4be2a9d81e7730c6f1a2b3d4e5f6');
+const OTHER_PAGE = clientInstanceSchema.parse('0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a');
+
+/** The `n`th of a run of distinct pages, for the cases about how many there may be. */
+function nthPage(n: number): ClientInstance {
+  return clientInstanceSchema.parse(n.toString(16).padStart(32, '0'));
+}
 
 /** What the hub was handed to put on a server, and who is waiting on it. */
 interface Put {
@@ -535,6 +548,7 @@ describe('a subscription by start handle', () => {
   function pending(): { harness: Harness; client: FakeClient } {
     const held = harness(fleet([server(ATTIC, 'attic')], []));
     const client = fakeClient();
+    held.terminal.hello(client, PAGE);
     held.terminal.noteStart(client, 7, started);
     return { harness: held, client };
   }
@@ -628,13 +642,17 @@ describe('a subscription by start handle', () => {
     ]);
   });
 
-  it('forgets a start with the socket that made it', () => {
+  it("refuses a handle another page's socket names, even after that socket went away", () => {
+    // A handle is a page's, not the hub's: another tab holding the same token
+    // has frame ids of its own, and its 7 is not this page's 7.
     const { harness: held, client } = pending();
+    const elsewhere = fakeClient();
+    held.terminal.hello(elsewhere, OTHER_PAGE);
 
     held.terminal.forget(client);
-    held.terminal.subscribe(client, 7, startTarget);
+    held.terminal.subscribe(elsewhere, 7, startTarget);
 
-    expect(client.received.at(-1)).toMatchObject({
+    expect(elsewhere.received.at(-1)).toMatchObject({
       type: 'refusal',
       message: 'this connection did not start that session',
     });
@@ -679,6 +697,7 @@ describe('a subscription by start handle', () => {
       // scans and reports before the hub has written down whose start it was.
       const held = harness(fleet([server(ATTIC, 'attic')], []));
       const client = fakeClient();
+      held.terminal.hello(client, PAGE);
 
       held.terminal.noteStarts(ATTIC, WORK, report);
       held.terminal.noteStart(client, 7, started);
@@ -706,6 +725,7 @@ describe('a subscription by start handle', () => {
     it('says nothing to a resume, whose own reply already named it', () => {
       const held = harness(fleet([server(ATTIC, 'attic')], []));
       const client = fakeClient();
+      held.terminal.hello(client, PAGE);
       held.terminal.noteStart(client, 7, { ...started, sessionId: QUIET });
 
       held.terminal.noteStarts(ATTIC, WORK, report);
@@ -720,6 +740,164 @@ describe('a subscription by start handle', () => {
       held.terminal.noteStarts(ATTIC, WORK, report);
 
       expect(client.received).toEqual([]);
+    });
+  });
+
+  describe('a start whose socket went away', () => {
+    const report = [{ startId: START, sessionId: QUIET }];
+    const namedFrames = (client: FakeClient): readonly HubFrame[] =>
+      client.received.filter((frame) => frame.type === 'session-named');
+    const naming = { type: 'session-named', replyTo: 7, storeId: WORK, sessionId: QUIET };
+
+    /** A page that started a spawn and then lost its socket before the naming. */
+    function dropped(): { harness: Harness; gone: FakeClient } {
+      const { harness: held, client } = pending();
+      held.terminal.forget(client);
+      return { harness: held, gone: client };
+    }
+
+    it('is named to the same page when it says hello on a new socket', () => {
+      const { harness: held } = dropped();
+      held.terminal.noteStarts(ATTIC, WORK, report);
+
+      const redialled = fakeClient();
+      held.terminal.hello(redialled, PAGE);
+
+      expect(namedFrames(redialled)).toEqual([naming]);
+    });
+
+    it('is named to no other page', () => {
+      const { harness: held } = dropped();
+      held.terminal.noteStarts(ATTIC, WORK, report);
+
+      const stranger = fakeClient();
+      held.terminal.hello(stranger, OTHER_PAGE);
+
+      expect(stranger.received).toEqual([]);
+    });
+
+    it('is named again on the new socket though the old one was already told', () => {
+      // The hub cannot know whether the old socket's frame was read before it
+      // went, so the page is told again and takes a repeat as the same news.
+      const { harness: held, client } = pending();
+      held.terminal.noteStarts(ATTIC, WORK, report);
+      held.terminal.forget(client);
+
+      const redialled = fakeClient();
+      held.terminal.hello(redialled, PAGE);
+
+      expect(namedFrames(client)).toEqual([naming]);
+      expect(namedFrames(redialled)).toEqual([naming]);
+    });
+
+    it('is named once, to the new socket, when the naming arrives after the redial', () => {
+      const { harness: held, gone } = dropped();
+      const redialled = fakeClient();
+      held.terminal.hello(redialled, PAGE);
+
+      held.terminal.noteStarts(ATTIC, WORK, report);
+      held.terminal.noteStarts(ATTIC, WORK, report);
+
+      expect(namedFrames(redialled)).toEqual([naming]);
+      expect(gone.received).toEqual([]);
+    });
+
+    it('can be watched by its handle from the new socket', () => {
+      const { harness: held } = dropped();
+      const redialled = fakeClient();
+      held.terminal.hello(redialled, PAGE);
+
+      held.terminal.subscribe(redialled, 8, startTarget);
+
+      expect(held.servers.put[0]?.frame).toEqual({
+        type: 'session-subscribe',
+        target: { by: 'start', startId: START },
+      });
+    });
+
+    it('keeps a page to its newest starts, and names an evicted one to nobody', () => {
+      const held = harness(fleet([server(ATTIC, 'attic')], []));
+      const client = fakeClient();
+      held.terminal.hello(client, PAGE);
+      const startNo = (n: number): StartId => startIdSchema.parse(`start-${String(n)}`);
+      for (let n = 1; n <= MAX_STARTS_PER_INSTANCE + 1; n += 1) {
+        held.terminal.noteStart(client, n, { ...started, startId: startNo(n) });
+      }
+
+      held.terminal.noteStarts(ATTIC, WORK, [
+        { startId: startNo(1), sessionId: QUIET },
+        { startId: startNo(2), sessionId: sessionIdSchema.parse('session-kept') },
+      ]);
+      held.terminal.forget(client);
+      const redialled = fakeClient();
+      held.terminal.hello(redialled, PAGE);
+
+      // The oldest went to make room and its naming reached nobody; the next
+      // oldest is still the page's, on the socket it had and the one it has.
+      expect(
+        namedFrames(client).map((frame) => frame.type === 'session-named' && frame.replyTo),
+      ).toEqual([2]);
+      expect(
+        namedFrames(redialled).map((frame) => frame.type === 'session-named' && frame.replyTo),
+      ).toEqual([2]);
+    });
+
+    it('keeps the newest closed pages, and forgets the starts of the oldest', () => {
+      const held = harness(fleet([server(ATTIC, 'attic')], []));
+      const startNo = (n: number): StartId => startIdSchema.parse(`start-${String(n)}`);
+      for (let n = 0; n <= MAX_CLOSED_INSTANCES; n += 1) {
+        const socket = fakeClient();
+        held.terminal.hello(socket, nthPage(n));
+        held.terminal.noteStart(socket, 7, { ...started, startId: startNo(n) });
+        held.terminal.forget(socket);
+      }
+      held.terminal.noteStarts(ATTIC, WORK, [
+        { startId: startNo(0), sessionId: QUIET },
+        { startId: startNo(1), sessionId: QUIET },
+      ]);
+
+      const oldest = fakeClient();
+      held.terminal.hello(oldest, nthPage(0));
+      const nextOldest = fakeClient();
+      held.terminal.hello(nextOldest, nthPage(1));
+
+      expect(oldest.received).toEqual([]);
+      expect(namedFrames(nextOldest)).toEqual([naming]);
+    });
+
+    describe('when the page redials before the hub has seen its old socket close', () => {
+      // A page gives up a socket that stopped answering and dials again, and
+      // the hub may go on holding the old one until its own timeout says so.
+      it('names the start to the newer socket once the older one closes', () => {
+        const { harness: held, client: older } = pending();
+        const newer = fakeClient();
+        held.terminal.hello(newer, PAGE);
+
+        held.terminal.forget(older);
+        held.terminal.noteStarts(ATTIC, WORK, report);
+
+        expect(namedFrames(newer)).toEqual([naming]);
+        expect(older.received).toEqual([]);
+      });
+
+      it('files a start the older socket noted late under the page, and names it to the newer', () => {
+        const held = harness(fleet([server(ATTIC, 'attic')], []));
+        const older = fakeClient();
+        held.terminal.hello(older, PAGE);
+        const newer = fakeClient();
+        held.terminal.hello(newer, PAGE);
+        held.terminal.noteStarts(ATTIC, WORK, report);
+
+        held.terminal.noteStart(older, 7, started);
+        held.terminal.subscribe(newer, 8, startTarget);
+
+        expect(namedFrames(newer)).toEqual([naming]);
+        expect(older.received).toEqual([]);
+        expect(held.servers.put[0]?.frame).toEqual({
+          type: 'session-subscribe',
+          target: { by: 'start', startId: START },
+        });
+      });
     });
   });
 });
@@ -856,6 +1034,7 @@ describe('a terminal the hub cannot reach', () => {
   it('refuses a start handle whose machine has gone stale, naming it', () => {
     const { terminal } = harness(fleet([server(WORKSHOP, 'workshop', 'stale')], []));
     const client = fakeClient();
+    terminal.hello(client, PAGE);
     const held: StartId = START;
     terminal.noteStart(client, 7, {
       registrationId: WORKSHOP,
@@ -948,6 +1127,7 @@ describe('a server that stops feeding the terminals the hub borrowed from it', (
   it('names the terminal a pending pane is watching by the handle that pane used', () => {
     const { terminal, servers } = oneMachine();
     const client = fakeClient();
+    terminal.hello(client, PAGE);
     terminal.noteStart(client, 7, {
       registrationId: ATTIC,
       startId: START,

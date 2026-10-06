@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   APPROVAL_PROPOSAL_MAX_CHARS,
+  clientInstanceSchema,
   type ClientFrame,
+  type ClientInstance,
   parseClientFrame,
   parseHubFrame,
   parseTextFrame,
@@ -255,20 +257,31 @@ function pushHarness(push: FakePush | null): Harness {
  */
 interface Client {
   readonly socket: FakeMessageSocket;
+  /** The page this client says hello as: its own unless the case shares one. */
+  readonly instance: ClientInstance;
   hello(protocolVersion?: number): Promise<void>;
   say(frame: Record<string, unknown>): Promise<void>;
   readonly received: readonly HubFrame[];
   readonly states: readonly MachineState[];
 }
 
-function attach(broadcast: Clients): Client {
+let pagesMinted = 0;
+
+/** A page of its own, so two attached clients are two pages unless a case says otherwise. */
+function nextPage(): ClientInstance {
+  pagesMinted += 1;
+  return clientInstanceSchema.parse(pagesMinted.toString(16).padStart(32, '0'));
+}
+
+function attach(broadcast: Clients, instance: ClientInstance = nextPage()): Client {
   const socket = createFakeMessageSocket();
   broadcast.attach(socket);
 
   const client: Client = {
     socket,
+    instance,
     async hello(protocolVersion = CLIENT_PROTOCOL_VERSION): Promise<void> {
-      await client.say({ type: 'hello', id: 1, protocolVersion });
+      await client.say({ type: 'hello', id: 1, protocolVersion, instance });
     },
     async say(frame: Record<string, unknown>): Promise<void> {
       socket.receive(JSON.stringify(frame));
@@ -722,6 +735,43 @@ describe('a terminal frame', () => {
     // One identity, because it is what the relay files a subscription under: a
     // fresh handle per frame would be a new client every time somebody typed.
     expect(terminal.typed[0]?.client).toBe(terminal.subscribed[0]?.client);
+  });
+
+  it('tells the relay which page said hello, once the client has its state', async () => {
+    const { broadcast, terminal } = harness();
+    const client = attach(broadcast);
+
+    await client.hello();
+
+    expect(terminal.greeted).toEqual([{ client: expect.anything(), instance: client.instance }]);
+  });
+
+  it('hands a second connection from the same page to the relay as that page', async () => {
+    // A redial: the page is the same and the socket is not, and the relay is
+    // what decides the newer socket takes the page over.
+    const { broadcast, terminal } = harness();
+    const first = attach(broadcast);
+    await first.hello();
+    await first.say({ type: 'session-subscribe', id: 2, target: TARGET });
+    const second = attach(broadcast, first.instance);
+
+    await second.hello();
+    await second.say({ type: 'session-subscribe', id: 3, target: TARGET });
+
+    expect(terminal.greeted.map((call) => call.instance)).toEqual([first.instance, first.instance]);
+    expect(terminal.greeted[0]?.client).toBe(terminal.subscribed[0]?.client);
+    expect(terminal.greeted[1]?.client).toBe(terminal.subscribed[1]?.client);
+    expect(terminal.greeted[1]?.client).not.toBe(terminal.greeted[0]?.client);
+  });
+
+  it('refuses a hello that does not say which page it is, and tells the relay nothing', async () => {
+    const { broadcast, terminal } = harness();
+    const client = attach(broadcast);
+
+    await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'protocol-error', code: 'bad-request' });
+    expect(terminal.greeted).toEqual([]);
   });
 
   it('tells the relay when the socket goes, so the watch is given back', async () => {
