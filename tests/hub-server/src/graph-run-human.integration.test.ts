@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
+  type ClientInstance,
   graphDocumentSchema,
   nodeIdSchema,
   parseHubFrame,
@@ -416,7 +418,11 @@ interface Client {
   readonly socket: FakeMessageSocket;
 }
 
-async function attach(): Promise<Client> {
+/** The page every client here says hello as, unless a case means two pages. */
+const INSTANCE = clientInstanceSchema.parse('e6c2b4341b22e22f26a0dba2922e3b8e');
+const OTHER_INSTANCE = clientInstanceSchema.parse('b68388d7abe31b098181f32ce5d4dad3');
+
+async function attach(instance: ClientInstance = INSTANCE): Promise<Client> {
   const socket = createFakeMessageSocket();
   const said: string[] = [];
   socket.onMessage(() => {});
@@ -453,7 +459,7 @@ async function attach(): Promise<Client> {
     said,
     socket,
   };
-  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION, instance });
   return client;
 }
 
@@ -610,7 +616,7 @@ describe('a graph run that waits on a person, over the whole path', () => {
 
   it('shows the request in every client’s machine state, with the graph, the number and the words', async () => {
     const client = await attach();
-    const watcher = await attach();
+    const watcher = await attach(OTHER_INSTANCE);
     const { waiting } = await runToTheGate(client, GATED);
     await flushed();
 
@@ -756,7 +762,7 @@ describe('a graph run that waits on a person, over the whole path', () => {
 
   it('tells a second answer what the first one did', async () => {
     const client = await attach();
-    const second = await attach();
+    const second = await attach(OTHER_INSTANCE);
     const { waiting } = await runToTheGate(client, GATED);
 
     await client.say({

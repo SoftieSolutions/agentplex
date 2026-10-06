@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
   graphDocumentSchema,
   parseHubFrame,
   parseTextFrame,
@@ -112,6 +113,9 @@ interface Client {
   readonly all: () => HubFrame[];
 }
 
+/** The page every client here says hello as. */
+const INSTANCE = clientInstanceSchema.parse('cdddfd2ce96a5047e1c3046b79061353');
+
 async function attach(): Promise<Client> {
   if (clients === null) throw new Error('no broadcast: beforeEach did not run');
   const socket = createFakeMessageSocket();
@@ -139,7 +143,12 @@ async function attach(): Promise<Client> {
     },
     all,
   };
-  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  await client.say({
+    type: 'hello',
+    id: 1,
+    protocolVersion: CLIENT_PROTOCOL_VERSION,
+    instance: INSTANCE,
+  });
   return client;
 }
 

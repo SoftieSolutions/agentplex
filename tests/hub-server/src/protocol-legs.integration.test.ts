@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
   parseHubFrame,
   parseTextFrame,
   CLIENT_PROTOCOL_VERSION,
@@ -212,12 +213,21 @@ afterEach(async () => {
   fleet = null;
 });
 
+/** The pairing page, and another page that is not it. */
+const INSTANCE = clientInstanceSchema.parse('78e129d604bc54db8b3a4ecd5dfff067');
+const OTHER_INSTANCE = clientInstanceSchema.parse('cd5059d9e1d1b0b53f811adb6726d0e5');
+
 /** A fleet with the server paired over a client and connected. */
 async function connectedFleet(): Promise<Fleet> {
   const running = await startFleet();
   fleet = running;
   const pairer = await openClient(running.hub);
-  pairer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  pairer.send({
+    type: 'hello',
+    id: 1,
+    protocolVersion: CLIENT_PROTOCOL_VERSION,
+    instance: INSTANCE,
+  });
   await until(() => reply(pairer, 'welcome') !== undefined, 'the welcome');
   pairer.send({
     type: 'server-pair',
@@ -238,7 +248,12 @@ describe('a client refused on the client leg', () => {
     const running = await connectedFleet();
 
     const stranger = await openClient(running.hub);
-    stranger.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION + 1 });
+    stranger.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION + 1,
+      instance: OTHER_INSTANCE,
+    });
     await until(() => stranger.closed, 'the refused client to be closed');
 
     const refusal = reply(stranger, 'refusal');
@@ -257,7 +272,12 @@ describe('a client refused on the client leg', () => {
     });
 
     const stranger = await openClient(running.hub);
-    stranger.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION + 1 });
+    stranger.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION + 1,
+      instance: OTHER_INSTANCE,
+    });
     await until(() => stranger.closed, 'the refused client to be closed');
 
     expect(running.hub.connections.snapshot().map((report) => report.phase)).toEqual(['connected']);
@@ -268,11 +288,21 @@ describe('a client refused on the client leg', () => {
     const running = await connectedFleet();
 
     const stranger = await openClient(running.hub);
-    stranger.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION + 1 });
+    stranger.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION + 1,
+      instance: OTHER_INSTANCE,
+    });
     await until(() => stranger.closed, 'the refused client to be closed');
 
     const welcomed = await openClient(running.hub);
-    welcomed.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    welcomed.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: OTHER_INSTANCE,
+    });
     await until(
       () => welcomed.state?.servers.some((server) => server.phase === 'connected') === true,
       () => `the connected server in machine state: ${welcomed.text.join(' | ')}`,

@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { describe, it } from 'vitest';
 import {
+  clientInstanceSchema,
+  type ClientInstance,
   formatServerBeacon,
   parseHubFrame,
   parseTextFrame,
@@ -926,10 +928,26 @@ function sessionCount(hub: Hub): number {
   return hub.state.snapshot().stores.reduce((sum, view) => sum + view.sessions.length, 0);
 }
 
+/**
+ * A page of its own for each client below. They are all one conversation and
+ * each counts its frame ids from 1, so two that shared a page would file their
+ * starts under each other's handles.
+ */
+let pagesMinted = 0;
+function aPage(): ClientInstance {
+  pagesMinted += 1;
+  return clientInstanceSchema.parse(pagesMinted.toString(16).padStart(32, '0'));
+}
+
 /** Opens a client, says hello, and returns the machine-state frame it was sent. */
 async function captureState(hub: Hub): Promise<string> {
   const client = await openClient(hub);
-  client.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  client.send({
+    type: 'hello',
+    id: 1,
+    protocolVersion: CLIENT_PROTOCOL_VERSION,
+    instance: aPage(),
+  });
   await client.framesReceived(2);
   const text = client.received[1];
   if (text === undefined) throw new Error('the hub closed before sending a state');
@@ -981,7 +999,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // (answered by a refusal), and finally something that is not JSON at all,
     // which earns the unsolicited protocol-error and a close.
     const first = await openClient(hub);
-    first.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    first.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await first.framesReceived(2);
     first.send({ type: 'ping', id: 2 });
     await first.framesReceived(3);
@@ -1013,7 +1036,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // The second conversation is one frame long: a hello claiming a protocol
     // this hub does not speak, refused with the code retrying cannot fix.
     const second = await openClient(hub);
-    second.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION + 1 });
+    second.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION + 1,
+      instance: aPage(),
+    });
     await second.framesReceived(1);
     await second.closed();
 
@@ -1066,7 +1094,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       files: createFakeStoreFiles(),
     });
     const third = await openClient(pairedHub);
-    third.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    third.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     // Wait until a broadcast shows the pairing as stale, however the dial
     // failure raced the hello: the last machine-state captured is that one.
     for (let count = 2; ; count += 1) {
@@ -1257,7 +1290,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // at that point is move the sessions into it, and this is that, over the
     // real frames.
     const filer = await openClient(populated.hub);
-    filer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    filer.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await filer.framesReceived(2);
     filer.send({
       type: 'project-create',
@@ -1369,7 +1407,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
 
     const attender = await openClient(attentive.hub);
-    attender.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    attender.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await attender.framesReceived(2);
     attender.send({
       type: 'session-acknowledge',
@@ -1515,7 +1558,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // about the tap: it says what became of the approval, and it arrives only
     // once the machine holding the blocked process has said so.
     const answering = await openClient(asked.hub);
-    answering.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    answering.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await answering.framesReceived(2);
     answering.send({
       type: 'approval-decide',
@@ -1674,7 +1722,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // spawn has no id until the provider writes one -- the reply the web form's
     // follow-up logic has to read honestly rather than invent an address from.
     const starter = await openClient(singleHub.hub);
-    starter.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    starter.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await starter.framesReceived(2);
     starter.send({
       type: 'session-start',
@@ -2717,7 +2770,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       'the holding machine to connect and report',
     );
     const stopper = await openClient(heldHub.hub);
-    stopper.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    stopper.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await stopper.framesReceived(2);
     // The two frames a real client sends next, and the reason they are here:
     // the session list asks for the tree and for a page of the catalogue as
@@ -3016,7 +3074,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       },
     );
     const pairer = await openClient(pairingHub.hub);
-    pairer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    pairer.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await pairer.framesReceived(2);
     pairer.send({
       type: 'server-pair',
@@ -3233,7 +3296,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // subscribe is the second frame on the watching socket -- which is what a
     // pane's first subscribe is, and therefore the id these fixtures carry.
     const runner = await openClient(terminalHub.hub);
-    runner.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    runner.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await runner.framesReceived(2);
     runner.send({
       type: 'session-start',
@@ -3262,7 +3330,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     live.ptys.last?.emit('still building\r\n');
 
     const watcher = await openClient(terminalHub.hub);
-    watcher.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    watcher.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await watcher.framesReceived(2);
     watcher.send({ type: 'session-subscribe', id: 2, target: watched });
     await until(
@@ -3318,7 +3391,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // above overflowed the terminal's scrollback, so this is the reply that
     // says outright how much of the beginning is gone.
     const latecomer = await openClient(terminalHub.hub);
-    latecomer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    latecomer.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await latecomer.framesReceived(2);
     latecomer.send({ type: 'session-subscribe', id: 2, target: watched });
     await until(
@@ -3335,7 +3413,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // again -- because a client's start handle *is* the id of its own
     // `session-start` frame, and these fixtures have to drive that store.
     const spawning = await openClient(terminalHub.hub);
-    spawning.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    spawning.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await spawning.framesReceived(2);
     spawning.send({
       type: 'session-start',
@@ -3456,7 +3539,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       'the watching pane to be told that its feed ended',
     );
     const orphan = await openClient(terminalHub.hub);
-    orphan.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    orphan.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await orphan.framesReceived(2);
     orphan.send({ type: 'session-subscribe', id: 2, target: watched });
     await until(
@@ -3496,7 +3584,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       timers: createFakeTimers(),
     });
     const fourth = await openClient(stored);
-    fourth.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    fourth.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await fourth.framesReceived(2);
     fourth.send({ type: 'pane-layout-request', id: 2 });
     await fourth.framesReceived(3);
@@ -3532,7 +3625,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       timers: createFakeTimers(),
     });
     const fifth = await openClient(pushing);
-    fifth.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    fifth.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await fifth.framesReceived(2);
     fifth.send({
       type: 'push-subscribe',
@@ -3562,7 +3660,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       timers: createFakeTimers(),
     });
     const sixth = await openClient(unpushing);
-    sixth.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    sixth.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await sixth.framesReceived(2);
     sixth.send({
       type: 'push-subscribe',
@@ -3688,7 +3791,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     const machineStateResumable = await captureState(resumableHub.hub);
     const resumer = await openClient(resumableHub.hub);
-    resumer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    resumer.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await resumer.framesReceived(2);
     // What the machine reports once it runs the session, set before the start
     // so the scan the server takes after answering one is the held reading.

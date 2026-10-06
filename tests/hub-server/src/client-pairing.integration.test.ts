@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
   parseHubFrame,
   parseTextFrame,
   CLIENT_PROTOCOL_VERSION,
@@ -207,11 +208,19 @@ afterEach(async () => {
   fleet = null;
 });
 
+/** The page every client here says hello as. */
+const INSTANCE = clientInstanceSchema.parse('e8700ebb5a2aa4c3f3bbd172c1e38a45');
+
 async function pairedFleet(): Promise<{ running: Fleet; client: Client }> {
   const running = await startFleet();
   fleet = running;
   const client = await openClient(running.hub);
-  client.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  client.send({
+    type: 'hello',
+    id: 1,
+    protocolVersion: CLIENT_PROTOCOL_VERSION,
+    instance: INSTANCE,
+  });
   await until(() => reply(client, 'welcome') !== undefined, 'the welcome');
 
   client.send({
@@ -334,7 +343,12 @@ describe('a client pairing a server', () => {
     const running = await startFleet();
     fleet = running;
     const client = await openClient(running.hub);
-    client.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    client.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: INSTANCE,
+    });
     await until(() => reply(client, 'welcome') !== undefined, 'the welcome');
 
     client.send({

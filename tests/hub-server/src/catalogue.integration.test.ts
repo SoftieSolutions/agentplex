@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
   parseHubFrame,
   parseTextFrame,
   serverIdSchema,
@@ -262,6 +263,9 @@ interface Client {
   stateWith(holds: (state: MachineState) => boolean): MachineState | null;
 }
 
+/** The page every client here says hello as. */
+const INSTANCE = clientInstanceSchema.parse('c669131b61633499568d8d4c612ca781');
+
 async function openClient(hub: Hub): Promise<Client> {
   const { hubEnd, serverEnd } = createSocketPair();
   const received: string[] = [];
@@ -287,7 +291,12 @@ async function openClient(hub: Hub): Promise<Client> {
   };
 
   serverEnd.send(
-    JSON.stringify({ type: 'hello', id: (nextId += 1), protocolVersion: CLIENT_PROTOCOL_VERSION }),
+    JSON.stringify({
+      type: 'hello',
+      id: (nextId += 1),
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: INSTANCE,
+    }),
   );
 
   /** The first frame that answers this id, whatever kind of answer it is. */

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
   parseHubFrame,
   parseTextFrame,
   CLIENT_PROTOCOL_VERSION,
@@ -299,6 +300,9 @@ async function settle(): Promise<void> {
   }
 }
 
+/** The page every client here says hello as. */
+const INSTANCE = clientInstanceSchema.parse('7f3fe90f843fea6a9943a5330f8bd46d');
+
 /**
  * A client, only to start the session.
  *
@@ -316,7 +320,7 @@ async function startTheSession(): Promise<FakeMessageSocket> {
     await settle();
   };
 
-  await say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  await say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION, instance: INSTANCE });
   await say({
     type: 'session-start',
     id: 2,

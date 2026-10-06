@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
+  type ClientInstance,
   parseHubFrame,
   parseTextFrame,
   CLIENT_PROTOCOL_VERSION,
@@ -17,7 +19,13 @@ import {
   createSocketPair,
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
-import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
+import {
+  closure,
+  CLOSE_NORMAL,
+  createLogger,
+  type DialResult,
+  type SocketDialer,
+} from '@agentplex/node-shared';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
@@ -57,7 +65,7 @@ import { createFakeCatalogue } from '../../../apps/hub/src/catalogue/fake-catalo
 import { createFakeDocs } from '../../../apps/hub/src/docs/fake-docs.js';
 import { createFakeGraphs } from '../../../apps/hub/src/graphs/fake-graphs.js';
 import { createFakeGraphRuns } from '../../../apps/hub/src/graph-runs/fake-graph-runs.js';
-import { createFakeTerminal } from '../../../apps/hub/src/terminal/fake-terminal.js';
+import { createTerminal } from '../../../apps/hub/src/terminal/terminal.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
 import { createServers, type Servers } from '../../../apps/hub/src/servers/servers.js';
 import { registerServer } from '../../../apps/hub/src/pairing/server-registrations.js';
@@ -249,7 +257,12 @@ async function start(): Promise<Harness> {
     clock,
     logger,
     backoff: createExponentialBackoff({ baseMs: 500, maxMs: 8_000, random: () => 0 }),
-    onChange: (report) => state.applyConnection(report),
+    // The relay wired as `hub.ts` wires it: the report's starts are what
+    // name a spawn to the page that asked for it.
+    onChange: (report) => {
+      state.applyConnection(report);
+      terminal.noteConnection(report);
+    },
     onReport: (report) => {
       state.applySessions({
         registrationId: report.registrationId,
@@ -258,8 +271,11 @@ async function start(): Promise<Harness> {
         holding: report.holding,
         reportedAt: clock.now(),
       });
+      terminal.noteStarts(report.registrationId, report.storeId, report.starts);
     },
+    onStream: (registrationId, output) => terminal.deliver(registrationId, output),
   });
+  const terminal = createTerminal({ state, servers: connections, logger });
 
   let minted = 0;
   const ids = { newId: () => `id-${String((minted += 1))}` };
@@ -304,7 +320,7 @@ async function start(): Promise<Harness> {
     docs: createFakeDocs(),
     graphs: createFakeGraphs(),
     graphRuns: createFakeGraphRuns(),
-    terminal: createFakeTerminal(),
+    terminal,
   });
 
   await connections.sync();
@@ -333,12 +349,20 @@ async function until(predicate: () => boolean, what: string): Promise<void> {
 interface Client {
   say(frame: ClientFrame): Promise<void>;
   reply(id: number): HubFrame;
+  /** Every `session-named` this socket was sent, in order. */
+  namings(): HubFrame[];
+  /** The page's socket goes away, as a tab's does when its network drops. */
+  close(): Promise<void>;
   /** The newest machine state the hub sent this client. */
   latest(): MachineState;
 }
 
+/** The page every client here says hello as, unless a case means two pages. */
+const INSTANCE = clientInstanceSchema.parse('b36620ca535f4d26900c9481895a8c80');
+const OTHER_INSTANCE = clientInstanceSchema.parse('64e1c5ff3a0d4b1c8e2f9a7b6d5c4e3f');
+
 /** A client on a socket, read back through the parser a client would use. */
-async function attach(): Promise<Client> {
+async function attach(instance: ClientInstance = INSTANCE): Promise<Client> {
   const socket = createFakeMessageSocket();
   socket.onMessage(() => {});
   held().clients.attach(socket);
@@ -363,6 +387,13 @@ async function attach(): Promise<Client> {
       if (answer === undefined) throw new Error(`nothing answered frame ${String(id)}`);
       return answer;
     },
+    namings(): HubFrame[] {
+      return heard().filter((frame) => frame.type === 'session-named');
+    },
+    async close(): Promise<void> {
+      socket.closeFromPeer(closure(CLOSE_NORMAL, 'the network dropped'));
+      await new Promise((resolve) => setImmediate(resolve));
+    },
     latest(): MachineState {
       const states = heard().flatMap((frame) =>
         frame.type === 'machine-state' ? [frame.state] : [],
@@ -373,7 +404,7 @@ async function attach(): Promise<Client> {
     },
   };
 
-  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION, instance });
   return client;
 }
 
@@ -459,5 +490,53 @@ describe('a client start with no prompt', () => {
     ]);
     // And still no transcript anywhere in the store: the registry alone named it.
     expect(Object.keys(held().disk).filter((path) => path.includes('/projects/'))).toEqual([]);
+  });
+
+  it('is named to the page that asked when it says hello again, and to no other page', async () => {
+    const client = await attach();
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: STORE.storeId,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: MACHINE,
+      project: null,
+    });
+    expect(client.reply(2)).toMatchObject({ type: 'session-started', sessionId: null });
+
+    // The page's socket goes before claude registers, so the naming the
+    // report carries has no socket to go to.
+    await client.close();
+    held().disk[`${STORE.path}/sessions/${String(PID)}.json`] = JSON.stringify({
+      ...JSON.parse(await readProviderFixture('claude-session-registry.json')),
+      pid: PID,
+      sessionId: SESSION,
+      cwd: HOME,
+      startedAt: START + 1_302,
+      status: 'idle',
+      statusUpdatedAt: START + 1_302,
+    });
+    held().watcher.change(STORE.path);
+    held().serverTimers.fireAll();
+    await until(
+      () =>
+        held()
+          .state.snapshot()
+          .stores.some((store) => store.sessions.length > 0),
+      'the server to report the registered session',
+    );
+    expect(client.namings()).toEqual([]);
+
+    const stranger = await attach(OTHER_INSTANCE);
+    const redialled = await attach(INSTANCE);
+
+    // Under the frame id the start was sent with on the socket that is gone:
+    // the page mints its ids once for every socket it opens.
+    expect(redialled.namings()).toEqual([
+      { type: 'session-named', replyTo: 2, storeId: STORE.storeId, sessionId: SESSION },
+    ]);
+    expect(stranger.namings()).toEqual([]);
   });
 });
