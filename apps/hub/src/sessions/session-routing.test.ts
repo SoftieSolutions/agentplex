@@ -814,7 +814,7 @@ describe('routeStart', () => {
       }
     });
 
-    it.each([
+    it.each<readonly [string, Partial<Machine>]>([
       [
         'is shutting down',
         {
@@ -826,7 +826,7 @@ describe('routeStart', () => {
         },
       ],
       ['cannot run the provider', { providers: [missingProvider()] }],
-    ] as const)(
+    ])(
       'refuses without offering the takeover when the machine %s, since a retake would be refused',
       (_case, machine) => {
         expect(routeStart(alone(running(), machine), RESUME)).toEqual({
