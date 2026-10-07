@@ -62,7 +62,12 @@ describe('resume memory', () => {
 
   it('remembers the start this page sent for a session, by that session', () => {
     const memories = rememberCommand(NONE, startOf(SPIKE), FIRST);
-    expect(resumeMemoryOf(memories, SPIKE)).toEqual({ ran: false, start: FIRST, lapsed: false });
+    expect(resumeMemoryOf(memories, SPIKE)).toEqual({
+      ran: false,
+      start: FIRST,
+      lapsed: false,
+      retake: false,
+    });
     expect(resumeMemoryOf(memories, OTHER)).toEqual(NO_RESUME_MEMORY);
   });
 
@@ -79,7 +84,12 @@ describe('resume memory', () => {
   it('forgets a start once a state shows the session held, and keeps that it ran', () => {
     const asked = rememberCommand(NONE, startOf(SPIKE), FIRST);
     const held = rememberState(asked, stateFrom(hubFrames.machineStateResumed), NO_REPLIES);
-    expect(resumeMemoryOf(held, SPIKE)).toEqual({ ran: true, start: null, lapsed: false });
+    expect(resumeMemoryOf(held, SPIKE)).toEqual({
+      ran: true,
+      start: null,
+      lapsed: false,
+      retake: false,
+    });
   });
 
   it('keeps a start still owed its answer while the state shows nothing running it', () => {
@@ -92,7 +102,12 @@ describe('resume memory', () => {
     const asked = rememberCommand(NONE, startOf(SPIKE), FIRST);
     const replies = rememberAnswer(NO_REPLIES, replyFrom(hubFrames.sessionStartedResumed, FIRST));
     const lapsed = rememberState(asked, stateFrom(hubFrames.machineStateResumable), replies);
-    expect(resumeMemoryOf(lapsed, SPIKE)).toEqual({ ran: false, start: FIRST, lapsed: true });
+    expect(resumeMemoryOf(lapsed, SPIKE)).toEqual({
+      ran: false,
+      start: FIRST,
+      lapsed: true,
+      retake: false,
+    });
 
     // Asking again is a fresh start, owed its own answer.
     const again = rememberCommand(lapsed, startOf(SPIKE), frameIdSchema.parse(8));
@@ -128,14 +143,34 @@ describe('resume memory', () => {
     const seen = rememberState(NONE, stateFrom(hubFrames.machineStateResumable), NO_REPLIES);
     const retake = { type: 'session-retake' as const, ...OTHER };
     const asked = rememberCommand(seen, retake, FIRST);
-    expect(resumeMemoryOf(asked, OTHER)).toEqual({ ran: true, start: FIRST, lapsed: false });
+    expect(resumeMemoryOf(asked, OTHER)).toEqual({
+      ran: true,
+      start: FIRST,
+      lapsed: false,
+      retake: true,
+    });
 
     const owed = rememberState(asked, stateFrom(hubFrames.machineStateResumable), NO_REPLIES);
-    expect(resumeMemoryOf(owed, OTHER)).toEqual({ ran: true, start: FIRST, lapsed: false });
+    expect(resumeMemoryOf(owed, OTHER)).toEqual({
+      ran: true,
+      start: FIRST,
+      lapsed: false,
+      retake: true,
+    });
 
     const replies = rememberAnswer(NO_REPLIES, replyFrom(hubFrames.sessionStartedResumed, FIRST));
     const lapsed = rememberState(asked, stateFrom(hubFrames.machineStateResumable), replies);
-    expect(resumeMemoryOf(lapsed, OTHER)).toEqual({ ran: true, start: FIRST, lapsed: true });
+    expect(resumeMemoryOf(lapsed, OTHER)).toEqual({
+      ran: true,
+      start: FIRST,
+      lapsed: true,
+      retake: true,
+    });
+
+    // A resume pressed after it is a start and no longer a retake: a refusal
+    // of it is a resume's to try again, not a retake's.
+    const resumed = rememberCommand(lapsed, startOf(OTHER), frameIdSchema.parse(8));
+    expect(resumeMemoryOf(resumed, OTHER)).toMatchObject({ start: 8, retake: false });
   });
 
   it('counts every session any state shows held or running as one that ran, pane or no pane', () => {
@@ -146,7 +181,12 @@ describe('resume memory', () => {
     expect(resumeMemoryOf(seen, SPIKE)).toEqual(NO_RESUME_MEMORY);
 
     const held = rememberState(seen, stateFrom(hubFrames.machineStateResumed), NO_REPLIES);
-    expect(resumeMemoryOf(held, SPIKE)).toEqual({ ran: true, start: null, lapsed: false });
+    expect(resumeMemoryOf(held, SPIKE)).toEqual({
+      ran: true,
+      start: null,
+      lapsed: false,
+      retake: false,
+    });
     // And it stays seen once the holder has gone.
     const stopped = rememberState(held, stateFrom(hubFrames.machineStateResumable), NO_REPLIES);
     expect(resumeMemoryOf(stopped, SPIKE).ran).toBe(true);
@@ -163,7 +203,12 @@ describe('resume memory', () => {
       ['session', { target: { by: 'session' as const, ...OTHER }, session: OTHER }],
     ]);
     const memories = rememberNamed(NONE, named, null);
-    expect(resumeMemoryOf(memories, SPIKE)).toEqual({ ran: false, start: FIRST, lapsed: false });
+    expect(resumeMemoryOf(memories, SPIKE)).toEqual({
+      ran: false,
+      start: FIRST,
+      lapsed: false,
+      retake: false,
+    });
     expect(resumeMemoryOf(memories, OTHER)).toEqual(NO_RESUME_MEMORY);
     // Publishing the same views again changes nothing.
     expect(rememberNamed(memories, named, null)).toBe(memories);
@@ -181,11 +226,21 @@ describe('resume memory', () => {
     // and holds it to that state, as the state would have.
     const before = rememberState(NONE, exited, answered);
     const lapsed = rememberNamed(before, named, { state: exited, replies: answered });
-    expect(resumeMemoryOf(lapsed, spawned)).toEqual({ ran: false, start: FIRST, lapsed: true });
+    expect(resumeMemoryOf(lapsed, spawned)).toEqual({
+      ran: false,
+      start: FIRST,
+      lapsed: true,
+      retake: false,
+    });
 
     // A state from before the answer says nothing about this start.
     const early = rememberNamed(NONE, named, { state: exited, replies: NO_REPLIES });
-    expect(resumeMemoryOf(early, spawned)).toEqual({ ran: false, start: FIRST, lapsed: false });
+    expect(resumeMemoryOf(early, spawned)).toEqual({
+      ran: false,
+      start: FIRST,
+      lapsed: false,
+      retake: false,
+    });
   });
 
   it('leaves a session it already saw run, or already has a start for, as it was', () => {

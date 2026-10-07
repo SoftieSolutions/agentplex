@@ -305,6 +305,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
 
   function update(changes: Partial<HubSnapshot>): void {
     snapshot = { ...snapshot, ...changes };
+    notify();
+  }
+
+  function notify(): void {
     for (const listener of [...listeners]) listener();
   }
 
@@ -794,6 +798,13 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         };
         sessions.asked(command, id, snapshot.connection);
         wire.send(encodeClientFrame({ ...command, id }));
+        // The one exception, after the frame is out: a retake is the
+        // session's start, and every pane on the session has to stop
+        // offering it, not only the one that pressed -- a start tells them
+        // through the starts it tracks, and a retake has none. A listener
+        // that sends a retake on a change reads this memory first and finds
+        // this one filed.
+        if (command.type === 'session-retake') notify();
         return { accepted: true, id, delivery: 'sent' };
       }
       if (queue.length >= capacity) {

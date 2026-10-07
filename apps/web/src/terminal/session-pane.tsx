@@ -17,7 +17,7 @@ import {
   type TerminalSize,
 } from '@agentplex/protocol';
 
-import { followUp, refusalTo } from '../store/answers.js';
+import { refusalTo } from '../store/answers.js';
 import type { HubStore } from '../store/hub-store.js';
 import { resumeMemoryOf } from '../store/resume-memory.js';
 import { terminalKey } from '../store/terminals.js';
@@ -79,6 +79,10 @@ import {
   headerWords,
   paneState,
   resumeCommand,
+  resumeFollowUp,
+  retakeCommand,
+  retakeFollowUp,
+  retakeOutstanding,
   type PaneState,
 } from './pane-state-model.js';
 
@@ -318,6 +322,8 @@ interface PaneStateNoticeProps {
   readonly autoResume: (node: HTMLElement | null) => void;
   /** A press of the state's control: a resume, either way. */
   readonly onAction: () => void;
+  /** A press of the offer to take over a session run outside agentplex. */
+  readonly onRetake: () => void;
   /** Whether a press can go now. A start is intent about now, so it is never queued. */
   readonly canAct: boolean;
 }
@@ -335,6 +341,7 @@ function PaneStateNotice({
   scheme,
   autoResume,
   onAction,
+  onRetake,
   canAct,
 }: PaneStateNoticeProps): JSX.Element | null {
   if (pane.kind === 'held' || pane.kind === 'unknown-row') return null;
@@ -356,6 +363,19 @@ function PaneStateNotice({
           {pane.words}
         </Text>
       )}
+      {pane.kind === 'unreachable' && pane.refusal !== null && (
+        <Text
+          fz={12}
+          {...(pane.refusal.of === 'resume'
+            ? { 'data-pane-refusal': true }
+            : { 'data-pane-retake-refusal': true })}
+          style={{ color: colorForToneText('blocked', scheme) }}
+        >
+          {pane.refusal.of === 'resume'
+            ? `the hub would not resume this session: ${pane.refusal.words}`
+            : `this session was not taken over: ${pane.refusal.words}`}
+        </Text>
+      )}
       {pane.kind === 'cannot-tell' && (
         <Text fz={12} style={{ color: colorForToneText('needs-you', scheme) }}>
           {pane.warning}
@@ -370,6 +390,9 @@ function PaneStateNotice({
           ))}
         </Stack>
       )}
+      {pane.kind === 'outside' && (
+        <RetakeControl pane={pane} scheme={scheme} onRetake={onRetake} canAct={canAct} />
+      )}
       {pane.kind === 'starting' && pane.send && <span ref={autoResume} hidden />}
       {pane.action !== null && (
         <Group>
@@ -378,6 +401,57 @@ function PaneStateNotice({
           </Button>
         </Group>
       )}
+    </Stack>
+  );
+}
+
+interface RetakeControlProps {
+  readonly pane: Extract<PaneState, { kind: 'outside' }>;
+  readonly scheme: Scheme;
+  readonly onRetake: () => void;
+  readonly canAct: boolean;
+}
+
+/**
+ * The offer to end the claude running a session outside agentplex and run it
+ * here, under the sentence that says where it runs.
+ *
+ * One button in every state of the offer, disabled rather than removed while
+ * the outside claude works or the retake is in flight: the session reaching
+ * its prompt is the same button becoming pressable, not a control appearing
+ * under the pointer. The reason it cannot be pressed is said beside it, and a
+ * refusal is said in the refusing side's own words, with the button left
+ * pressable because the reason may have passed by the time somebody reads it.
+ */
+function RetakeControl({ pane, scheme, onRetake, canAct }: RetakeControlProps): JSX.Element {
+  const { retake } = pane;
+  const busy = retake.kind === 'working-elsewhere' || retake.kind === 'retaking';
+  return (
+    <Stack gap={6}>
+      {retake.kind === 'working-elsewhere' && (
+        <Text fz={12} c="dimmed" data-pane-retake-reason>
+          {retake.words}
+        </Text>
+      )}
+      {retake.kind === 'refused' && (
+        <Text
+          fz={12}
+          data-pane-retake-refusal
+          style={{ color: colorForToneText('blocked', scheme) }}
+        >
+          {`this session was not taken over: ${retake.words}`}
+        </Text>
+      )}
+      <Group>
+        <Button
+          size="xs"
+          data-pane-retake={retake.kind}
+          disabled={busy || !canAct}
+          onClick={onRetake}
+        >
+          {pane.retakeLabel}
+        </Button>
+      </Group>
     </Stack>
   );
 }
@@ -487,8 +561,8 @@ export function SessionPane({
   const pane: PaneState = paneState({
     row,
     state,
-    start:
-      memory.start === null ? null : followUp(memory.start, snapshot.answers, 'session-started'),
+    start: resumeFollowUp(memory, snapshot.answers),
+    retake: retakeFollowUp(memory, snapshot.answers),
     terminal: endedHere ? { ended: 'session-ended' } : terminal,
     ran: held.everHeld || memory.ran,
     startLapsed: memory.lapsed,
@@ -527,6 +601,21 @@ export function SessionPane({
       resumeCommand({ storeId: sessionRef.storeId, sessionId: sessionRef.sessionId, provider }),
     );
   }, [hub, sessionRef, provider]);
+  /**
+   * A take-over somebody pressed for. Filed by the store as this session's
+   * start, so what became of it is read back out of resume memory like a
+   * resume's; the hold it ends in is what re-subscribes the pane.
+   *
+   * Guarded, unlike a resume's press, and against the store as it is now
+   * rather than this render: a second pane on the session pressed before it
+   * drew the first one's retake would otherwise send a second, and the
+   * offer it pressed was already gone.
+   */
+  const pressRetake = useCallback((): void => {
+    const now = hub.getSnapshot();
+    if (retakeOutstanding(resumeMemoryOf(now.resumes, sessionRef), now.answers)) return;
+    hub.sendCommand(retakeCommand(sessionRef));
+  }, [hub, sessionRef]);
   /**
    * Tells the store this pane saw the session run, so that no later mount of
    * a pane on it resumes it on its own. The same callback-ref event as the
@@ -1018,6 +1107,7 @@ export function SessionPane({
       scheme={scheme}
       autoResume={autoResume}
       onAction={pressResume}
+      onRetake={pressRetake}
       canAct={snapshot.phase === 'connected'}
     />
   );

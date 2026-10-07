@@ -44,11 +44,28 @@ export interface ResumeMemory {
    * beats it, so the cost of early is a button shown for a moment.
    */
   readonly lapsed: boolean;
+  /**
+   * Whether `start` is a retake: a start that first ends the claude running
+   * the session outside agentplex.
+   *
+   * It is waited for and lapses exactly as a resume does, so it is the same
+   * start and not a second tracker. What differs is what a pane offers when
+   * it is refused: a resume's refusal is answered by trying the resume again,
+   * and a retake's by the retake, on a session an outside process may still
+   * be running -- where a resume would put a second process on its
+   * transcript.
+   */
+  readonly retake: boolean;
 }
 
 export type ResumeMemories = ReadonlyMap<string, ResumeMemory>;
 
-export const NO_RESUME_MEMORY: ResumeMemory = { ran: false, start: null, lapsed: false };
+export const NO_RESUME_MEMORY: ResumeMemory = {
+  ran: false,
+  start: null,
+  lapsed: false,
+  retake: false,
+};
 
 type Addressed = Pick<SessionRef, 'storeId' | 'sessionId'>;
 
@@ -67,7 +84,12 @@ function withMemory(
 ): ResumeMemories {
   const before = resumeMemoryOf(memories, ref);
   const after = change(before);
-  if (after.ran === before.ran && after.start === before.start && after.lapsed === before.lapsed) {
+  if (
+    after.ran === before.ran &&
+    after.start === before.start &&
+    after.lapsed === before.lapsed &&
+    after.retake === before.retake
+  ) {
     return memories;
   }
   return new Map(memories).set(keyOf(ref), after);
@@ -100,10 +122,16 @@ export function rememberCommand(
         ...memory,
         start: id,
         lapsed: false,
+        retake: false,
       }));
     }
     case 'session-retake':
-      return withMemory(memories, command, (memory) => ({ ...memory, start: id, lapsed: false }));
+      return withMemory(memories, command, (memory) => ({
+        ...memory,
+        start: id,
+        lapsed: false,
+        retake: true,
+      }));
     case 'session-stop':
       return rememberRan(memories, command);
     default:
@@ -129,7 +157,9 @@ export function rememberStarted(
   start: FrameId,
 ): ResumeMemories {
   return withMemory(memories, ref, (memory) =>
-    memory.ran || memory.start !== null ? memory : { ...memory, start, lapsed: false },
+    memory.ran || memory.start !== null
+      ? memory
+      : { ...memory, start, lapsed: false, retake: false },
   );
 }
 
@@ -242,4 +272,4 @@ function rememberRows(
   return next;
 }
 
-const NO_RESUME_MEMORY_RAN: ResumeMemory = { ran: true, start: null, lapsed: false };
+const NO_RESUME_MEMORY_RAN: ResumeMemory = { ran: true, start: null, lapsed: false, retake: false };

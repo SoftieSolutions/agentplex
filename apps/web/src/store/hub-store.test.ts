@@ -1152,6 +1152,30 @@ describe('what is still owed an answer', () => {
     if (asked !== null) expect(stopFollowUp(h, asked)).toEqual({ kind: 'waiting' });
     stop();
   });
+
+  it('tells listeners about a sent retake, once it is filed and on the wire', async () => {
+    // The one send a listener is told about: a retake is the session's start,
+    // and every pane on the session has to stop offering it, not only the one
+    // that pressed. Told after the frame went, so a listener that reads the
+    // store finds the retake already filed.
+    const h = harness();
+    const { socket } = await establish(h);
+    const told: { start: FrameId | null; retake: boolean; sent: number }[] = [];
+    const stop = h.store.subscribe(() => {
+      const memory = resumeMemoryOf(h.store.getSnapshot().resumes, SESSION);
+      const sent = sentFrames(socket).filter((frame) => frame.type === 'session-retake').length;
+      told.push({ start: memory.start, retake: memory.retake, sent });
+    });
+
+    const id = accepted(h, {
+      type: 'session-retake',
+      storeId: SESSION.storeId,
+      sessionId: SESSION.sessionId,
+    });
+
+    expect(told).toEqual([{ start: id, retake: true, sent: 1 }]);
+    stop();
+  });
 });
 
 describe('whether the state is this connection’s', () => {
@@ -1934,6 +1958,7 @@ describe('a start the hub named', () => {
       ran: false,
       start: id,
       lapsed: false,
+      retake: false,
     });
   });
 
@@ -1964,6 +1989,7 @@ describe('a start the hub named', () => {
       ran: false,
       start: id,
       lapsed: true,
+      retake: false,
     });
   });
 });

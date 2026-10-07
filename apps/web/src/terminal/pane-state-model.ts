@@ -8,8 +8,9 @@ import type {
   StoreId,
   SubscriptionEndReason,
 } from '@agentplex/protocol';
-import type { Answer, FollowUp } from '../store/answers.js';
+import { followUp, type Answer, type Answers, type FollowUp } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
+import type { ResumeMemory } from '../store/resume-memory.js';
 import type { ConnectionPhase } from '../store/views.js';
 import { canStart, liveServers } from '../sessions/new-session-model.js';
 import { serverLabel, toneForSession, wordsForSession } from '../sessions/session-list-model.js';
@@ -30,18 +31,45 @@ import { machineLabel } from './presentation.js';
  * The holder comes first and beats everything, including this pane's own
  * refusal: a pane that was told "already being started" because a second
  * pane got there first is answered by the holder appearing, and has nothing
- * left to say. Then this pane's own start, because a person who pressed
+ * left to say. Then this pane's own start while it is still in flight -- owed
+ * its answer, or answered and not lapsed -- because a person who pressed
  * Resume is owed what became of that press over anything the row said before
- * it. Then the session ending, which never resumes on its own -- a session
- * somebody just stopped is not one to restart behind their back. That covers
- * every session this page has seen run since it loaded, held or not, in a
- * pane or only in the sidebar: a pane resumes on its own only a session no
- * state has shown held or running the whole time, and one that stopped at any
- * point before or while it watched -- somebody quitting their own claude in
- * another terminal -- is said to have stopped, with Resume to press. Then what
- * the row says about a process, degrading towards not acting: `running` and
- * unheld is somebody else's process, `unknown` is a question only a person
- * can answer, and only `none` is permission to start one.
+ * it. Then, with nothing of this pane's in flight, a reachable row that reads
+ * a process running that agentplex does not hold: that is somebody else's
+ * process, offered for a retake, whatever this pane's last start came to and
+ * whatever ended before -- a refusal, a lost start, a lapse or an ending is
+ * history once a claude runs the session in somebody's own terminal, and the
+ * Resume or Try again each of them offers is at best a press that cannot
+ * succeed. On a store one machine mounts, the server that would start it
+ * refuses a resume over a pid it verified running outside agentplex; on a
+ * store several machines mount, the hub may route it to one that cannot see
+ * that pid, and it starts a second process on the transcript. Then a row out
+ * of reach, which offers nothing whatever came before, as `afterLapse` does:
+ * the last word of a machine that is gone cannot vouch that nothing runs the
+ * session there, and a refusal is kept as words with nothing to press. Then
+ * what became of this pane's last start. Then the session ending, which
+ * never resumes on its own -- a session somebody just stopped is not one to
+ * restart behind their back. That covers every session this
+ * page has seen run since it loaded, held or not, in a pane or only in the
+ * sidebar: a pane resumes on its own only a session no state has shown held
+ * or running the whole time, and one that stopped at any point before or
+ * while it watched -- somebody quitting their own claude in another terminal
+ * -- is said to have stopped, with Resume to press. Then what the row says
+ * about a process, degrading towards not acting: `unknown` is a question only
+ * a person can answer, and only `none` is permission to start one.
+ *
+ * A retake -- ending the claude somebody runs outside agentplex, at its
+ * prompt, and resuming the session here -- is this page's start too, filed in
+ * the same resume memory and read in the same place: a retake owed its answer
+ * beats the ending, because the moment between the outside process going and
+ * the new one being held is one where nothing runs the session, and a pane
+ * that has seen it run would call that a session somebody stopped. A retake
+ * the hub refused is only words on the offer: what the row says next decides
+ * whether there is still an outside process to offer it for.
+ *
+ * A start of either kind that lapsed hands the decision back to the row as
+ * well: a lapse is a fact about the process this page started, not about what
+ * runs the session now.
  */
 
 /** A control the pane offers in place of the terminal, or none. */
@@ -80,19 +108,30 @@ export type PaneState =
   | { readonly kind: 'lost'; readonly words: string; readonly action: 'try-again' }
   /** The session ended under this pane, or stopped after a pane saw it run. */
   | { readonly kind: 'ended'; readonly words: string; readonly action: 'resume' }
-  /** Every machine that reported it is out of reach. */
+  /**
+   * Every machine that reported it is out of reach. `refusal` is this pane's
+   * last start or retake refusal, if it had one: still said, with nothing to
+   * press under it.
+   */
   | {
       readonly kind: 'unreachable';
       readonly machine: string;
       readonly words: string;
       readonly action: null;
+      readonly refusal: PaneRefusal | null;
     }
-  /** A process runs it that agentplex does not hold. */
+  /**
+   * A process runs it that agentplex does not hold. `retake` is the offer to
+   * end that process and run the session here, and `retakeLabel` the words on
+   * its button.
+   */
   | {
       readonly kind: 'outside';
       readonly machine: string;
       readonly words: string;
       readonly action: null;
+      readonly retake: RetakeOffer;
+      readonly retakeLabel: string;
     }
   /** Nothing can say whether a process runs it. */
   | {
@@ -110,6 +149,28 @@ export type PaneState =
       readonly action: null;
     };
 
+/**
+ * Where the offer to take over an outside session stands.
+ *
+ * Disabled while the outside claude is working, by Robert's rule that a retake
+ * happens only at idle or waiting: ending a claude mid-turn loses that turn.
+ * The machine and the hub check again before anything is signalled, so the
+ * row's word is a courtesy and not the guard -- a `shell` session reads as not
+ * working here, is offered, and comes back refused in the server's words.
+ */
+/** A refusal of this pane's start, in the refusing side's own words, and which kind of start it was. */
+export interface PaneRefusal {
+  readonly of: 'resume' | 'retake';
+  readonly words: string;
+}
+
+export type RetakeOffer =
+  | { readonly kind: 'available' }
+  | { readonly kind: 'working-elsewhere'; readonly words: string }
+  | { readonly kind: 'retaking' }
+  /** The last retake was refused; `words` are the refusing side's own, and it can be pressed again. */
+  | { readonly kind: 'refused'; readonly words: string };
+
 export interface PaneStateInput {
   readonly row: SessionRow | null;
   readonly state: MachineState | null;
@@ -118,6 +179,11 @@ export interface PaneStateInput {
    * since it last saw the session held.
    */
   readonly start: FollowUp<Answer<'session-started'>> | null;
+  /**
+   * What became of the retake this pane sent, or `null` while the start in
+   * resume memory is not one. A retake is answered as a start is.
+   */
+  readonly retake: FollowUp<Answer<'session-started'>> | null;
   /** The watched terminal's ending, when the pane is watching one. */
   readonly terminal: { readonly ended: SubscriptionEndReason | null } | null;
   /**
@@ -136,44 +202,61 @@ export interface PaneStateInput {
   readonly stateCurrent: boolean;
 }
 
-const CANNOT_TELL_WARNING =
-  'if another copy is running, resuming puts two processes on one transcript and damages the ' +
-  'session for both: resume only if you know nothing else is running it';
+const CANNOT_TELL: PaneState = {
+  kind: 'cannot-tell',
+  words: 'agentplex cannot tell whether anything is running this session',
+  warning:
+    'if another copy is running, resuming puts two processes on one transcript and damages the ' +
+    'session for both: resume only if you know nothing else is running it',
+  action: 'resume',
+};
 
 export function paneState(input: PaneStateInput): PaneState {
-  const { row, state, start, terminal, ran, startLapsed, phase, stateCurrent } = input;
+  const { row, state, start, retake, terminal, ran, startLapsed, phase, stateCurrent } = input;
   if (row === null) return { kind: 'unknown-row' };
   if (row.holder !== null) return { kind: 'held' };
 
+  // A start or retake this pane sent that has not come to anything yet --
+  // owed its answer, or answered and not lapsed -- is owed to whoever
+  // pressed, over anything the row said before it.
+  if (retake?.kind === 'waiting') return retakeOwed(row, state);
+  if (retake?.kind === 'answered' && !startLapsed) return awaitingHold(retake.answer, state);
+  if (start?.kind === 'waiting') {
+    return {
+      kind: 'starting',
+      send: false,
+      words: 'nothing was running this session, so it is being resumed',
+      action: null,
+    };
+  }
+  if (start?.kind === 'answered' && !startLapsed) return awaitingHold(start.answer, state);
+
+  // Nothing of this pane's is in flight, so a process outside agentplex
+  // running it now beats whatever this pane's last start came to and
+  // whatever ended before: Resume or Try again over it is refused by its own
+  // machine on a single-machine store, and on a shared store may reach a
+  // machine that cannot see that process and start a second one.
+  const process = row.descriptor.process;
+  const retakeRefusal = retake?.kind === 'refused' ? retake.words : null;
+  if (row.reachable && process === 'running') return runningOutside(row, state, retakeRefusal);
+
+  // A row out of reach offers nothing, whatever came before, as afterLapse
+  // does: a process its machine last reported may still run it there.
+  if (!row.reachable) {
+    const refusal: PaneRefusal | null =
+      retakeRefusal !== null
+        ? { of: 'retake', words: retakeRefusal }
+        : start?.kind === 'refused'
+          ? { of: 'resume', words: start.words }
+          : null;
+    return unreachable(row, state, refusal);
+  }
+
+  if (retake?.kind === 'answered') return afterLapse(row, state, retake.answer, 'retake');
   if (start !== null) {
     switch (start.kind) {
-      case 'waiting':
-        return {
-          kind: 'starting',
-          send: false,
-          words: 'nothing was running this session, so it is being resumed',
-          action: null,
-        };
-      case 'answered': {
-        const machine =
-          state === null ? start.answer.server : serverLabel(state, start.answer.server);
-        if (startLapsed) {
-          return {
-            kind: 'lapsed',
-            machine,
-            words:
-              `this session was started on ${machine}, but that machine's next report shows ` +
-              'nothing in agentplex running it: the process may have exited as soon as it started',
-            action: 'try-again',
-          };
-        }
-        return {
-          kind: 'starting',
-          send: false,
-          words: `started on ${machine}; waiting for that machine to report it running`,
-          action: null,
-        };
-      }
+      case 'answered':
+        return afterLapse(row, state, start.answer, 'resume');
       case 'refused':
         return { kind: 'refused', words: start.words, action: 'try-again' };
       case 'idle':
@@ -187,7 +270,6 @@ export function paneState(input: PaneStateInput): PaneState {
     }
   }
 
-  const process = row.descriptor.process;
   if (terminal?.ended === 'session-ended' || (ran && process === 'none')) {
     return {
       kind: 'ended',
@@ -197,37 +279,11 @@ export function paneState(input: PaneStateInput): PaneState {
     };
   }
 
-  if (!row.reachable) {
-    const machine = state === null ? row.source : machineLabel(state, row);
-    return {
-      kind: 'unreachable',
-      machine,
-      words:
-        `${machine}, the machine that reported this session, cannot be reached: ` +
-        'nothing can attach to it or resume it until that machine is back',
-      action: null,
-    };
-  }
-
   switch (process) {
-    case 'running': {
-      const machine = state === null ? row.source : machineLabel(state, row);
-      return {
-        kind: 'outside',
-        machine,
-        words:
-          `this session is running on ${machine}, but not under agentplex: there is no terminal ` +
-          'here to attach to, and resuming it would put a second process on its transcript',
-        action: null,
-      };
-    }
+    case 'running':
+      return runningOutside(row, state, retakeRefusal);
     case 'unknown':
-      return {
-        kind: 'cannot-tell',
-        words: 'agentplex cannot tell whether anything is running this session',
-        warning: CANNOT_TELL_WARNING,
-        action: 'resume',
-      };
+      return CANNOT_TELL;
     case 'none': {
       const { provider, storeId } = row.descriptor;
       if (capableServers(state, storeId, provider).length === 0) {
@@ -253,6 +309,150 @@ export function paneState(input: PaneStateInput): PaneState {
       };
     }
   }
+}
+
+/**
+ * A retake owed its answer, said in what the row can vouch for.
+ *
+ * Only a reachable row that says nothing runs it says the outside process
+ * stopped. A machine out of reach reported last before the retake could do
+ * anything, and a row that cannot tell cannot tell either way: neither is
+ * word that the process the retake was sent to end has ended.
+ */
+function retakeOwed(row: SessionRow, state: MachineState | null): PaneState {
+  const machine = state === null ? row.source : machineLabel(state, row);
+  const { provider, process } = row.descriptor;
+  let words: string;
+  if (!row.reachable) {
+    words =
+      `${machine}, the machine the retake went to, cannot be reached: what became of the ` +
+      `${provider} running this session there is unknown until that machine reports again`;
+  } else if (process === 'running') {
+    return outside(row, state, { kind: 'retaking' });
+  } else if (process === 'unknown') {
+    words =
+      `the retake went to ${machine} and is owed its answer; agentplex cannot tell whether ` +
+      'anything is running this session until that answer comes';
+  } else {
+    words =
+      `the ${provider} that was running this session on ${machine} has stopped; it is being ` +
+      'started here';
+  }
+  return { kind: 'starting', send: false, words, action: null };
+}
+
+/** A start the hub answered, waiting for its machine to report it held. */
+function awaitingHold(answer: Answer<'session-started'>, state: MachineState | null): PaneState {
+  const machine = state === null ? answer.server : serverLabel(state, answer.server);
+  return {
+    kind: 'starting',
+    send: false,
+    words: `started on ${machine}; waiting for that machine to report it running`,
+    action: null,
+  };
+}
+
+/**
+ * A start the hub answered that a later state showed nothing in agentplex
+ * holding: what the row says now decides, not the start.
+ *
+ * The lapse says only that the process this page started is not held. It
+ * says nothing about what runs the session since, and the way out a lapse
+ * offers is a resume -- over a claude somebody has since run in their own
+ * terminal, that is a second process on one transcript. So a row an outside
+ * process runs is offered the retake, one nothing can tell about carries the
+ * warning, and one out of reach offers nothing. Only a row that says nothing
+ * runs it is the lapse itself: a resume is offered to try again, and a retake
+ * -- whose outside process is gone too -- is a session that stopped, to
+ * resume, because trying a retake again has nothing left to end.
+ *
+ * `paneState` reads a row out of reach and a reachable row's outside process
+ * before any lapse, so those two cases here are the same rules, kept so the
+ * lapse is whole alone.
+ */
+function afterLapse(
+  row: SessionRow,
+  state: MachineState | null,
+  answer: Answer<'session-started'>,
+  was: 'resume' | 'retake',
+): PaneState {
+  if (!row.reachable) return unreachable(row, state, null);
+  switch (row.descriptor.process) {
+    case 'running':
+      return runningOutside(row, state, null);
+    case 'unknown':
+      return CANNOT_TELL;
+    case 'none': {
+      const machine = state === null ? answer.server : serverLabel(state, answer.server);
+      const words =
+        `this session was started on ${machine}, but that machine's next report shows ` +
+        'nothing in agentplex running it: the process may have exited as soon as it started';
+      return was === 'retake'
+        ? { kind: 'ended', words, action: 'resume' }
+        : { kind: 'lapsed', machine, words, action: 'try-again' };
+    }
+  }
+}
+
+/** A session whose machine is out of reach: nothing to attach to and nothing to press. */
+function unreachable(
+  row: SessionRow,
+  state: MachineState | null,
+  refusal: PaneRefusal | null,
+): PaneState {
+  const machine = state === null ? row.source : machineLabel(state, row);
+  return {
+    kind: 'unreachable',
+    machine,
+    words:
+      `${machine}, the machine that reported this session, cannot be reached: ` +
+      'nothing can attach to it or resume it until that machine is back',
+    action: null,
+    refusal,
+  };
+}
+
+/**
+ * A session a process outside agentplex runs, offered for a retake unless that
+ * process is working; `refusal` is the last retake's refusal, if one was.
+ */
+function runningOutside(
+  row: SessionRow,
+  state: MachineState | null,
+  refusal: string | null,
+): PaneState {
+  if (row.descriptor.status === 'working') {
+    const machine = state === null ? row.source : machineLabel(state, row);
+    return outside(row, state, {
+      kind: 'working-elsewhere',
+      words:
+        `the ${row.descriptor.provider} on ${machine} is working: it can be stopped and this ` +
+        'session run here once it is waiting at its prompt',
+    });
+  }
+  return outside(
+    row,
+    state,
+    refusal === null ? { kind: 'available' } : { kind: 'refused', words: refusal },
+  );
+}
+
+/** A session a process outside agentplex runs, with where the offer to take it over stands. */
+function outside(row: SessionRow, state: MachineState | null, retake: RetakeOffer): PaneState {
+  const machine = state === null ? row.source : machineLabel(state, row);
+  return {
+    kind: 'outside',
+    machine,
+    words:
+      `this session is running on ${machine}, but not under agentplex: there is no terminal ` +
+      'here to attach to, and resuming it would put a second process on its transcript',
+    action: null,
+    retake,
+    retakeLabel:
+      retake.kind === 'retaking'
+        ? 'stopping it, then starting here'
+        : `Stop the ${row.descriptor.provider} on ${machine} and run this session here`,
+  };
 }
 
 /**
@@ -306,6 +506,49 @@ export function resumeCommand(
     server: null,
     project: null,
   };
+}
+
+/**
+ * The take-over of a session run outside agentplex: the session named and
+ * nothing else. The hub finds the machine that sees the process and reads the
+ * provider off its own row; the machine finds the process.
+ */
+export function retakeCommand(
+  session: Pick<SessionDescriptor, 'storeId' | 'sessionId'>,
+): HubCommand {
+  return { type: 'session-retake', storeId: session.storeId, sessionId: session.sessionId };
+}
+
+/** What became of this page's start of a session, when that start was a resume. */
+export function resumeFollowUp(
+  memory: ResumeMemory,
+  answers: Answers,
+): FollowUp<Answer<'session-started'>> | null {
+  if (memory.start === null || memory.retake) return null;
+  return followUp(memory.start, answers, 'session-started');
+}
+
+/** What became of this page's start of a session, when that start was a retake. */
+export function retakeFollowUp(
+  memory: ResumeMemory,
+  answers: Answers,
+): FollowUp<Answer<'session-started'>> | null {
+  if (memory.start === null || !memory.retake) return null;
+  return followUp(memory.start, answers, 'session-started');
+}
+
+/**
+ * Whether this page has a retake of the session out that has not come to
+ * anything yet: owed its answer, or answered and waiting for the hold.
+ *
+ * What a press of the offer reads from the store as it is now, rather than
+ * the render's copy, so a second pane pressed before it drew the first one's
+ * retake sends nothing.
+ */
+export function retakeOutstanding(memory: ResumeMemory, answers: Answers): boolean {
+  const retake = retakeFollowUp(memory, answers);
+  if (retake === null) return false;
+  return retake.kind === 'waiting' || (retake.kind === 'answered' && !memory.lapsed);
 }
 
 /** Whether the header should say that nothing is running this row. */
