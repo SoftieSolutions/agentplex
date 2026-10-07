@@ -200,6 +200,7 @@ describe('paneState', () => {
       kind: 'cannot-tell',
       action: 'resume',
       warning: expect.stringContaining('two processes') as string,
+      refusal: null,
     });
     expect(paneState(input({ ...lapsed, row: staleBench, state: stale }))).toMatchObject({
       kind: 'unreachable',
@@ -406,9 +407,102 @@ describe('paneState', () => {
     });
   });
 
+  describe('a reachable row that cannot tell beats what this pane’s last start came to', () => {
+    // sharedNotes is on a store two machines mount, so neither can vouch for a
+    // pid the other might own: a refused, lost or ended start offered as Try
+    // again or a bare Resume would let a press put a second process on its
+    // transcript without the warning ever being said.
+    const cannotTell = {
+      kind: 'cannot-tell',
+      action: 'resume',
+      words: expect.stringContaining('cannot tell') as string,
+      warning: expect.stringContaining('two processes') as string,
+    } as const;
+    const refusedStart = followUp(ASKED, answered(hubFrames.refusal), 'session-started');
+    const refusedRetake = followUp(ASKED, answered(hubFrames.refusalRetake), 'session-started');
+    const idle = followUp(ASKED, NO_ANSWERS, 'session-started');
+    const ended = { terminal: { ended: 'session-ended' as const }, ran: true };
+
+    it('keeps a refused start’s words above the warning, with Resume', () => {
+      expect(paneState(input({ start: refusedStart, row: sharedNotes, state: shared }))).toEqual({
+        ...cannotTell,
+        refusal: { of: 'resume', words: 'no server the hub is paired with has that store mounted' },
+      });
+    });
+
+    it('offers Resume with the warning, not Try again, for a lost start', () => {
+      expect(paneState(input({ start: idle, row: sharedNotes, state: shared }))).toEqual({
+        ...cannotTell,
+        refusal: null,
+      });
+    });
+
+    it('offers Resume with the warning for a terminal that ended, or a session it saw run', () => {
+      for (const overrides of [ended, { terminal: ended.terminal }, { ran: true }]) {
+        expect(paneState(input({ ...overrides, row: sharedNotes, state: shared }))).toEqual({
+          ...cannotTell,
+          refusal: null,
+        });
+      }
+    });
+
+    it('keeps a refused retake’s words above the warning, with Resume', () => {
+      for (const terminal of [null, ended.terminal]) {
+        expect(
+          paneState(input({ retake: refusedRetake, terminal, row: sharedNotes, state: shared })),
+        ).toEqual({
+          ...cannotTell,
+          refusal: {
+            of: 'retake',
+            words:
+              'nothing is running that session, so there is nothing to retake; resume it instead',
+          },
+        });
+      }
+    });
+
+    it('sends nothing on its own for any of them', () => {
+      const cases: Partial<PaneStateInput>[] = [
+        { start: refusedStart },
+        { start: idle },
+        ended,
+        { retake: refusedRetake },
+        { retake: refusedRetake, ...ended },
+      ];
+      for (const overrides of cases) {
+        const state = paneState(input({ ...overrides, row: sharedNotes, state: shared }));
+        expect(state.kind).not.toBe('starting');
+      }
+    });
+
+    it('leaves a row that says none, one run outside and one out of reach as they were', () => {
+      for (const start of [refusedStart, idle]) {
+        expect(paneState(input({ start })).kind).toBe(start === idle ? 'lost' : 'refused');
+        expect(paneState(input({ start, row: cliAtPrompt, state: retakeable })).kind).toBe(
+          'outside',
+        );
+        expect(paneState(input({ start, row: staleBench, state: stale })).kind).toBe('unreachable');
+      }
+      expect(paneState(input({ ...ended })).kind).toBe('ended');
+      expect(paneState(input({ ...ended, row: cliAtPrompt, state: retakeable })).kind).toBe(
+        'outside',
+      );
+      expect(paneState(input({ ...ended, row: staleBench, state: stale })).kind).toBe(
+        'unreachable',
+      );
+      expect(paneState(input({ retake: refusedRetake, ...ended })).kind).toBe('ended');
+      expect(
+        paneState(input({ retake: refusedRetake, row: cliAtPrompt, state: retakeable })).kind,
+      ).toBe('outside');
+      expect(paneState(input({ retake: refusedRetake, row: staleBench, state: stale })).kind).toBe(
+        'unreachable',
+      );
+    });
+  });
+
   it('offers a resume, with the warning, when nothing can say whether it runs', () => {
     const state = paneState(input({ row: sharedNotes, state: shared }));
-    expect(state).toMatchObject({ kind: 'cannot-tell', action: 'resume' });
+    expect(state).toMatchObject({ kind: 'cannot-tell', action: 'resume', refusal: null });
     if (state.kind !== 'cannot-tell') return;
     expect(state.warning).toContain('two processes');
   });
@@ -499,6 +593,7 @@ describe('taking over a session run outside agentplex', () => {
         kind: 'cannot-tell',
         action: 'resume',
         warning: expect.stringContaining('two processes') as string,
+        refusal: null,
       });
     });
 

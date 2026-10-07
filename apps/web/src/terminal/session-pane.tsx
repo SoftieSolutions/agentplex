@@ -363,7 +363,7 @@ function PaneStateNotice({
           {pane.words}
         </Text>
       )}
-      {pane.kind === 'unreachable' && pane.refusal !== null && (
+      {(pane.kind === 'unreachable' || pane.kind === 'cannot-tell') && pane.refusal !== null && (
         <Text
           fz={12}
           {...(pane.refusal.of === 'resume'
