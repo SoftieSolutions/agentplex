@@ -524,14 +524,14 @@ function runningOutside(
     );
   }
 
-  const label = reachable.label;
-  if (store.servers.length > 1) {
-    return (
-      `that session is running outside agentplex on ${label}, and the store is shared by ` +
-      `more than one server; end that ${row.descriptor.provider} on ${label} first`
-    );
+  // The takeover is offered only where a retake would route, and to the same
+  // machine: on a shared store, a draining machine or one that cannot run the
+  // provider, the offer would send a person to a second refusal.
+  const retake = routeRetake(state, { storeId: store.storeId, sessionId });
+  if (retake.ok && retake.server.registrationId === reachable.registrationId) {
+    return `that session is running outside agentplex on ${reachable.label}; take it over instead of resuming it`;
   }
-  return `that session is running outside agentplex on ${label}; take it over instead of resuming it`;
+  return `that session is running outside agentplex on ${reachable.label}`;
 }
 
 function holderOf(store: StoreView, sessionId: SessionId): SessionHolder | null {

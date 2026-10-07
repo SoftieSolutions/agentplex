@@ -797,22 +797,44 @@ describe('routeStart', () => {
       });
     });
 
-    it('refuses on a shared store without offering the takeover, naming the provider', () => {
+    it('refuses on a shared store without offering the takeover', () => {
       // A retake refuses a shared store (Robert's decision 10b), so the
-      // sentence must not send anybody to it. What is left is ending it there.
+      // sentence must not send anybody to it.
       const state = shared(running('codex'));
 
       for (const server of [null, registration('attic'), registration('workshop')]) {
         expect(routeStart(state, { ...RESUME, provider: 'codex', server })).toEqual({
           ok: false,
           code: 'refused',
-          problem:
-            'that session is running outside agentplex on workshop, and the store is shared ' +
-            'by more than one server; end that codex on workshop first',
+          problem: 'that session is running outside agentplex on workshop',
           holder: null,
         });
       }
     });
+
+    it.each([
+      [
+        'is shutting down',
+        {
+          draining: {
+            since: START,
+            graceMs: 15_000,
+            sessions: [{ storeId: WORK, sessionId: sessionId('session-1') }],
+          },
+        },
+      ],
+      ['cannot run the provider', { providers: [missingProvider()] }],
+    ] as const)(
+      'refuses without offering the takeover when the machine %s, since a retake would be refused',
+      (_case, machine) => {
+        expect(routeStart(alone(running(), machine), RESUME)).toEqual({
+          ok: false,
+          code: 'refused',
+          problem: 'that session is running outside agentplex on workshop',
+          holder: null,
+        });
+      },
+    );
 
     it('refuses when the machine that saw it is unreachable, though a connected one is shown', () => {
       // The row shown is attic's, because a reachable reading always wins the
@@ -881,9 +903,7 @@ describe('routeStart', () => {
           expect(routeStart(state, { ...RESUME, server })).toEqual({
             ok: false,
             code: 'refused',
-            problem:
-              `that session is running outside agentplex on ${saw}, and the store is shared ` +
-              `by more than one server; end that claude on ${saw} first`,
+            problem: `that session is running outside agentplex on ${saw}`,
             holder: null,
           });
         }

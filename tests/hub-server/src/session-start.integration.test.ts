@@ -1500,10 +1500,7 @@ describe('a resume of a session an outside process is running, on a shared store
     const answer = client.reply(2);
     expect(answer).toMatchObject({ type: 'refusal', code: 'refused', holder: null });
     if (answer.type !== 'refusal') return;
-    expect(answer.message).toBe(
-      'that session is running outside agentplex on attic, and the store is shared by more ' +
-        'than one server; end that claude on attic first',
-    );
+    expect(answer.message).toBe('that session is running outside agentplex on attic');
 
     expect(launches(machine('attic'))).toEqual([]);
     expect(launches(machine('workshop'))).toEqual([]);
