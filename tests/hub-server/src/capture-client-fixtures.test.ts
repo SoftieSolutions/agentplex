@@ -3947,7 +3947,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     const machineStateRetakeable = await captureState(retakeHub.hub);
     const retaker = await openClient(retakeHub.hub);
-    retaker.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+    retaker.send({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: aPage(),
+    });
     await retaker.framesReceived(2);
     retaker.send({
       type: 'session-retake',
