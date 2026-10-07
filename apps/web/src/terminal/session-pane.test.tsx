@@ -2455,6 +2455,39 @@ describe('a pane on a session nothing holds', () => {
     expect(shown()).toBeNull();
   });
 
+  it('keeps a refusal above the two-copies warning, and resumes again only when pressed', async () => {
+    // A row nothing can vouch for is still a question only a person answers
+    // once the hub refused this pane's resume: Try again would send without
+    // the warning, over what may be a second copy on the other machine.
+    const connected = await connectedTo(hubFrames.machineStateResumable);
+    await mount(pane(connected.hub, 'store-shared', 'session-shared-notes'));
+    expect(sentSince(connected)).toEqual([]);
+    expect(shown()?.getAttribute('data-pane-state')).toBe('cannot-tell');
+
+    const button = action();
+    if (button === null) throw new Error('no Resume control');
+    await click(button);
+    const [start] = ofType(sentSince(connected), 'session-start');
+    if (start === undefined) throw new Error('no start was sent');
+    await deliver(connected.socket, addressedTo(hubFrames.refusal, start.id));
+
+    expect(shown()?.getAttribute('data-pane-state')).toBe('cannot-tell');
+    const words = container.querySelector<HTMLElement>('[data-pane-refusal]');
+    expect(words?.textContent).toBe(
+      'the hub would not resume this session: no server the hub is paired with has that store mounted',
+    );
+    expect(words?.style.color).toBe(rgb(colorForToneText('blocked', 'dark')));
+    expect(shown()?.textContent).toContain('two processes on one transcript');
+    const actions = container.querySelectorAll<HTMLButtonElement>('button[data-pane-action]');
+    expect([...actions].map((each) => each.textContent)).toEqual(['Resume']);
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(1);
+
+    const again = action();
+    if (again === null) throw new Error('no Resume control');
+    await click(again);
+    expect(ofType(sentSince(connected), 'session-start')).toHaveLength(2);
+  });
+
   it('says where a session runs that agentplex does not hold, and sends nothing', async () => {
     const connected = await connectedTo(hubFrames.machineStateResumable);
     await mount(pane(connected.hub, 'store-agentplex', 'session-cli-run'));
