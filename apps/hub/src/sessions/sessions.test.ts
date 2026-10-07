@@ -85,11 +85,20 @@ interface Asked {
   answer(outcome: InstructionOutcome): void;
 }
 
-function harness(process: SessionDescriptor['process'] = 'none'): {
+/**
+ * The sessions feature over that fleet, and a hand on what the machine reads.
+ *
+ * The process is settable because a start and a retake of one session are
+ * routed on opposite readings -- a resume of a session an outside process is
+ * running is refused, and a retake of one nothing is running is -- so a test of
+ * the two racing has to move the reading between them.
+ */
+function harness(initial: SessionDescriptor['process'] = 'none'): {
   readonly sessions: Sessions;
   readonly asked: Asked[];
+  setProcess(process: SessionDescriptor['process']): void;
 } {
-  const snapshot = fleet(process);
+  let snapshot = fleet(initial);
   const asked: Asked[] = [];
   let next = 0;
   const ids: IdGenerator = { newId: () => `start-${String((next += 1))}` };
@@ -106,7 +115,13 @@ function harness(process: SessionDescriptor['process'] = 'none'): {
     logger,
     onStarted: () => Promise.resolve(),
   });
-  return { sessions, asked };
+  return {
+    sessions,
+    asked,
+    setProcess: (process) => {
+      snapshot = fleet(process);
+    },
+  };
 }
 
 const RESUME: StartSessionRequest = {
@@ -245,9 +260,12 @@ describe('retake', () => {
   });
 
   it('refuses a retake while a start of the same session is still on its way', async () => {
-    const { sessions, asked } = harness('running');
+    // The start goes out while nothing runs it; an outside process appearing
+    // before the retake is what would make the retake routable.
+    const { sessions, asked, setProcess } = harness('none');
 
     const start = sessions.start(RESUME);
+    setProcess('running');
     const retake = await sessions.retake(RETAKE);
 
     expect(retake).toEqual({
@@ -263,7 +281,7 @@ describe('retake', () => {
   });
 
   it('refuses a start while a retake of the same session is still on its way', async () => {
-    const { sessions, asked } = harness('running');
+    const { sessions, asked, setProcess } = harness('running');
 
     const retake = sessions.retake(RETAKE);
     const start = await sessions.start(RESUME);
@@ -279,6 +297,10 @@ describe('retake', () => {
     // Released whatever the machine answered, so a refusal does not wedge it.
     asked[0]?.answer({ ok: false, code: 'refused', problem: 'no', hold: null });
     await retake;
+    // A machine that refused the retake leaves the outside process running, and
+    // a resume of that is refused by the routing; the reading has to clear for
+    // the release to be visible as a start that goes out.
+    setProcess('none');
     void sessions.start(RESUME);
     expect(asked.map((one) => one.instruction.type)).toEqual(['session-retake', 'session-start']);
   });
