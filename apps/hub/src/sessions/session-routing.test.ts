@@ -745,14 +745,14 @@ describe('routeStart', () => {
   });
 
   /**
-   * A resume of a session a process outside agentplex is running.
+   * A resume of a session a process agentplex does not hold is running.
    *
    * Refused whoever asks and wherever they point it: a second agent on that
    * transcript is the corruption the holder refusal exists for, and the hub
    * may be the only one able to see it -- on a shared store the scheduler can
    * pick a machine that cannot see the other's pid.
    */
-  describe('a session a process outside agentplex is running', () => {
+  describe('a session a process agentplex does not hold is running', () => {
     const RESUME = {
       storeId: WORK,
       sessionId: sessionId('session-1'),
@@ -780,7 +780,8 @@ describe('routeStart', () => {
         ok: false,
         code: 'refused',
         problem:
-          'that session is running outside agentplex on workshop; take it over instead of resuming it',
+          'a process is running that session on workshop and agentplex does not hold it; ' +
+          'take it over instead of resuming it',
         holder: null,
       });
     });
@@ -792,7 +793,8 @@ describe('routeStart', () => {
         ok: false,
         code: 'refused',
         problem:
-          'that session is running outside agentplex on workshop; take it over instead of resuming it',
+          'a process is running that session on workshop and agentplex does not hold it; ' +
+          'take it over instead of resuming it',
         holder: null,
       });
     });
@@ -806,7 +808,7 @@ describe('routeStart', () => {
         expect(routeStart(state, { ...RESUME, provider: 'codex', server })).toEqual({
           ok: false,
           code: 'refused',
-          problem: 'that session is running outside agentplex on workshop',
+          problem: 'a process is running that session on workshop and agentplex does not hold it',
           holder: null,
         });
       }
@@ -830,7 +832,7 @@ describe('routeStart', () => {
         expect(routeStart(alone(running(), machine), RESUME)).toEqual({
           ok: false,
           code: 'refused',
-          problem: 'that session is running outside agentplex on workshop',
+          problem: 'a process is running that session on workshop and agentplex does not hold it',
           holder: null,
         });
       },
@@ -903,7 +905,7 @@ describe('routeStart', () => {
           expect(routeStart(state, { ...RESUME, server })).toEqual({
             ok: false,
             code: 'refused',
-            problem: `that session is running outside agentplex on ${saw}`,
+            problem: `a process is running that session on ${saw} and agentplex does not hold it`,
             holder: null,
           });
         }
