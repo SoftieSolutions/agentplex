@@ -1,5 +1,6 @@
 import {
   sessionRefKey,
+  type ClientInstance,
   type ClientTerminalTarget,
   type FrameId,
   type HubFrame,
@@ -61,9 +62,19 @@ import { routeTerminal } from './target-routing.js';
  * a fresh start has to be addressable by the start instead. There are two names
  * for one start -- the client's own `session-start` frame id, and the `StartId`
  * the hub minted for the server -- and this is the only place that knows both.
- * The map from one to the other is written when a client's start succeeds, read
- * when that client subscribes, and dies with the socket, because a client's
- * handle means nothing on any other connection.
+ * The map from one to the other is written when a client's start succeeds and
+ * read when that client subscribes.
+ *
+ * It is filed under the page that asked, not the socket that carried it. A
+ * page names itself on every hello (`ClientInstance`) and mints its frame ids
+ * once for all the sockets it opens, so its handle means the same thing on the
+ * next connection and nothing on another page's. A socket going away gives
+ * back its watches and leaves its page's starts where they are: a spawn the
+ * provider names while the page is between sockets is named to the page when
+ * it says hello again, and a pane that redials can still watch a start by the
+ * handle it had. What a page may leave here is bounded twice over --
+ * `MAX_STARTS_PER_INSTANCE` per page and `MAX_CLOSED_INSTANCES` pages with no
+ * socket -- oldest first both times.
  *
  * When the provider finally names the session, the server says so in its next
  * store report, and the upstream is re-keyed here so that output carrying the
@@ -111,6 +122,28 @@ import { routeTerminal } from './target-routing.js';
  * over one wedged socket is told which of the two is missing output.
  */
 export const MAX_BUFFERED_CLIENT_BYTES = 1024 * 1024;
+
+/**
+ * How many of its starts the hub keeps for one page, oldest evicted first.
+ *
+ * The web's own `MAX_REMEMBERED_STARTS` in `session-replies.ts`, on purpose:
+ * that is how many starts a page remembers asking for, and a naming the hub
+ * held past it would be news about a start the page has already forgotten.
+ * A start evicted here takes its naming with it, and is named to nobody.
+ */
+export const MAX_STARTS_PER_INSTANCE = 64;
+
+/**
+ * How many pages with no socket the hub goes on holding starts for, oldest
+ * closed evicted first.
+ *
+ * A page that closed for good never says so -- a tab shut, a phone that
+ * cleared its memory -- and is indistinguishable from one about to redial, so
+ * a closed page is kept until enough others have closed after it. Sixty-four
+ * is far more pages than one person redials at once, and with the per-page cap
+ * bounds what the closed ones cost at a few thousand small entries.
+ */
+export const MAX_CLOSED_INSTANCES = 64;
 
 /**
  * One client socket, as the relay sees it.
@@ -185,12 +218,29 @@ export interface Terminal {
     size: TerminalSize,
   ): void;
   /**
+   * A socket said hello as this page: it is the page's socket from now on.
+   *
+   * A page that already has a socket here is taken over rather than refused --
+   * a page gives up a socket that stopped answering and dials again before the
+   * hub has noticed the old one close, and the newer socket is the one it is
+   * reading. The page is sent, again, the naming of every spawn it made that
+   * the hub still holds: one the old socket carried may have been lost with
+   * it, and nothing here can tell.
+   *
+   * Once per socket, and never for a socket that has no page -- the MCP tools
+   * read a terminal through a client of their own that says no hello and
+   * starts nothing.
+   */
+  hello(client: TerminalClient, instance: ClientInstance): void;
+  /**
    * A client's start succeeded: remember what this hub called it.
    *
    * The one writer of the client-handle map. It is written here rather than by
-   * the sessions feature because the handle is the asking socket's and means
-   * nothing off it -- a registry of everybody's handles would be a second thing
-   * that has to be told when a socket goes away.
+   * the sessions feature because the handle is the asking page's and means
+   * nothing off it -- a registry of everybody's handles would be a second
+   * thing that has to be told when a page goes away. Filed under the page the
+   * socket said hello as, so a start a socket notes after a newer socket took
+   * its page over is still the page's, and its naming goes to the newer one.
    *
    * Called after the start's reply is sent: a spawn the report already named
    * is told so here, and `session-named` must not reach a client before the
@@ -201,8 +251,9 @@ export interface Terminal {
    * A server said which of this hub's starts became which session.
    *
    * Off the store report's `starts`, which is the only exact answer there is,
-   * and the moment a pending pane stops being pending. The socket that spawned
-   * the start is sent `session-named` the first time, watching or not.
+   * and the moment a pending pane stops being pending. The page that spawned
+   * the start is sent `session-named` the first time, watching or not, on the
+   * socket it has now -- or on its next hello, when it has none.
    */
   noteStarts(
     registrationId: ServerRegistrationId,
@@ -223,7 +274,10 @@ export interface Terminal {
    * its machine is still away is four frames saying what the first one said.
    */
   noteConnection(report: ServerConnectionReport): void;
-  /** The socket went away. Every watch it held is given back and its starts forgotten. */
+  /**
+   * The socket went away. Every watch it held is given back; its page's starts
+   * stay, for the page's next hello, unless a newer socket has the page already.
+   */
   forget(client: TerminalClient): void;
 }
 
@@ -253,6 +307,14 @@ interface Replay {
   /** `null` when the client went away mid-replay: the frames are swallowed. */
   readonly watch: Watch | null;
   remaining: number;
+}
+
+/** What the hub holds for one page across the sockets it opens. */
+interface Instance {
+  /** The socket the page said hello on last, or `null` while it has none. */
+  socket: TerminalClient | null;
+  /** The page's starts by its own handle, oldest first. */
+  readonly starts: Map<FrameId, ClientStart>;
 }
 
 /** One client's standing interest in one terminal. */
@@ -311,8 +373,25 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
    */
   const rebound = new Map<string, Set<Upstream>>();
   const watches = new Map<TerminalClient, Map<string, Watch>>();
-  const starts = new Map<TerminalClient, Map<FrameId, ClientStart>>();
-  /** Which session each of this hub's starts became, as the reports said so. */
+  const instances = new Map<ClientInstance, Instance>();
+  /**
+   * Which page each socket said hello as, live or closed.
+   *
+   * Kept past the close, and weakly, because a socket that a newer one took
+   * over can still finish a start it carried: its `noteStart` belongs to the
+   * page whichever socket the page holds now. A socket with no entry never
+   * said hello and has no starts to name.
+   */
+  const instanceOf = new WeakMap<TerminalClient, ClientInstance>();
+  /** The pages with no socket, oldest closed first: the eviction order. */
+  const closed = new Set<ClientInstance>();
+  /**
+   * Which session each of this hub's starts became, as the reports said so.
+   *
+   * Pruned when a page's start is evicted, and with a page evicted whole. A
+   * start no page made -- a graph run's, a task's -- is named here too and
+   * nothing prunes it: one small entry per such start the hub ever made.
+   */
   const named = new Map<StartId, { readonly storeId: StoreId; readonly sessionId: SessionId }>();
   /**
    * The servers this relay has seen go away and has not seen come back.
@@ -335,32 +414,47 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
     return held;
   };
 
-  const startsOf = (client: TerminalClient): Map<FrameId, ClientStart> => {
-    const held = starts.get(client) ?? new Map<FrameId, ClientStart>();
-    starts.set(client, held);
-    return held;
+  /** The page this socket said hello as, if it did and the page is still held. */
+  const pageOf = (client: TerminalClient): Instance | undefined => {
+    const instance = instanceOf.get(client);
+    return instance === undefined ? undefined : instances.get(instance);
   };
 
-  /** The socket that spawned this start, and its own handle for it, or `undefined`. */
+  /**
+   * The starts a socket may name by handle: its page's, or none.
+   *
+   * Empty without storing anything for a socket that never said hello, which
+   * is what the MCP tools' clients are: they watch by session and start
+   * nothing, and an entry made for them would be one nobody ever removes.
+   */
+  const startsOf = (client: TerminalClient): ReadonlyMap<FrameId, ClientStart> =>
+    pageOf(client)?.starts ?? NO_STARTS;
+
+  /** The page that spawned this start, and its own handle for it, or `undefined`. */
   const spawnerOf = (
     startId: StartId,
-  ): { readonly client: TerminalClient; readonly handle: FrameId } | undefined => {
-    for (const [client, made] of starts) {
-      for (const [handle, start] of made) {
+  ): { readonly page: Instance; readonly handle: FrameId } | undefined => {
+    for (const page of instances.values()) {
+      for (const [handle, start] of page.starts) {
         if (start.startId === startId) {
-          return start.sessionId === null ? { client, handle } : undefined;
+          return start.sessionId === null ? { page, handle } : undefined;
         }
       }
     }
     return undefined;
   };
 
+  /** Lets a start go, and the naming only it could have read back. */
+  const dropStarts = (made: Iterable<ClientStart>): void => {
+    for (const start of made) named.delete(start.startId);
+  };
+
   /**
-   * Tells the socket that made a start which session it became.
+   * Tells the page that made a start which session it became.
    *
-   * To that socket alone and whether or not it is watching: the frame binds
-   * the client's own handle, which means nothing on any other connection, and
-   * a client with no pane open on the spawn is the one that most needs telling.
+   * To that page's socket alone and whether or not it is watching: the frame
+   * binds the page's own handle, which means nothing to any other page, and a
+   * page with no pane open on the spawn is the one that most needs telling.
    */
   const sendNamed = (
     client: TerminalClient,
@@ -723,12 +817,47 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
       put(client, replyTo, target, (aimed) => ({ type: 'terminal-resize', target: aimed, size }));
     },
 
+    hello(client: TerminalClient, instance: ClientInstance): void {
+      instanceOf.set(client, instance);
+      closed.delete(instance);
+      let page = instances.get(instance);
+      const takeover = page !== undefined && page.socket !== null;
+      if (page === undefined) {
+        page = { socket: client, starts: new Map() };
+        instances.set(instance, page);
+      } else {
+        page.socket = client;
+      }
+
+      logger.debug('client page said hello', { starts: page.starts.size, takeover });
+
+      for (const [handle, start] of page.starts) {
+        const became = start.sessionId === null ? named.get(start.startId) : undefined;
+        if (became !== undefined) sendNamed(client, handle, became.storeId, became.sessionId);
+      }
+    },
+
     noteStart(client: TerminalClient, handle: FrameId, start: ClientStart): void {
-      startsOf(client).set(handle, start);
+      // A socket with no page cannot have sent a start -- nothing is read
+      // before a hello -- and one whose page has been evicted has nobody left
+      // who could ask by this handle.
+      const page = pageOf(client);
+      if (page === undefined) return;
+
+      page.starts.set(handle, start);
+      for (const [oldest, gone] of page.starts) {
+        if (page.starts.size <= MAX_STARTS_PER_INSTANCE) break;
+        page.starts.delete(oldest);
+        dropStarts([gone]);
+      }
+
       // The report can arrive before the start is written down here, and the
-      // naming it carried was owed to this socket all the same.
+      // naming it carried was owed to this page all the same -- on the socket
+      // it has now, which after a takeover is not this one.
       const became = start.sessionId === null ? named.get(start.startId) : undefined;
-      if (became !== undefined) sendNamed(client, handle, became.storeId, became.sessionId);
+      if (became !== undefined && page.socket !== null) {
+        sendNamed(page.socket, handle, became.storeId, became.sessionId);
+      }
     },
 
     noteStarts(
@@ -744,8 +873,12 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
         // still runs on a repeat, for a pane opened by its start since.
         if (known?.storeId !== storeId || known.sessionId !== tag.sessionId) {
           named.set(tag.startId, { storeId, sessionId: tag.sessionId });
+          // A page between sockets is told on its next hello, from `named`.
           const owner = spawnerOf(tag.startId);
-          if (owner !== undefined) sendNamed(owner.client, owner.handle, storeId, tag.sessionId);
+          const socket = owner?.page.socket ?? null;
+          if (owner !== undefined && socket !== null) {
+            sendNamed(socket, owner.handle, storeId, tag.sessionId);
+          }
         }
 
         const upstream = upstreams.get(
@@ -861,15 +994,28 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
       // watch.
       for (const watch of [...(held?.values() ?? [])]) release(watch);
 
-      const made = starts.get(client);
-      starts.delete(client);
-      // A start handle is this socket's, and the session a start became is only
-      // ever read back through a handle: with the socket gone there is nothing
-      // left that could ask.
-      for (const start of made?.values() ?? []) named.delete(start.startId);
+      // The page keeps its starts for its next hello. Only the page's own
+      // socket closes it: one a newer socket took over going away is the
+      // half-open link the page already gave up on, and the page is still on
+      // the newer one.
+      const instance = instanceOf.get(client);
+      const page = instance === undefined ? undefined : instances.get(instance);
+      if (instance === undefined || page?.socket !== client) return;
+      page.socket = null;
+      closed.add(instance);
+      for (const oldest of closed) {
+        if (closed.size <= MAX_CLOSED_INSTANCES) break;
+        closed.delete(oldest);
+        const evicted = instances.get(oldest);
+        instances.delete(oldest);
+        dropStarts(evicted?.starts.values() ?? []);
+      }
     },
   };
 }
+
+/** What a socket with no page may name by handle: nothing. */
+const NO_STARTS: ReadonlyMap<FrameId, ClientStart> = new Map();
 
 /**
  * A client's name for a target, so two frames naming one terminal are one watch.

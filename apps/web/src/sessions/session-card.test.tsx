@@ -6,6 +6,7 @@ import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/pro
 import { createFakeSocketFactory } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { mintClientInstance } from '../store/client-instance.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
@@ -97,6 +98,7 @@ describe('a session card', () => {
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });
@@ -167,6 +169,7 @@ describe('a session card holding an open request', () => {
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });

@@ -22,6 +22,7 @@ import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { createFakeSocketFactory, type FakeSocket } from './fake-socket.js';
 import type { FrameIds } from './frame-ids.js';
 import { hubFrames } from './hub-frames.fixture.js';
+import { mintClientInstance } from './client-instance.js';
 import { createHubStore, type HubStore } from './hub-store.js';
 import { createFakeTimers } from './timers.js';
 import { shallowEqual, useHubSelector, useHubSnapshot } from './use-hub-store.js';
@@ -149,6 +150,7 @@ describe('what a hub selector re-renders for', () => {
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       // Hello takes 1, the terminal subscription the id the captured
       // `session-subscribed` answers, and the stop the id the captured

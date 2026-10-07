@@ -12,6 +12,7 @@ import {
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { mintClientInstance } from '../store/client-instance.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { FOLDER_KIND, GRAPH_KIND, PROJECT_KIND } from '../tree/node-kinds.js';
@@ -149,6 +150,7 @@ describe('GraphScreen', () => {
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });

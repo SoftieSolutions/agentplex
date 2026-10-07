@@ -30,12 +30,12 @@ import { acts, answers, defineMcpTool, refuses, type McpTool } from './tool-regi
  *
  * ## Its own client identity, per call
  *
- * The relay keys everything by client object: a start handle belongs to the
- * socket that made it, and a target is resolved against that socket's own map.
- * So each call builds a `TerminalClient` and gives it back when it is done,
- * exactly as `read_terminal` does. `forget` is the release rather than a
- * detach, because this client is never coming back and a key left in the
- * relay's books would be one per call.
+ * The relay keys watches by client object, and resolves a start handle against
+ * the page a client said hello as -- which this one never does, so it has no
+ * handles at all. So each call builds a `TerminalClient` and gives it back when
+ * it is done, exactly as `read_terminal` does. `forget` is the release rather
+ * than a detach, because this client is never coming back and a key left in
+ * the relay's books would be one per call.
  *
  * Addressing is by session and never by a start handle. A handle names a start
  * *this connection* made, and this connection is one function call: an agent

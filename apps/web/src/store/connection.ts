@@ -1,4 +1,4 @@
-import { CLIENT_PROTOCOL_VERSION, type FrameId } from '@agentplex/protocol';
+import { CLIENT_PROTOCOL_VERSION, type ClientInstance, type FrameId } from '@agentplex/protocol';
 import { encodeClientFrame } from './commands.js';
 import type { FrameIds } from './frame-ids.js';
 import type { Timers } from './timers.js';
@@ -45,6 +45,12 @@ export interface ConnectionDependencies {
   createSocket(ticket: string): StoreSocket;
   readonly timers: Timers;
   readonly frameIds: FrameIds;
+  /**
+   * Which page this is, said on every hello. The same on every socket this
+   * store opens, so the hub can tell a redial from a new page; see
+   * `HubStoreDependencies.instance`.
+   */
+  readonly instance: ClientInstance;
   readonly reconnectDelaysMs?: readonly number[];
   readonly heartbeatIntervalMs?: number;
   readonly heartbeatTimeoutMs?: number;
@@ -133,6 +139,7 @@ export function createConnection(dependencies: ConnectionDependencies): Connecti
           type: 'hello',
           id: frameIds.next(),
           protocolVersion: CLIENT_PROTOCOL_VERSION,
+          instance: dependencies.instance,
         }),
       );
     });

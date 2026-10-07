@@ -188,25 +188,23 @@ describe('pendingRows', () => {
     expect(pendingRows(starts, NO_TERMINALS, populated, layout, GPU, NOW)).toEqual([]);
   });
 
-  it('draws nothing on a fresh connection for a start the last one carried', () => {
-    // The connection dropped between the yes and the naming. The hub sends the
-    // name only down the socket that made the start, and forgot that socket's
-    // handles when it closed, so the row would say "starting" for good beside
-    // the session's own row once the scan finds it.
+  it('keeps drawing a placed start on a fresh connection, inside the bound', () => {
+    // The connection dropped between the yes and the naming. The hub keeps the
+    // start for this page and names it on the page's next socket.
     const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
     const reconnected = { ...NOW, connection: 2 };
-    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, reconnected)).toEqual([]);
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, reconnected)).toHaveLength(1);
   });
 
-  it('draws nothing for a placed start once the connection that carried it is down', () => {
-    // No welcome has been counted, so the connection number still matches;
-    // the socket that could have carried the name is closed all the same.
+  it('draws a placed start while the store redials, and nothing once it has stopped', () => {
+    // A store stopped by a protocol-version refusal dials no next socket, so
+    // the name has nowhere to arrive.
     const starts = startsOf([[START, { asked, started, refusal: null, named: null, sentOn: 1 }]]);
-    for (const phase of ['reconnecting', 'failed'] as const) {
-      expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, { ...NOW, phase })).toEqual(
-        [],
-      );
-    }
+    const down = { ...NOW, phase: 'reconnecting' as const };
+    expect(pendingRows(starts, NO_TERMINALS, populated, layout, null, down)).toHaveLength(1);
+    expect(
+      pendingRows(starts, NO_TERMINALS, populated, layout, null, { ...NOW, phase: 'failed' }),
+    ).toEqual([]);
   });
 
   it('stops drawing a start as starting once the bound passes without a name', () => {

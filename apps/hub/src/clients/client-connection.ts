@@ -344,6 +344,11 @@ export function serveClientConnection(
         // Immediately, and through the same path a broadcast takes, so that a
         // client's first state and its tenth are produced by one piece of code.
         deliver(currentState());
+        // After the state, so a naming the relay re-sends to a page that
+        // redialled lands on a client that already has the rows it names. The
+        // relay is told which page this socket is, and that is the whole of
+        // what the instance does here: it gates nothing, and is not logged.
+        terminal.hello(watcher, frame.instance);
         logger.info('client established');
         return;
       }

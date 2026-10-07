@@ -7,11 +7,11 @@
  * and these exist to test that it can read what the hub actually sends.
  * Re-capture after any change to the hub-to-client frames.
  *
- * Captured at client protocol version 47.
+ * Captured at client protocol version 48.
  */
 export const hubFrames = {
   welcome:
-    '{"type":"welcome","replyTo":1,"protocolVersion":47,"hubId":"hub-1","pushPublicKey":null}',
+    '{"type":"welcome","replyTo":1,"protocolVersion":48,"hubId":"hub-1","pushPublicKey":null}',
   machineState:
     '{"type":"machine-state","state":{"version":0,"stores":[],"servers":[],"candidates":[],"graphRunApprovals":[]}}',
   pong: '{"type":"pong","replyTo":2}',
@@ -23,7 +23,7 @@ export const hubFrames = {
   protocolError:
     '{"type":"protocol-error","code":"bad-request","message":"frame is not valid JSON"}',
   refusalProtocolVersion:
-    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks client protocol 47, not 48","holder":null}',
+    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks client protocol 48, not 49","holder":null}',
   machineStateWithServer:
     '{"type":"machine-state","state":{"version":1,"stores":[],"servers":[{"registrationId":"pairing-1","label":"gpu-box-01","address":"wss://gpu-box-01.example:8443","serverId":null,"phase":"stale","stores":[],"providers":[],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":null,"staleReason":"unreachable","draining":null,"roundTrip":null,"os":null,"daemonVersion":null,"problem":"connection refused"}],"candidates":[],"graphRunApprovals":[]}}',
   paneLayout:
@@ -174,7 +174,7 @@ export const hubFrames = {
     '{"type":"machine-state","state":{"version":4,"stores":[{"storeId":"store-agentplex","servers":["registration-mbp-robert"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[{"descriptor":{"storeId":"store-agentplex","sessionId":"10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde","provider":"claude","status":"awaiting-permission","process":"none","updatedAt":1755999820000,"cwd":"/Users/robert/code/agentplex","branch":null,"title":"migrate-db","uncommitted":null},"source":"registration-mbp-robert","reportedBy":["registration-mbp-robert"],"reportedAt":1756000000000,"reachable":true,"holder":{"server":"registration-mbp-robert","stoppable":true,"pause":"none"},"acknowledgedThrough":null,"mutedAt":null,"project":{"nodeId":"home","name":"HOME"},"approvals":[{"approvalId":"approval-1","tool":"Bash","proposal":"command: prisma migrate deploy --schema ./db\\ndescription: Apply pending Prisma migrations","truncated":false,"suggestions":[{"behavior":"allow","destination":"localSettings","rules":[{"tool":"Bash","content":"prisma migrate *"}]}],"subject":{"kind":"session","storeId":"store-agentplex","sessionId":"10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde"},"requestedAt":1756000000000,"answeredBy":null}],"task":null}]}],"servers":[{"registrationId":"registration-mbp-robert","label":"mbp-robert","address":"wss://mbp-robert.example:8443","serverId":"server-mbp","phase":"connected","stores":["store-agentplex"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"roundTrip":null,"os":null,"daemonVersion":null,"problem":null}],"candidates":[],"graphRunApprovals":[]}}',
   approvalDecided: '{"type":"approval-decided","replyTo":2,"outcome":"granted","answeredBy":null}',
   welcomeWithPush:
-    '{"type":"welcome","replyTo":1,"protocolVersion":47,"hubId":"hub-1","pushPublicKey":"BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM"}',
+    '{"type":"welcome","replyTo":1,"protocolVersion":48,"hubId":"hub-1","pushPublicKey":"BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM"}',
   pushSubscribed: '{"type":"push-subscribed","replyTo":2}',
   pushUnsubscribed: '{"type":"push-unsubscribed","replyTo":3}',
   refusalNoPush:

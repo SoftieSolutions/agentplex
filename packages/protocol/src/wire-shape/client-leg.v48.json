@@ -20,12 +20,17 @@
               "type": "integer",
               "minimum": -9007199254740991,
               "maximum": 9007199254740991
+            },
+            "instance": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
             }
           },
           "required": [
             "type",
             "id",
-            "protocolVersion"
+            "protocolVersion",
+            "instance"
           ]
         },
         {

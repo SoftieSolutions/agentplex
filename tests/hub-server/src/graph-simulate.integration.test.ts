@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
   graphDocumentSchema,
   parseHubFrame,
   parseTextFrame,
@@ -388,6 +389,9 @@ interface Client {
   readonly socket: FakeMessageSocket;
 }
 
+/** The page every client here says hello as. */
+const INSTANCE = clientInstanceSchema.parse('c6906cdf8b4b284b8b28f2072f4d8d62');
+
 async function attach(): Promise<Client> {
   const socket = createFakeMessageSocket();
   const said: string[] = [];
@@ -425,7 +429,12 @@ async function attach(): Promise<Client> {
     said,
     socket,
   };
-  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  await client.say({
+    type: 'hello',
+    id: 1,
+    protocolVersion: CLIENT_PROTOCOL_VERSION,
+    instance: INSTANCE,
+  });
   return client;
 }
 

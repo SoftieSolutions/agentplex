@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
+  type ClientInstance,
   graphDocumentSchema,
   parseHubFrame,
   parseTextFrame,
@@ -407,7 +409,11 @@ interface Client {
   readonly socket: FakeMessageSocket;
 }
 
-async function attach(): Promise<Client> {
+/** The page every client here says hello as, unless a case means two pages. */
+const INSTANCE = clientInstanceSchema.parse('cc5a9161e355496407e1cd5dfdb45387');
+const OTHER_INSTANCE = clientInstanceSchema.parse('66d74d8f9a2d3ccda75c0ae576f1b200');
+
+async function attach(instance: ClientInstance = INSTANCE): Promise<Client> {
   const socket = createFakeMessageSocket();
   const said: string[] = [];
   socket.onMessage(() => {});
@@ -444,7 +450,7 @@ async function attach(): Promise<Client> {
     said,
     socket,
   };
-  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION, instance });
   return client;
 }
 
@@ -519,7 +525,7 @@ describe('a graph run over the whole path', () => {
 
   it('runs a published graph: started, then every state until succeeded, with the session an ordinary row', async () => {
     const client = await attach();
-    const watcher = await attach();
+    const watcher = await attach(OTHER_INSTANCE);
     const nodeId = await publishedGraph(client);
     providerWrites('session-fresh', PROJECT_DIRECTORY);
 

@@ -2,6 +2,7 @@ import { WebSocket } from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFakeStoreFiles } from '@agentplex/providers/testing';
 import {
+  clientInstanceSchema,
   parseHubFrame,
   parseTextFrame,
   CLIENT_PROTOCOL_VERSION,
@@ -166,7 +167,15 @@ function open(url: string): {
   };
 }
 
-const HELLO = { type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION };
+/** One page, said once: each case here opens at most one socket that says hello. */
+const INSTANCE = clientInstanceSchema.parse('6a1b2c3d4e5f60718293a4b5c6d7e8f9');
+
+const HELLO = {
+  type: 'hello',
+  id: 1,
+  protocolVersion: CLIENT_PROTOCOL_VERSION,
+  instance: INSTANCE,
+};
 
 describe('the client websocket', () => {
   it('takes a client from its credential to the machine state', async () => {

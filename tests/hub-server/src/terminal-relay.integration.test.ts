@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  clientInstanceSchema,
+  type ClientInstance,
   decodeTerminalChunk,
   parseHubFrame,
   parseHubToServerFrame,
@@ -421,7 +423,11 @@ interface Client {
   reply(id: number): HubFrame;
 }
 
-async function attach(): Promise<Client> {
+/** The page every client here says hello as, unless a case means two pages. */
+const INSTANCE = clientInstanceSchema.parse('b16c0c5ad36d90ee1fefa50da5edb022');
+const OTHER_INSTANCE = clientInstanceSchema.parse('cc8d9057a363964be19a42676754a6d3');
+
+async function attach(instance: ClientInstance = INSTANCE): Promise<Client> {
   const socket = createFakeMessageSocket();
   socket.onMessage(() => {});
   held().clients.attach(socket);
@@ -454,7 +460,7 @@ async function attach(): Promise<Client> {
     },
   };
 
-  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
+  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION, instance });
   return client;
 }
 
@@ -656,7 +662,7 @@ describe('two browsers on one session', () => {
 
   it('both see the stream, and either can type into it', async () => {
     const first = await attach();
-    const second = await attach();
+    const second = await attach(OTHER_INSTANCE);
     await runQuietOn(first, 'attic', 2);
 
     for (const client of [first, second]) {
@@ -697,7 +703,7 @@ describe('two browsers on one session', () => {
 
   it('stops watching at the server only when the last of them leaves', async () => {
     const first = await attach();
-    const second = await attach();
+    const second = await attach(OTHER_INSTANCE);
     await runQuietOn(first, 'attic', 2);
 
     for (const client of [first, second]) {
@@ -810,7 +816,7 @@ describe('a pane opened on a spawn the provider has not named', () => {
 
   it('tells the connection that started it which session it became, unwatched', async () => {
     const owner = await attach();
-    const stranger = await attach();
+    const stranger = await attach(OTHER_INSTANCE);
     const spawn = (id: number) =>
       owner.say({
         type: 'session-start',
@@ -857,7 +863,7 @@ describe('a pane opened on a spawn the provider has not named', () => {
 
   it('refuses a start handle that belongs to another connection', async () => {
     const owner = await attach();
-    const stranger = await attach();
+    const stranger = await attach(OTHER_INSTANCE);
 
     await owner.say({
       type: 'session-start',

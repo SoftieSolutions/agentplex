@@ -15,6 +15,7 @@ import { listSessions } from '../sessions/session-list-model.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { mintClientInstance } from '../store/client-instance.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { sessionHash } from '../terminal/session-route.js';
@@ -126,6 +127,7 @@ describe('the attention bell', () => {
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });
@@ -514,6 +516,7 @@ describe('the attention bell', () => {
     const refusing = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
       maxQueuedCommands: 1,

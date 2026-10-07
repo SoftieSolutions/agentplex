@@ -16,6 +16,7 @@ import type { LayoutSnapshot, LayoutStore } from '../layout/layout-store.js';
 import { DEFAULT_TREE } from '../layout/tree.js';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
+import { mintClientInstance } from '../store/client-instance.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
@@ -213,6 +214,7 @@ describe('the catalogue panel', () => {
       createSocket: (ticket) => sockets.create(ticket),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
+      instance: mintClientInstance(),
     });
     arrangement = recordingLayout([]);
   });

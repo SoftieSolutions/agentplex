@@ -9,6 +9,7 @@ import { MockModeProvider, useMockMode } from '../mock/use-mock-mode.js';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { mintClientInstance } from '../store/client-instance.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import type { HubSnapshot } from '../store/views.js';
 import type { SettingsSection } from '../shell/destinations.js';
@@ -100,6 +101,7 @@ describe('the settings screen', () => {
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });
@@ -172,6 +174,7 @@ describe('the settings screen with nothing paired', () => {
     const store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });
@@ -547,6 +550,7 @@ describe('the developer section', () => {
     const store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
+      instance: mintClientInstance(),
       timers: createFakeTimers(),
       frameIds: createFrameIds(),
     });

@@ -348,8 +348,10 @@ function terminalFramesFor<Handle extends z.ZodType>(startId: Handle) {
  * The client leg's terminal frames.
  *
  * A start handle here is the client's own `session-start` frame id: the name it
- * already has for what it asked, local to that socket, and gone when the socket
- * closes -- which is exactly as long as the pane waiting on it lasts.
+ * already has for what it asked. The hub files it under the page that asked
+ * (the `instance` on its hello) rather than the socket, and a page mints its
+ * frame ids once for every socket it opens, so the handle means the same thing
+ * after a redial and nothing to another page.
  */
 export const clientTerminalFrames = terminalFramesFor(frameIdSchema);
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { TRANSCRIPT_ACTIVITIES_MAX } from './activity.js';
 import { approvalIdSchema, approvalPolicyRuleIdSchema } from './approval.js';
 import { CLIENT_PROTOCOL_VERSION } from './version.js';
+import { clientInstanceSchema } from './client-instance.js';
 import { parseClientFrame, type ClientFrame } from './client-to-hub.js';
 import {
   nodeIdSchema,
@@ -13,15 +14,43 @@ import { parseTextFrame } from './parse.js';
 import { pushEndpointSchema, pushSubscriptionSchema } from './push.js';
 import { DOC_CONTENT_MAX_CHARS, docNameSchema } from './doc.js';
 
+const INSTANCE = clientInstanceSchema.parse('5f0c4be2a9d81e7730c6f1a2b3d4e5f6');
+
 describe('parseClientFrame', () => {
-  it('accepts hello with a version', () => {
+  it('accepts hello with a version and an instance', () => {
+    const result = parseClientFrame({
+      type: 'hello',
+      id: 1,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
+      instance: INSTANCE,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses a hello that does not say which page it is', () => {
+    // Required rather than optional: a page that said nothing would be told
+    // nothing on a redial, and the hub would have no way to tell that apart
+    // from a page that had nothing to be told.
     const result = parseClientFrame({
       type: 'hello',
       id: 1,
       protocolVersion: CLIENT_PROTOCOL_VERSION,
     });
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
   });
+
+  it.each(['', 'not-an-instance', '5F0C4BE2A9D81E7730C6F1A2B3D4E5F6'])(
+    'refuses a hello whose instance is malformed (%j)',
+    (instance) => {
+      const result = parseClientFrame({
+        type: 'hello',
+        id: 1,
+        protocolVersion: CLIENT_PROTOCOL_VERSION,
+        instance,
+      });
+      expect(result.ok).toBe(false);
+    },
+  );
 
   it('rejects an unknown frame type rather than passing it along', () => {
     expect(parseClientFrame({ type: 'run', id: 1, command: 'rm -rf /' }).ok).toBe(false);
@@ -381,7 +410,7 @@ describe('parseClientFrame on the push frames', () => {
  */
 describe('client and hub round trips', () => {
   const clientFrames: readonly ClientFrame[] = [
-    { type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION },
+    { type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION, instance: INSTANCE },
     { type: 'ping', id: 2 },
     { type: 'layout-request', id: 3 },
     {

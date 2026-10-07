@@ -79,8 +79,10 @@ export const NAMING_BOUND_MS = 60_000;
  * or last was (`HubSnapshot.connection`), whether that connection is still up
  * (`HubSnapshot.phase`), and what its clock reads.
  *
- * The count and the phase answer different halves of one question -- is the
- * socket that carried this start still open -- and neither answers it alone.
+ * The count and the phase answer different halves of one question an
+ * unanswered start asks -- is the socket that carried it still open -- and
+ * neither answers it alone. A placed start asks less: the hub keeps it for
+ * this page across sockets, so it reads the phase alone.
  * The count tells a redialled connection from the one before it even when the
  * phase reads `connected` both times; the phase tells a dropped connection
  * from a live one before any welcome is counted, which through a backoff or
@@ -99,12 +101,18 @@ export interface StartMoment {
  * Whether this client can still expect to hear about a start: its answer, or,
  * once placed, its name.
  *
- * Queued is expected, because it goes out on the next connection. Sent is
- * expected only while the connection that carried it is up, because the hub
- * answers and names a start down that socket alone and forgets its handles the
- * moment it closes -- at the drop, not at the next welcome. Placed is expected
- * for `NAMING_BOUND_MS` after the yes and not after. A refusal is the answer it
- * was owed, so nothing more is coming.
+ * Queued is expected, because it goes out on the next connection. Sent and
+ * unanswered is expected only while the connection that carried it is up: the
+ * hub answers down the socket that asked, and a start in flight when that
+ * socket closed is never written down -- so nothing about it can arrive, from
+ * the drop on, not from the next welcome.
+ *
+ * Placed is expected for `NAMING_BOUND_MS` after the yes, across a redial and
+ * not after the bound. The hub files a placed start under this page rather
+ * than the socket, and names it to whichever socket the page says hello on
+ * next; while the store is redialling the naming has somewhere to arrive. Not
+ * once the store has stopped redialling on its own (`failed`), which dials no
+ * next socket. A refusal is the answer it was owed, so nothing more is coming.
  *
  * Says nothing about whether the start became a session; `pendingSession` is
  * that, and a caller asks both.
@@ -112,14 +120,27 @@ export interface StartMoment {
 export function startAwaited(start: StartView, moment: StartMoment): boolean {
   if (start.refusal !== null) return false;
   if (start.sentOn === null) return true;
-  if (!onCarrier(start, moment)) return false;
-  if (start.started === null) return true;
+  if (start.started === null) return onCarrier(start, moment);
+  if (moment.phase === 'failed') return false;
   return moment.now - start.started.receivedAt < NAMING_BOUND_MS;
 }
 
 /** Whether the socket that carried a sent start is the one open now. */
 function onCarrier(start: StartView, moment: StartMoment): boolean {
   return start.sentOn === moment.connection && moment.phase === 'connected';
+}
+
+/**
+ * Whether the hub can be relaying this start's terminal right now.
+ *
+ * Unanswered, only on the socket that carried it, for the reason
+ * `startAwaited` gives. Placed, on whatever socket is up: a pane re-subscribes
+ * by its start handle after a redial and the hub routes the handle by the
+ * page, so the terminal it is fed is the same one.
+ */
+function relayable(start: StartView, moment: StartMoment): boolean {
+  if (start.started === null) return onCarrier(start, moment);
+  return moment.phase === 'connected';
 }
 
 /** The slice of a watched terminal `startLive` reads: its name, and whether it is being fed. */
@@ -131,14 +152,15 @@ export interface WatchedStart extends NamedTerminal {
 /**
  * Whether a start that has not become a session is still something this client
  * can draw as live: awaited, or past the bound with its terminal relayed by the
- * hub right now on the connection that carried it.
+ * hub right now (`relayable` says on which connection).
  *
  * The second half is the case the bound cannot see. A spawn given no prompt
  * writes no session until somebody types into it, and codex, which has no
  * registry to name it from, waits for a first turn; the pane somebody is
  * typing into is live, not a promise. Past the bound with nothing relaying it
- * -- the terminal ended, detached, or was never watched -- or with the
- * connection gone, it is neither, and nothing more about it is coming.
+ * -- the terminal ended, detached, or was never watched, including one that
+ * re-attached after a redial only to say it had ended -- or with no
+ * connection up, it is neither, and nothing more about it is coming.
  *
  * One predicate for the start's sidebar row and its address, so the two never
  * disagree: a row dropped while its pane is still live would leave the pane
@@ -153,7 +175,7 @@ export function startLive(
   if (startAwaited(start, moment)) return true;
   return (
     start.refusal === null &&
-    onCarrier(start, moment) &&
+    relayable(start, moment) &&
     terminal !== null &&
     terminal.attached &&
     terminal.ended === null
@@ -166,9 +188,10 @@ export function startLive(
  *
  * Yes for a start that became a session, since the panes show that session;
  * yes for a refused one, whose pane says so in the hub's words; yes while the
- * start is live (`startLive`). Otherwise no -- a start whose connection has
- * gone, or past the bound with nothing relaying it, would open a pane that can
- * only say "starting" forever or be refused, so the address falls to the list.
+ * start is live (`startLive`). Otherwise no -- an unanswered start whose
+ * connection has gone, or a placed one past the bound with nothing relaying
+ * it, would open a pane that can only say "starting" forever or be refused, so
+ * the address falls to the list.
  */
 export function startShown(
   start: StartView | null,

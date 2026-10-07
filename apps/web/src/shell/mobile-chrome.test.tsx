@@ -8,6 +8,7 @@ import { listSessions } from '../sessions/session-list-model.js';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
 import { createFrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { mintClientInstance } from '../store/client-instance.js';
 import { createHubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider, Text } from '../ui/components.js';
@@ -86,6 +87,7 @@ const store = createHubStore({
   createSocket: (ticket) => createFakeSocketFactory().create(ticket),
   timers: createFakeTimers(),
   frameIds: createFrameIds(),
+  instance: mintClientInstance(),
 });
 
 const DOWN = connectionView({
