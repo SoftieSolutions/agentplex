@@ -343,6 +343,45 @@ describe('two servers on one volume', () => {
       expect(publishedProcess(reducer)).toBe('none');
     });
 
+    it('lists every server whose reading saw a process, whichever reading is shown', () => {
+      // The shown row is laptop's fresher `unknown`; ec2's older `running`
+      // loses the pick and is still a sighting a resume has to answer to.
+      const reducer = twoServers();
+      report(reducer, 'registration-ec2', 'running');
+      reducer.applySessions({
+        holding: [],
+        registrationId: 'registration-laptop' as ServerRegistrationId,
+        storeId: store('store-work'),
+        sessions: [session('session-1', { process: 'unknown', updatedAt: START + 5_000 })],
+        reportedAt: START + 5_000,
+      });
+
+      const [row] = only(reducer.snapshot().stores).sessions;
+      expect(row?.source).toBe('registration-laptop');
+      expect(row?.descriptor.process).toBe('unknown');
+      expect(row?.runningOn).toEqual(['registration-ec2']);
+    });
+
+    it('keeps an unreachable server in that list, since its reading is the last word on it', () => {
+      const reducer = twoServers();
+      report(reducer, 'registration-laptop', 'running');
+      report(reducer, 'registration-ec2', 'running');
+      reducer.applyConnection(connection('laptop', 'stale', ['store-work']));
+
+      const [row] = only(reducer.snapshot().stores).sessions;
+      expect(row?.source).toBe('registration-ec2');
+      expect(row?.runningOn).toEqual(['registration-ec2', 'registration-laptop']);
+    });
+
+    it('lists nobody when no reading saw a process', () => {
+      const reducer = twoServers();
+      report(reducer, 'registration-laptop', 'unknown');
+      report(reducer, 'registration-ec2', 'none');
+
+      const [row] = only(reducer.snapshot().stores).sessions;
+      expect(row?.runningOn).toEqual([]);
+    });
+
     it('moves the version for a report that changes only the process', () => {
       // A process that exits at a prompt changes nothing else a scan reads,
       // and the resume a client offers turns on exactly this field.

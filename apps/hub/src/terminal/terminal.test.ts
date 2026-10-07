@@ -183,6 +183,7 @@ function row(
     },
     source: reportedBy[0] ?? ATTIC,
     reportedBy,
+    runningOn: [],
     reportedAt: 1,
     reachable: true,
     holder,

@@ -132,6 +132,19 @@ export interface SessionRow {
   readonly source: ServerRegistrationId;
   /** Every server that reported this session, sorted. Usually one; two is a shared volume. */
   readonly reportedBy: readonly ServerRegistrationId[];
+  /**
+   * Every server whose last reading of this session saw a process running,
+   * sorted, reachable or not. Usually empty or one.
+   *
+   * The chosen reading speaks for the row's display and nothing more. It
+   * prefers a reachable machine and then a fresher transcript, so a machine
+   * that saw a process can lose the pick to one that cannot look -- a
+   * connected machine's `unknown` on a shared store, or a later reading taken
+   * just as the process started. A resume must not go ahead on that: the
+   * losing reading is still the last word anybody has on that process. This
+   * keeps the sightings the pick drops, without changing which reading wins.
+   */
+  readonly runningOn: readonly ServerRegistrationId[];
   /** When the chosen reading arrived. */
   readonly reportedAt: number;
   /**
@@ -940,6 +953,10 @@ function buildSessionRows(
       descriptor: processAcross(chosen.descriptor, servers.length),
       source: chosen.registrationId,
       reportedBy: gathered.map((reading) => reading.registrationId).sort(),
+      runningOn: gathered
+        .filter((reading) => reading.descriptor.process === 'running')
+        .map((reading) => reading.registrationId)
+        .sort(),
       reportedAt: chosen.reportedAt,
       reachable: gathered.some((reading) => reading.reachable),
       holder: holders.get(chosen.descriptor.sessionId) ?? null,

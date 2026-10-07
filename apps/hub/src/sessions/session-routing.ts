@@ -480,22 +480,28 @@ export function routeRetake(
 /**
  * Why a session nobody in agentplex holds must not be resumed, or `null`.
  *
- * A row reading `running` with no holder is a process the hub did not start
- * on that transcript, and a resume would put a second agent beside it. The
- * server refuses this too, but only for a pid it can see: on a store more than
- * one machine mounts, the scheduler can pick the one that cannot, and only the
- * hub sees both readings.
+ * Any reading of the session that saw a process, with no holder, is a process
+ * the hub did not start on that transcript, and a resume would put a second
+ * agent beside it. The server refuses this too, but only for a pid it can see:
+ * on a store more than one machine mounts, the scheduler can pick the one that
+ * cannot, and only the hub sees both readings.
+ *
+ * Every reading counts, not only the one the row shows (Robert's decision on
+ * AGX-391). The shown reading prefers a reachable machine and then a fresher
+ * transcript, so a machine that saw the process loses the pick to one that
+ * could not look -- and a stale machine's last word loses to any connected
+ * one. Neither is evidence the process ended.
  *
  * `unknown` and `none` are not refused (Robert's decisions 8 and 9): `unknown`
  * is a machine that could not look -- every session on a shared store reads
  * it -- and refusing on it would refuse what the hub has no reading against.
  *
- * Reachability chooses only the sentence. A reachable reading is a claim about
- * an outside process, and the way out is a retake on a store one machine
- * mounts, or ending the process by hand on a shared one, which a retake
- * refuses. An unreachable reading is refused as firmly but claims less: a
- * stale machine's holds are dropped, so its `running` may be agentplex's own
- * terminal, and all the hub can say is what that machine last reported.
+ * A reachable sighting is named before a stale one, since it is the one a
+ * person can act on. Reachability chooses only the sentence. An unreachable
+ * reading is refused as firmly but claims less: a stale machine's holds are
+ * dropped, so its `running` may be agentplex's own terminal, and all the hub
+ * can say is what that machine last reported -- and that nothing changes until
+ * it reports again or leaves the fleet.
  */
 function runningOutside(
   state: HubStateSnapshot,
@@ -503,14 +509,22 @@ function runningOutside(
   sessionId: SessionId,
 ): string | null {
   const row = store.sessions.find((candidate) => candidate.ref.sessionId === sessionId);
-  if (row === undefined || row.holder !== null || row.descriptor.process !== 'running') {
+  const [first] = row?.runningOn ?? [];
+  if (row === undefined || row.holder !== null || first === undefined) {
     return null;
   }
 
-  const label = labelOf(state, row.source);
-  if (!row.reachable) {
-    return `${label} last reported a process running that session, and the hub cannot reach it right now`;
+  const sightings = store.servers.filter((server) => row.runningOn.includes(server.registrationId));
+  const reachable = sightings.find(countsTowardAttention);
+  if (reachable === undefined) {
+    const label = labelOf(state, sightings[0]?.registrationId ?? first);
+    return (
+      `${label} last reported a process running that session, and the hub cannot reach it ` +
+      `right now; it cannot be resumed elsewhere until ${label} comes back or is unpaired`
+    );
   }
+
+  const label = reachable.label;
   if (store.servers.length > 1) {
     return (
       `that session is running outside agentplex on ${label}, and the store is shared by ` +

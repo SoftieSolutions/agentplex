@@ -814,11 +814,19 @@ describe('routeStart', () => {
       }
     });
 
-    it('refuses when the machine that saw it is unreachable, claiming nothing about whose it is', () => {
-      // A stale machine's holds are dropped, so a stale row reading `running`
-      // may be agentplex's own terminal. The sentence says what was last seen.
+    it('refuses when the machine that saw it is unreachable, though a connected one is shown', () => {
+      // The row shown is attic's, because a reachable reading always wins the
+      // pick, and attic cannot see workshop's pid. Workshop's last word was a
+      // process on that transcript, and nothing since has said it ended. A
+      // stale machine's holds are dropped, so that `running` may be
+      // agentplex's own terminal: the sentence says what was last seen.
       const state = fleet([
-        { label: 'attic', phase: 'connected', stores: [WORK] },
+        {
+          label: 'attic',
+          phase: 'connected',
+          stores: [WORK],
+          reports: [{ storeId: WORK, sessions: [running('claude', 'unknown')] }],
+        },
         {
           label: 'workshop',
           phase: 'stale',
@@ -832,11 +840,55 @@ describe('routeStart', () => {
           ok: false,
           code: 'refused',
           problem:
-            'workshop last reported a process running that session, and the hub cannot reach it right now',
+            'workshop last reported a process running that session, and the hub cannot reach ' +
+            'it right now; it cannot be resumed elsewhere until workshop comes back or is unpaired',
           holder: null,
         });
       }
     });
+
+    it.each([
+      ['workshop', 'attic'],
+      ['attic', 'workshop'],
+    ] as const)(
+      'refuses when reachable %s saw it and %s, reading later, could not tell',
+      (saw, later) => {
+        // Freshness outranks a sighting in the pick, so the row shown is the
+        // later `unknown`. A process the other machine saw a moment before is
+        // not ruled out by a machine that cannot look.
+        const state = fleet([
+          {
+            label: saw,
+            phase: 'connected',
+            stores: [WORK],
+            reports: [{ storeId: WORK, sessions: [running()] }],
+          },
+          {
+            label: later,
+            phase: 'connected',
+            stores: [WORK],
+            reports: [
+              {
+                storeId: WORK,
+                sessions: [{ ...running('claude', 'unknown'), updatedAt: START + 5_000 }],
+              },
+            ],
+          },
+        ]);
+        expect(state.stores[0]?.sessions[0]?.descriptor.process).toBe('unknown');
+
+        for (const server of [null, registration('attic'), registration('workshop')]) {
+          expect(routeStart(state, { ...RESUME, server })).toEqual({
+            ok: false,
+            code: 'refused',
+            problem:
+              `that session is running outside agentplex on ${saw}, and the store is shared ` +
+              `by more than one server; end that claude on ${saw} first`,
+            holder: null,
+          });
+        }
+      },
+    );
 
     it.each(['none', 'unknown'] as const)(
       'resumes a session whose process reads %s, alone or shared',
